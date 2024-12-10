@@ -6,32 +6,25 @@
 
 ## Overview
 
-DragonSync is designed to enhance the functionality of the WarDragon system by integrating with [DragonSync](https://github.com/alphafox02/DragonSync) and [DroneID](https://github.com/bkerler/DroneID).
+DragonSync is designed to enhance the functionality of the WarDragon system by integrating with [DragonSync](https://github.com/alphafox02/DragonSync) and [DroneID](https://github.com/bkerler/DroneID). 
 
-Connects to the WarDragon platform using ZMQ or Multicast for real-time monitoring of Remote ID-compliant drones. Alerts, mapping, operator locations and more. 
-
-- **Real-Time Drone Monitoring**: Receive live updates on drone status and location directly on your iOS device.
-- **System Status Alerts**: Stay informed about the health and performance of your WarDragon system.
-- **Seamless Integration**: Built to work effortlessly with the WarDragon platform.
-- **Multi-Protocol Support**: Integrates with WarDragon services using ZMQ and Multicast. It listens for CoT and status messages over Multicast or direct to ZMQ.
+Real-time airspace security tool, tailored for events and large-scale operations.
 
 ## Features
+
+- **Live Drone Tracking**: Instantly decode CoT message locations, operator details, and flight paths.
+
+- **Effortless Setup**: Connect to WarDragon using ZMQ & Multicast protocols without additional configuration.
+
+- **Immersive UI**: Real-time maps and detail views ensure operational efficiency.
+
+- **Scalable & Flexible**: Adapts to any event size and works with existing WarDragon or compatible hardware.
 
 <p>
 <img src="https://github.com/user-attachments/assets/3d2da67f-b701-43ca-8d75-f68a0d07a816" width="750">
 </p>
 
-**Display decoded RIDs & data**
-  - Using the [DragonSync](https://github.com/alphafox02/DragonSync) `wardragon_monitor.py` or direct via ZMQ. Displays CoT and status messages from the WarDragon, no setup required.
-
-- Configurable network settings and an immersive UI. Detail views in the system and live map view show more details
-
-<p align="left">
- <img src=https://github.com/user-attachments/assets/e55ddba1-1387-4543-bec9-56d0b7f6f677 width="420")
-</p>
-
-**Environmental Security**
-- Coming soon
+**More features in the works*
   
 ## Installation
 
