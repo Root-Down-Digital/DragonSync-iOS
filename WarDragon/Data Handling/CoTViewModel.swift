@@ -57,7 +57,7 @@ class CoTViewModel: ObservableObject {
         var baroAcc: String?
         var speedAcc: String?
         var timestamp: String?
-
+        
         // System Message fields
         var operatorAltGeo: String?
         var areaCount: String?
@@ -65,7 +65,7 @@ class CoTViewModel: ObservableObject {
         var areaCeiling: String?
         var areaFloor: String?
         var classification: String?
-
+        
         // Self-ID fields
         var selfIdType: String?
         var selfIdId: String?
@@ -78,7 +78,7 @@ class CoTViewModel: ObservableObject {
         var authData: String?
         
         var rawMessage: [String: Any]
-
+        
         static func == (lhs: CoTViewModel.CoTMessage, rhs: CoTViewModel.CoTMessage) -> Bool {
             return lhs.uid == rhs.uid &&
             lhs.type == rhs.type &&
@@ -292,7 +292,7 @@ class CoTViewModel: ObservableObject {
             }
             
             if let message = String(data: data, encoding: .utf8) {
-                print("Received data: \(message)")
+                //                print("Received data: \(message)")
                 
                 // Check for Status message first (has both status code type and remarks with CPU Usage)
                 if message.contains("<remarks>CPU Usage:") {
@@ -362,53 +362,36 @@ class CoTViewModel: ObservableObject {
     
     private func updateMessage(_ message: CoTMessage) {
         DispatchQueue.main.async {
+            // Generate/update signature from raw message
             guard let signature = self.signatureGenerator.createSignature(from: message.rawMessage) else { return }
-
-            // 1. Check for exact ID match first
-            if let idIndex = self.parsedMessages.firstIndex(where: { $0.uid == message.uid }) {
-                // Keep existing messages and add new one
-                self.parsedMessages.append(message)
-                if let sigIndex = self.droneSignatures.firstIndex(where: { $0.primaryId.id == message.uid }) {
-                    self.droneSignatures[sigIndex] = signature
-                }
-                print("Added message for existing drone via ID: \(message.uid)")
-                return
-            }
-
-            // 2. Check MAC address match if available
-            if let incomingMAC = message.mac,
-               let macIndex = self.parsedMessages.firstIndex(where: { $0.mac == incomingMAC }) {
-                self.parsedMessages.append(message)
-                if let sigIndex = self.droneSignatures.firstIndex(where: { $0.primaryId.id == message.uid }) {
-                    self.droneSignatures[sigIndex] = signature
-                }
-                print("Added message for existing drone via MAC: \(incomingMAC)")
-                return
-            }
-
-            // 3. Only try signature matching if no ID or MAC match found
-            let existingIndex = self.droneSignatures.firstIndex { existing in
+            
+            // DEBUG - Check for existing signature match
+            _ = self.droneSignatures.firstIndex { existing in
                 let matchScore = self.signatureGenerator.matchSignatures(existing, signature)
                 print("Checking for existing match, score: \(matchScore)")
-                return matchScore > 0.42
+                return matchScore > 0.42 // High confidence threshold
             }
 
-            if let index = existingIndex {
-                self.parsedMessages.append(message)
+            // Update signatures collection
+            if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
                 self.droneSignatures[index] = signature
-                print("Added message for existing drone via signature match")
+                print("Updating existing CoT")
             } else {
-                // 4. If no matches at all, add as new drone
-                print("Added new drone: \(message.uid)")
+                print("Added new CoT")
                 self.droneSignatures.append(signature)
+            }
+            
+            
+            // Update messages collection
+            if let index = self.parsedMessages.firstIndex(where: { $0.uid == message.uid }) {
+                self.parsedMessages[index] = message
+            } else {
                 self.parsedMessages.append(message)
-                if Settings.shared.notificationsEnabled {
-                    self.sendNotification(for: message)
-                }
+                self.sendNotification(for: message)
             }
         }
     }
-
+    
     private func sendNotification(for message: CoTViewModel.CoTMessage) {
         let content = UNMutableNotificationContent()
         content.title = "New CoT Message"
