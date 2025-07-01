@@ -206,7 +206,7 @@ class CoTViewModel: ObservableObject {
         }
         
         var trackSpeedFormatted: String? {
-            if let speed = trackCourse {
+            if let speed = trackSpeed {
                 return "\(speed) m/s"
             } else if !self.speed.isEmpty && self.speed != "0.0" {
                 return "\(self.speed) m/s"
@@ -214,7 +214,7 @@ class CoTViewModel: ObservableObject {
             return nil
         }
         
-        var headingDeg: Double {
+        public var headingDeg: Double {
             guard let raw = trackSpeed?
                     .replacingOccurrences(of: "°", with: "")
                     .trimmingCharacters(in: .whitespacesAndNewlines),

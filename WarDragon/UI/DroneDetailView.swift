@@ -130,28 +130,6 @@ struct DroneDetailView: View {
                         .stroke(.purple, lineWidth: 3)
                 }
 
-                // Start & Latest
-                if flightPath.count > 1 {
-                    let start = flightPath.first!
-                    let end = flightPath.last!
-
-//                    Annotation("Start", coordinate: start) {
-//                        Image(systemName: "airplane.departure")
-//                            .foregroundStyle(.green)
-//                            .background(Circle().fill(.white))
-//                            .frame(width: 16, height: 16)
-//                    }
-//
-//                    if end.latitude != start.latitude || end.longitude != start.longitude {
-//                        Annotation("Latest", coordinate: end) {
-//                            Image(systemName: "airplane.arrival")
-//                                .foregroundStyle(.red)
-//                                .background(Circle().fill(.white))
-//                                .frame(width: 16, height: 16)
-//                        }
-//                    }
-                }
-
                 // Alert rings
                 ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
@@ -226,10 +204,10 @@ struct DroneDetailView: View {
                 DroneInfoRow(title: "Vertical Speed", value: "\(message.vspeed) m/s")
                 
                 // Track data from CoT messages
-                if let course = message.trackCourse, course != "0.0" && !course.isEmpty {
+                if let course = message.trackSpeed, course != "0.0" && !course.isEmpty {
                     DroneInfoRow(title: "Course", value: "\(course)°")
                 }
-                if let speed = message.trackSpeedFormatted, speed != "0.0" {
+                if let speed = message.trackCourse, speed != "0.0" {
                     DroneInfoRow(title: "Track Speed", value: "\(speed) m/s")
                 }
     
