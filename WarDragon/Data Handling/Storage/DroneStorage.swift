@@ -32,15 +32,20 @@ struct DroneEncounter: Codable, Identifiable, Hashable {
     
     var headingDeg: Double {
         func parse(_ key: String) -> Double? {
-            if let s = metadata[key]?
-                         .replacingOccurrences(of: "°", with: "")
-                         .trimmingCharacters(in: .whitespaces) {
-                return Double(s)            // String → Double?
+            guard let raw = metadata[key]?
+                .replacingOccurrences(of: "°", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  let value = Double(raw)
+            else {
+                return nil
             }
-            return nil
+            return value
         }
-        return parse("course") ?? parse("bearing") ?? parse("direction") ?? 0
+
+        let rawHeading = parse("course") ?? parse("bearing") ?? parse("direction") ?? 0
+        return (rawHeading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
     }
+
     
     // User defined name/trust status
     var customName: String {
@@ -248,8 +253,6 @@ class DroneStorageManager: ObservableObject {
         )
         
         encounter.metadata["course"] = message.trackCourse
-        encounter.metadata["bearing"]  = message.trackHeading
-        encounter.metadata["direction"] = "\(message.direction ?? "")"
         
         encounter.lastSeen = Date()
         var didAddPoint = false

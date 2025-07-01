@@ -95,7 +95,6 @@ struct DroneDetailView: View {
                                   .rotationEffect(.degrees(message.headingDeg))
                                   .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                                   .foregroundStyle(.blue)
-                                  .background(Circle().fill(.white))
                           }
                    }
                    

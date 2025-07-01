@@ -964,19 +964,22 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     timestampAdv = Double(tsStr)
                 }
             } else if trimmed.lowercased().hasPrefix("course:") {
-                trackCourse = String(
-                    trimmed.dropFirst("Course:".count)
-                        .trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: "°", with: "")
-                )
+                let raw = trimmed.dropFirst("course:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: "°", with: "")
+                if let val = Double(raw) {
+                    trackCourse = String(val)
+                }
             } else if trimmed.lowercased().hasPrefix("speed:") {
-                let val = trimmed.dropFirst(6)
+                let raw = trimmed.dropFirst("speed:".count)
                     .trimmingCharacters(in: .whitespaces)
                     .components(separatedBy: " ")
                     .first ?? ""
-                trackSpeed = val
-                speed       = Double(val)
-            }else if trimmed.hasPrefix("Protocol Version:") {
+                if let val = Double(raw) {
+                    trackSpeed = String(val)
+                    speed = val
+                }
+            } else if trimmed.hasPrefix("Protocol Version:") {
                 protocolVersion = trimmed.dropFirst(17).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Description:") {
                 description = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
@@ -1109,7 +1112,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 timestampAdv, homeLat, homeLon, trackSpeed, trackCourse)
     }
     
-   
+    
     
     private func handleLocationFields(_ elementName: String) {
         if cotMessage == nil { return }
@@ -1124,7 +1127,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "op_status":
             cotMessage?.op_status = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1134,7 +1137,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "height_type":
             cotMessage?.height_type = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1144,7 +1147,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "ew_dir_segment":
             cotMessage?.ew_dir_segment = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1154,7 +1157,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "speed_multiplier":
             cotMessage?.speed_multiplier = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1164,7 +1167,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "vertical_accuracy":
             cotMessage?.vertical_accuracy = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1174,7 +1177,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "horizontal_accuracy":
             cotMessage?.horizontal_accuracy = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1184,7 +1187,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "baro_accuracy":
             cotMessage?.baro_accuracy = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1194,7 +1197,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "speed_accuracy":
             cotMessage?.speed_accuracy = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1204,7 +1207,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "timestamp":
             cotMessage?.timestamp = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1214,7 +1217,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         case "timestamp_accuracy":
             cotMessage?.timestamp_accuracy = currentValue
             if var raw = cotMessage?.rawMessage {
@@ -1224,7 +1227,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     cotMessage?.rawMessage = raw
                 }
             }
-
+            
         default: break
         }
     }

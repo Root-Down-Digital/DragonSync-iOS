@@ -205,17 +205,8 @@ class CoTViewModel: ObservableObject {
             (direction != nil && direction != "0")
         }
         
-        var trackHeading: String? {
-            if let course = trackCourse {
-                return "\(course)°"
-            } else if let direction = direction {
-                return "\(direction)°"
-            }
-            return nil
-        }
-        
         var trackSpeedFormatted: String? {
-            if let speed = trackSpeed {
+            if let speed = trackCourse {
                 return "\(speed) m/s"
             } else if !self.speed.isEmpty && self.speed != "0.0" {
                 return "\(self.speed) m/s"
@@ -224,21 +215,18 @@ class CoTViewModel: ObservableObject {
         }
         
         var headingDeg: Double {
-            func parse(_ s: String?) -> Double? {
-                guard let raw = s?
-                        .replacingOccurrences(of: "°", with: "")
-                        .trimmingCharacters(in: .whitespaces),
-                      let d = Double(raw) else { return nil }
-                return d
+            guard let raw = trackSpeed?
+                    .replacingOccurrences(of: "°", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  let deg = Double(raw)
+            else {
+                return 0.0
             }
 
-            if let d = parse(trackCourse)   { return d }
-            if let d = parse(trackHeading)  { return d }
-            if let d = parse(direction)      { return d }
-            return 0
+            return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
         }
 
-        
+
         // Stale timer
         var lastUpdated: Date = Date()
         
