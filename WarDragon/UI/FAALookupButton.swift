@@ -40,7 +40,7 @@ struct FAALookupButton: View {
                         } else {
                             Image(systemName: "airplane.departure")
                         }
-                        Text(isLoading ? "Loading..." : "FAA Lookup")
+                        Text(isLoading ? "Loading..." : "FAA Data")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)

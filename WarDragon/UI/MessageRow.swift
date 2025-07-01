@@ -224,60 +224,57 @@ struct MessageRow: View {
             
             Spacer()
             
-            // Add FAA lookup button if we have the necessary IDs
-            if message.idType.contains("Serial Number") ||
-                message.idType.contains("ANSI") ||
-                message.idType.contains("CTA-2063-A") {
-                FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
-            }
-            
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(message.statusColor)
-                        .frame(width: 8, height: 8)
-                    Text(message.statusDescription)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(message.statusColor)
+            HStack(spacing: 12) {
+                // Status indicator
+                VStack(alignment: .trailing, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(message.statusColor)
+                            .frame(width: 8, height: 8)
+                        Text(message.statusDescription)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(message.statusColor)
+                    }
+                    
+                    Image(systemName: trustStatus.icon)
+                        .foregroundColor(trustStatus.color)
+                        .font(.system(size: 18))
                 }
                 
-                Image(systemName: trustStatus.icon)
-                    .foregroundColor(trustStatus.color)
-                    .font(.system(size: 18))
-            }
-            
-            Button(action: { showingInfoEditor = true }) {
-                Image(systemName: "pencil.circle")
-                    .font(.system(size: 18))
-                    .foregroundColor(.blue)
-            }
-            
-            Menu {
-                Button(action: { showingInfoEditor = true }) {
-                    Label("Edit Info", systemImage: "pencil")
+                Menu {
+                    Button(action: { showingInfoEditor = true }) {
+                        Label("Edit Info", systemImage: "pencil")
+                    }
+                    
+                    Button(action: { activeSheet = .liveMap }) {
+                        Label("Live Map", systemImage: "map")
+                    }
+                    
+                    // Add FAA lookup button if we have the necessary IDs
+                    if message.idType.contains("Serial Number") ||
+                        message.idType.contains("ANSI") ||
+                        message.idType.contains("CTA-2063-A") {
+                        FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
+                    }
+                    
+                    Divider()
+                    
+                    Button(action: {
+                        removeDroneFromTracking()
+                    }) {
+                        Label("Stop Tracking", systemImage: "eye.slash")
+                    }
+                    
+                    Button(role: .destructive, action: {
+                        showingDeleteConfirmation = true
+                    }) {
+                        Label("Delete", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 18))
+                        .foregroundColor(.blue)
                 }
-                
-                Button(action: { activeSheet = .liveMap }) {
-                    Label("Live Map", systemImage: "map")
-                }
-                
-                Divider()
-                
-                Button(action: {
-                    removeDroneFromTracking()
-                }) {
-                    Label("Stop Tracking", systemImage: "eye.slash")
-                }
-                
-                Button(role: .destructive, action: {
-                    showingDeleteConfirmation = true
-                }) {
-                    Label("Delete", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 18))
-                    .foregroundColor(.blue)
             }
         }
     }

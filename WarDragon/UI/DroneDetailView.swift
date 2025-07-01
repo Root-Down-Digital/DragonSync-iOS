@@ -204,8 +204,8 @@ struct DroneDetailView: View {
                 DroneInfoRow(title: "Vertical Speed", value: "\(message.vspeed) m/s")
                 
                 // Track data from CoT messages
-                if let course = message.trackSpeed, course != "0.0" && !course.isEmpty {
-                    DroneInfoRow(title: "Course", value: "\(course)°")
+                if message.headingDeg != 0.0 {
+                    DroneInfoRow(title: "Heading", value: String(format: "%.1f°", message.headingDeg))
                 }
                 if let speed = message.trackCourse, speed != "0.0" {
                     DroneInfoRow(title: "Track Speed", value: "\(speed) m/s")
