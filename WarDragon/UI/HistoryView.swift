@@ -130,7 +130,7 @@ struct StoredEncountersView: View {
                     
                     Image(systemName: "airplane")
                         .foregroundStyle(.blue)
-                        .rotationEffect(.degrees(encounter.headingDeg))
+                        .rotationEffect(.degrees(encounter.headingDeg - 90))
                         .animation(.easeInOut(duration: 0.15),
                                    value: encounter.headingDeg)
                 }

@@ -215,15 +215,35 @@ class CoTViewModel: ObservableObject {
         }
         
         public var headingDeg: Double {
-            guard let raw = trackSpeed?
-                    .replacingOccurrences(of: "°", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  let deg = Double(raw)
-            else {
-                return 0.0
+            // First try to get heading from track data
+            if let rawTrack = trackSpeed,
+               rawTrack != "0.0",
+               let deg = Double(rawTrack.replacingOccurrences(of: "°", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
             }
-
-            return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+              
+              // If no track data, calculate from last two known positions
+              guard let encounter = DroneStorageManager.shared.encounters[uid],
+                    encounter.flightPath.count >= 2,
+                    let currentPoint = encounter.flightPath.last,
+                    let previousPoint = encounter.flightPath.dropLast().last else {
+                  return 0.0
+              }
+              
+              // Calculate heading using coordinates
+              let lat1 = previousPoint.latitude * .pi / 180
+              let lon1 = previousPoint.longitude * .pi / 180
+              let lat2 = currentPoint.latitude * .pi / 180
+              let lon2 = currentPoint.longitude * .pi / 180
+              
+              let dLon = lon2 - lon1
+              let y = sin(dLon) * cos(lat2)
+              let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+              var heading = atan2(y, x) * 180 / .pi
+              heading = (heading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+              
+              return heading
         }
 
 

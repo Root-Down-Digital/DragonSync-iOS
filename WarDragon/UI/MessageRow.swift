@@ -396,7 +396,6 @@ struct MessageRow: View {
         let flightCoords = DroneStorageManager.shared
             .encounters[message.uid]?.flightPath
             .map { $0.coordinate } ?? []
-
         Map {
             // Existing drone marker
             if let coordinate = message.coordinate {
@@ -404,32 +403,14 @@ struct MessageRow: View {
                     Image(systemName: "airplane")
                         .resizable()
                         .frame(width: 20, height: 20)
-                        .rotationEffect(.degrees(message.headingDeg))
+                        .rotationEffect(.degrees(message.headingDeg - 90)) // for tru north use -90
                         .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                         .foregroundStyle(.blue)
                 }
             }
-
-            // New: draw flight-path polyline
             if flightCoords.count > 1 {
                 MapPolyline(coordinates: flightCoords)
                     .stroke(.purple, lineWidth: 2)
-
-//                // Optional: mark start & end
-//                if let start = flightCoords.first {
-//                    Annotation("start", coordinate: start) {
-//                        Image(systemName: "circle.fill")
-//                            .foregroundStyle(.green)
-//                            .frame(width: 8, height: 8)
-//                    }
-//                }
-//                if let end = flightCoords.last {
-//                    Annotation("end", coordinate: end) {
-//                        Image(systemName: "circle.fill")
-//                            .foregroundStyle(.red)
-//                            .frame(width: 8, height: 8)
-//                    }
-//                }
             }
         }
         .frame(height: 150)

@@ -92,7 +92,7 @@ struct DroneDetailView: View {
                         Image(systemName: "airplane")
                             .resizable()
                             .frame(width: 20, height: 20)
-                            .rotationEffect(.degrees(message.headingDeg))
+                            .rotationEffect(.degrees(message.headingDeg - 90))
                             .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                             .foregroundStyle(.blue)
                     }
@@ -211,7 +211,6 @@ struct DroneDetailView: View {
                     DroneInfoRow(title: "Track Speed", value: "\(speed) m/s")
                 }
     
-                
                 Divider()
                 
                 // Home location
@@ -248,7 +247,10 @@ struct DroneDetailView: View {
                     DroneInfoRow(title: "Total Distance", value: String(format: "%.1f m", distance))
                     
                     if let bounds = calculateFlightBounds() {
-                        DroneInfoRow(title: "Area Covered", value: String(format: "%.3f° × %.3f°", bounds.latSpan, bounds.lonSpan))
+                        DroneInfoRow(
+                            title: "Area Covered",
+                            value: String(format: "%.0f m × %.0f m", bounds.northSouthSpan, bounds.eastWestSpan)
+                        )
                     }
                 }
             }
@@ -399,22 +401,23 @@ struct DroneDetailView: View {
         return totalDistance
     }
     
-    private func calculateFlightBounds() -> (latSpan: Double, lonSpan: Double)? {
+    private func calculateFlightBounds() -> (northSouthSpan: Double, eastWestSpan: Double)? {
         guard flightPath.count > 1 else { return nil }
-        
-        let latitudes = flightPath.map(\.latitude)
-        let longitudes = flightPath.map(\.longitude)
-        
-        let minLat = latitudes.min() ?? 0
-        let maxLat = latitudes.max() ?? 0
-        let minLon = longitudes.min() ?? 0
-        let maxLon = longitudes.max() ?? 0
-        
-        return (latSpan: maxLat - minLat, lonSpan: maxLon - minLon)
+        let latitudes = flightPath.map { $0.latitude }
+        let longitudes = flightPath.map { $0.longitude }
+        let latDelta = (latitudes.max() ?? 0) - (latitudes.min() ?? 0)
+        let lonDelta = (longitudes.max() ?? 0) - (longitudes.min() ?? 0)
+        let midLatitude = ((latitudes.max() ?? 0) + (latitudes.min() ?? 0)) / 2
+        let metersPerDegree = 111_000.0
+        let metersPerDegreeLon = metersPerDegree * cos(midLatitude * .pi / 180)
+        let northSouthSpan = latDelta * metersPerDegree
+        let eastWestSpan = lonDelta * metersPerDegreeLon
+        return (northSouthSpan, eastWestSpan)
     }
-    
+
+
+
     private func formatRawMessage() -> String {
-        // Remove the unnecessary cast since rawMessage is already [String: Any]
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: message.rawMessage, options: .prettyPrinted)
             if let jsonString = String(data: jsonData, encoding: .utf8) {

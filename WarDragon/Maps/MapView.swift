@@ -40,7 +40,7 @@ struct MapView: View {
                     Image(systemName: "airplane")
                            .resizable()
                            .frame(width: 20, height: 20)
-                           .rotationEffect(.degrees(message.headingDeg))
+                           .rotationEffect(.degrees(message.headingDeg - 90))
                            .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                            .foregroundStyle(.blue)
                    }
