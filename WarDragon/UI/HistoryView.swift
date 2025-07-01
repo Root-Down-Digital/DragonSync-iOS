@@ -130,6 +130,9 @@ struct StoredEncountersView: View {
                     
                     Image(systemName: "airplane")
                         .foregroundStyle(.blue)
+                        .rotationEffect(.degrees(encounter.headingDeg))
+                        .animation(.easeInOut(duration: 0.15),
+                                   value: encounter.headingDeg)
                 }
                 
                 if let mac = encounter.metadata["mac"] {

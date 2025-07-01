@@ -35,7 +35,15 @@ struct MapView: View {
             // Show marker only if coordinates are not 0,0
             if let coordinate = message.coordinate,
                coordinate.latitude != 0 || coordinate.longitude != 0 {
-                Marker(message.uid, coordinate: coordinate)
+//                Marker(message.uid, coordinate: coordinate)
+                Annotation(message.uid, coordinate: coordinate) {
+                    Image(systemName: "airplane")
+                           .resizable()
+                           .frame(width: 20, height: 20)
+                           .rotationEffect(.degrees(message.headingDeg))
+                           .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                           .foregroundStyle(.blue)
+                   }
             }
             
             // Now safely access cotViewModel since we're in the body

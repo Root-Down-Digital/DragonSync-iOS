@@ -90,9 +90,13 @@ struct DroneDetailView: View {
                    if let droneCoordinate = message.coordinate {
                        Annotation("Drone", coordinate: droneCoordinate) {
                            Image(systemName: "airplane")
-                               .foregroundStyle(.blue)
-                               .background(Circle().fill(.white))
-                       }
+                                  .resizable()
+                                  .frame(width: 20, height: 20)
+                                  .rotationEffect(.degrees(message.headingDeg))
+                                  .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                                  .foregroundStyle(.blue)
+                                  .background(Circle().fill(.white))
+                          }
                    }
                    
                    // Home location
@@ -209,16 +213,13 @@ struct DroneDetailView: View {
                 DroneInfoRow(title: "Vertical Speed", value: "\(message.vspeed) m/s")
                 
                 // Track data from CoT messages
-                let trackData = message.getTrackData()
-                if let course = trackData.course, course != "0.0" && !course.isEmpty {
+                if let course = message.trackCourse, course != "0.0" && !course.isEmpty {
                     DroneInfoRow(title: "Course", value: "\(course)°")
                 }
-                if let speed = trackData.speed, speed != "0.0" {
+                if let speed = message.trackSpeed, speed != "0.0" {
                     DroneInfoRow(title: "Track Speed", value: "\(speed) m/s")
                 }
-                if let bearing = trackData.bearing, !bearing.isEmpty {
-                    DroneInfoRow(title: "Bearing", value: "\(bearing)°")
-                }
+    
                 
                 Divider()
                 

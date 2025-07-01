@@ -197,17 +197,16 @@ class CoTViewModel: ObservableObject {
         var runtime: String?
         
         //CoT Message Tracks
-        var track_course: String?
-        var track_speed: String?
-        var track_bearing: String?
+        var trackCourse: String?
+        var trackSpeed: String?
         
         var hasTrackInfo: Bool {
-            return track_course != nil || track_speed != nil || track_bearing != nil ||
+            return trackCourse != nil || trackSpeed != nil ||
             (direction != nil && direction != "0")
         }
         
         var trackHeading: String? {
-            if let course = track_course {
+            if let course = trackCourse {
                 return "\(course)°"
             } else if let direction = direction {
                 return "\(direction)°"
@@ -216,13 +215,29 @@ class CoTViewModel: ObservableObject {
         }
         
         var trackSpeedFormatted: String? {
-            if let speed = track_speed {
+            if let speed = trackSpeed {
                 return "\(speed) m/s"
             } else if !self.speed.isEmpty && self.speed != "0.0" {
                 return "\(self.speed) m/s"
             }
             return nil
         }
+        
+        var headingDeg: Double {
+            func parse(_ s: String?) -> Double? {
+                guard let raw = s?
+                        .replacingOccurrences(of: "°", with: "")
+                        .trimmingCharacters(in: .whitespaces),
+                      let d = Double(raw) else { return nil }
+                return d
+            }
+
+            if let d = parse(trackCourse)   { return d }
+            if let d = parse(trackHeading)  { return d }
+            if let d = parse(direction)      { return d }
+            return 0
+        }
+
         
         // Stale timer
         var lastUpdated: Date = Date()
@@ -888,12 +903,17 @@ class CoTViewModel: ObservableObject {
     
     private func updateMessage(_ message: CoTMessage) {
         
-        // IMMEDIATE BLOCKING CHECK - before any processing
+        // Uncomment this to disallow zero-coordinate entries
+        //        guard let coordinate = message.coordinate,
+        //              coordinate.latitude != 0 || coordinate.longitude != 0 else {
+        //            return
+        //        }
+        
+        
         if isDeviceBlocked(message) {
-            print("⛔️ EARLY BLOCK: Dropping message for \(message.uid)")
+            print("UNTRACKED: Dropping message for \(message.uid)")
             return
         }
-        
         
         // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
         let extractedId = extractNumericId(from: message.uid)
@@ -901,29 +921,21 @@ class CoTViewModel: ObservableObject {
         // Check if this is a pilot or home message that should be associated with a drone
         if message.uid.hasPrefix("pilot-") {
             updatePilotLocation(for: extractedId, message: message)
-            return // Don't create separate message for pilot
+            return // Don't create lone message for pilot or home
         }
         
         if message.uid.hasPrefix("home-") {
             updateHomeLocation(for: extractedId, message: message)
-            return // Don't create separate message for home
+            return
         }
         
-        // Early exit for blocked devices
+        // Early exit for untracked devices
         let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
-        
-        // Uncomment this to disallow zero-coordinate entries
-        //        guard let coordinate = message.coordinate,
-        //              coordinate.latitude != 0 || coordinate.longitude != 0 else {
-        //            return
-        //        }
+  
         
         DispatchQueue.main.async {
-            // Collect the detection details
-            // Keep the original drone ID, don't replace with CAA
+            
             let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
-            
-            
             var mac: String? = nil
             if let basicIdMac = (message.rawMessage["Basic ID"] as? [String: Any])?["MAC"] as? String {
                 mac = basicIdMac
@@ -933,9 +945,16 @@ class CoTViewModel: ObservableObject {
                 mac = message.mac
             }
             
+            let trackSpeed = message.trackSpeed ?? "0.0"
+            let trackCourse = message.trackCourse ?? "0.0"
+            
             // Prepare updated message
             var updatedMessage = message
             updatedMessage.uid = droneId
+            
+            // CoT XML Track data
+            updatedMessage.trackSpeed = trackSpeed
+            updatedMessage.trackCourse = trackCourse
             
             // Update alert ring if zero coordinate drone
             self.updateAlertRing(for: message)
@@ -1392,6 +1411,12 @@ class CoTViewModel: ObservableObject {
                 existingMessage.idType = "CAA Assigned Registration ID"
             }
             
+            // Update Track
+            if updatedMessage.trackSpeed != "0.0" && updatedMessage.trackCourse != "0.0" {
+                existingMessage.trackSpeed = updatedMessage.trackSpeed
+                existingMessage.trackCourse = updatedMessage.trackCourse
+            }
+            
             // Update spoof detection
             existingMessage.isSpoofed = updatedMessage.isSpoofed
             existingMessage.spoofingDetails = updatedMessage.spoofingDetails
@@ -1582,46 +1607,7 @@ extension CoTViewModel.CoTMessage {
         let speed: String?
         let bearing: String?
     }
-    
-    func getTrackData() -> TrackData {
-        // Extract track data from rawMessage if available
-        var course: String?
-        var trackSpeed: String?
-        var bearing: String?
-        
-        // Try to get course from various possible fields
-        if let trackDict = rawMessage["track"] as? [String: Any] {
-            course = trackDict["course"] as? String
-            trackSpeed = trackDict["speed"] as? String
-        }
-        
-        // Try detail section
-        if let detailDict = rawMessage["detail"] as? [String: Any] {
-            if let trackDict = detailDict["track"] as? [String: Any] {
-                course = course ?? (trackDict["course"] as? String)
-                trackSpeed = trackSpeed ?? (trackDict["speed"] as? String)
-            }
-        }
-        
-        // Calculate bearing if we have coordinates
-        if let lat = Double(lat), let lon = Double(lon),
-           let homeLat = Double(homeLat), let homeLon = Double(homeLon),
-           homeLat != 0.0 && homeLon != 0.0 {
-            let deltaLon = (homeLon - lon) * .pi / 180
-            let lat1Rad = lat * .pi / 180
-            let lat2Rad = homeLat * .pi / 180
-            
-            let y = sin(deltaLon) * cos(lat2Rad)
-            let x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(deltaLon)
-            let bearingRad = atan2(y, x)
-            let bearingDeg = bearingRad * 180 / .pi
-            bearing = String(format: "%.0f", bearingDeg < 0 ? bearingDeg + 360 : bearingDeg)
-        }
-        
-        return TrackData(course: course, speed: trackSpeed, bearing: bearing)
-    }
 }
-
 
 // MARK: - Webhook Integration
 extension CoTViewModel {

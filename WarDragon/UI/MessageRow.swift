@@ -197,7 +197,6 @@ struct MessageRow: View {
     @ViewBuilder
     private func headerView() -> some View {
         HStack {
-            // Dynamically fetch encounter information
             let encounter = droneStorage.encounters[message.uid]
             let customName = encounter?.customName ?? ""
             let trustStatus = encounter?.trustStatus ?? .unknown
@@ -224,13 +223,6 @@ struct MessageRow: View {
             
             Spacer()
             
-            // Add FAA lookup button if we have the necessary IDs
-            if message.idType.contains("Serial Number") ||
-                message.idType.contains("ANSI") ||
-                message.idType.contains("CTA-2063-A") {
-                FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
-            }
-            
             VStack(alignment: .trailing, spacing: 2) {
                 HStack(spacing: 4) {
                     Circle()
@@ -252,6 +244,12 @@ struct MessageRow: View {
                     .foregroundColor(.blue)
             }
             
+            Button(action: { activeSheet = .liveMap }) {
+                Image(systemName: "map")
+                    .font(.system(size: 18))
+                    .foregroundColor(.blue)
+            }
+            
             Menu {
                 Button(action: { showingInfoEditor = true }) {
                     Label("Edit Info", systemImage: "pencil")
@@ -259,6 +257,15 @@ struct MessageRow: View {
                 
                 Button(action: { activeSheet = .liveMap }) {
                     Label("Live Map", systemImage: "map")
+                }
+                
+                if message.idType.contains("Serial Number") ||
+                    message.idType.contains("ANSI") ||
+                    message.idType.contains("CTA-2063-A") {
+                    FAALookupButton(
+                        mac: message.mac,
+                        remoteId: message.uid.replacingOccurrences(of: "drone-", with: "")
+                    )
                 }
                 
                 Divider()
@@ -281,7 +288,7 @@ struct MessageRow: View {
             }
         }
     }
-    
+
     @ViewBuilder
     private func typeInfoView() -> some View {
         Text("Type: \(message.type)")

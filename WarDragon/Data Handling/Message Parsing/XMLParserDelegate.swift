@@ -88,10 +88,6 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     
     private var gps_course: Double = 0.0
     private var gps_speed: Double = 0.0
-    
-    private var trackCourse: String?
-    private var trackSpeed: String?
-    private var trackBearing: String?
 
     var cotMessage: CoTViewModel.CoTMessage?
     var statusMessage: StatusViewModel.StatusMessage?
@@ -109,27 +105,22 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         elementStack.append(elementName)
         
         if elementName == "event" {
+            
             eventAttributes = attributes
             remarks = ""
-            // Skip pilot and home messages
-//            if Settings.shared.connectionMode == .multicast {
-//                let uid = attributes["uid"] ?? ""
-////                if uid.starts(with: "pilot-") || uid.starts(with: "home-") {
-////                    return
-////                }
-//            }
+
         } else if elementName == "point" {
             pointAttributes = attributes
             // For multicast message altitude is in hae
             if let haeAlt = attributes["hae"] {
-                alt = haeAlt  // Set alt for multicast messages
+                alt = haeAlt
             }
         } else if elementName == "track" {
             trackAttributes = attributes
-            track_course = attributes["course"]
-            track_speed = attributes["speed"]
-            track_bearing = attributes["bearing"]
+            track_course   = attributes["course"]
+            track_speed    = attributes["speed"]
         }
+        
     }
     
     func parser(_ parser: XMLParser, foundCharacters string: String) {
@@ -151,10 +142,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             currentValue += string.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
-    
-          
 
-           
     private func processJSONArray(_ messages: [[String: Any]]) {
         var droneData: [String: Any] = [:]
         
@@ -253,6 +241,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 runtime: droneData["runtime"] as? String ?? "",
                 rawMessage: droneData
             )
+            
+            cotMessage?.trackCourse  = track_course
+            cotMessage?.trackSpeed   = track_speed
         }
     }
     
@@ -538,7 +529,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                  vertAcc, baroAcc, speedAcc, selfIDtext, selfIDDesc, operatorID, uaType,
                  operatorLat, operatorLon, operatorAltGeo, classification,
                  channel, phy, accessAddress, advMode, deviceId, sequenceId, advAddress,
-                 timestampAdv, homeLat, homeLon, trackCourse, trackSpeed, trackBearing) = parseDroneRemarks(remarks)
+                 timestampAdv, homeLat, homeLon, trackCourse, trackSpeed) = parseDroneRemarks(remarks)
             
             print("DEBUG - Parsing Remarks: \(remarks) and op lon is \(String(describing: operatorLon)) and home is \(String(describing: homeLat)) / \(String(describing: homeLon))")
             
@@ -633,9 +624,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     isSpoofed: false,
                     spoofingDetails: nil,
                     runtime: runtime ?? "",
-                    track_course: trackCourse?.description,
-                    track_speed: trackSpeed?.description,
-                    track_bearing: trackBearing?.description,
+                    trackCourse: trackCourse?.description,
+                    trackSpeed: trackSpeed?.description,
                     rawMessage: buildRawMessage(mac, rssi, description)
                 )
             }
@@ -769,6 +759,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     accessAddress: nil,
                     index: index,
                     runtime: runtime ?? "",
+                    trackCourse: track_course?.description,
+                    trackSpeed: track_speed?.description,
 //                    operatorAltGeo: operatorAltGeo,
                     rawMessage: jsonFormat
                 )
@@ -778,7 +770,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         }
     }
     
-    // MARK: - Parsing Helper Methods
+    // MARK: - Parsing helpers
+    
     private func parseRemarks(_ remarks: String) {
         let components = remarks.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         for component in components {
@@ -872,8 +865,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         homeLat: Double?,
         homeLon: Double?,
         trackCourse: String?,
-        trackSpeed: String?,
-        trackBearing: String?
+        trackSpeed: String?
     ) {
         var mac: String?
         var rssi: Int?
@@ -921,7 +913,6 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         var homeLon: Double?
         var trackCourse: String?
         var trackSpeed: String?
-        var trackBearing: String?
         
         let normalized = remarks.replacingOccurrences(of: "; ", with: "|")
             .replacingOccurrences(of: ", ", with: "|")
@@ -972,7 +963,20 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 if let tsStr = trimmed.dropFirst(23).trimmingCharacters(in: .whitespaces).components(separatedBy: " ").first {
                     timestampAdv = Double(tsStr)
                 }
-            } else if trimmed.hasPrefix("Protocol Version:") {
+            } else if trimmed.lowercased().hasPrefix("course:") {
+                trackCourse = String(
+                    trimmed.dropFirst("Course:".count)
+                        .trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "°", with: "")
+                )
+            } else if trimmed.lowercased().hasPrefix("speed:") {
+                let val = trimmed.dropFirst(6)
+                    .trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: " ")
+                    .first ?? ""
+                trackSpeed = val
+                speed       = Double(val)
+            }else if trimmed.hasPrefix("Protocol Version:") {
                 protocolVersion = trimmed.dropFirst(17).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Description:") {
                 description = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
@@ -1102,8 +1106,10 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 vertAcc, baroAcc, speedAcc, selfIDtext, selfIDDesc, operatorID, uaType,
                 operatorLat, operatorLon, operatorAltGeo, classification,
                 channel, phy, accessAddress, advMode, deviceId, sequenceId, advAddress,
-                timestampAdv, homeLat, homeLon, trackSpeed, trackCourse, trackBearing)
+                timestampAdv, homeLat, homeLon, trackSpeed, trackCourse)
     }
+    
+   
     
     private func handleLocationFields(_ elementName: String) {
         if cotMessage == nil { return }
