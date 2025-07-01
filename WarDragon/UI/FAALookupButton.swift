@@ -32,21 +32,23 @@ struct FAALookupButton: View {
                         isLoading = false
                     }
                 }) {
-                    HStack {
+                    HStack(spacing: 4) {
                         if isLoading {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
+                                .scaleEffect(0.6)
                         } else {
                             Image(systemName: "airplane.departure")
+                                .font(.caption)
                         }
-                        Text(isLoading ? "Loading..." : "FAA Data")
+                        Text(isLoading ? "Loading..." : "FAA")
+                            .font(.caption)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(isLoading ? Color.gray : Color.blue)
                     .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .cornerRadius(6)
                 }
                 .disabled(faaService.isFetching || isLoading)
                 .alert("FAA Lookup Error", isPresented: $showingError) {
@@ -77,7 +79,7 @@ struct FAALookupButton: View {
                     }
                 }
                 .background(Color.clear)
-                .presentationDetents([.height(350)]) // TODO dont hardcode this 
+                .presentationDetents([.height(350)]) // TODO dont hardcode this
                 .presentationBackground(.clear)
                 .presentationDragIndicator(.visible)
             }

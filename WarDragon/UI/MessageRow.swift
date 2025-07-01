@@ -241,6 +241,13 @@ struct MessageRow: View {
                         .font(.system(size: 18))
                 }
                 
+                // Add FAA lookup button if we have the necessary IDs
+                if message.idType.contains("Serial Number") ||
+                    message.idType.contains("ANSI") ||
+                    message.idType.contains("CTA-2063-A") {
+                    FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
+                }
+                
                 Menu {
                     Button(action: { showingInfoEditor = true }) {
                         Label("Edit Info", systemImage: "pencil")
@@ -250,12 +257,7 @@ struct MessageRow: View {
                         Label("Live Map", systemImage: "map")
                     }
                     
-                    // Add FAA lookup button if we have the necessary IDs
-                    if message.idType.contains("Serial Number") ||
-                        message.idType.contains("ANSI") ||
-                        message.idType.contains("CTA-2063-A") {
-                        FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
-                    }
+                   
                     
                     Divider()
                     
