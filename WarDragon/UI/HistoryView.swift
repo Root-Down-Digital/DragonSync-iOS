@@ -327,7 +327,6 @@ struct StoredEncountersView: View {
                         Annotation("Start", coordinate: start.coordinate) {
                             Image(systemName: "airplane.departure")
                                 .foregroundStyle(.green)
-                                .background(Circle().fill(.white))
                         }
                     }
                     
@@ -336,7 +335,6 @@ struct StoredEncountersView: View {
                         Annotation("End", coordinate: end.coordinate) {
                             Image(systemName: "airplane.arrival")
                                 .foregroundStyle(.red)
-                                .background(Circle().fill(.white))
                         }
                     }
                     

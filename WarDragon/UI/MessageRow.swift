@@ -392,13 +392,52 @@ struct MessageRow: View {
     
     @ViewBuilder
     private func mapSectionView() -> some View {
-        MapView(message: message, cotViewModel: cotViewModel)
-            .frame(height: 150)
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray, lineWidth: 1)
-            )
+        // Fetch stored flight path coordinates for this drone
+        let flightCoords = DroneStorageManager.shared
+            .encounters[message.uid]?.flightPath
+            .map { $0.coordinate } ?? []
+
+        Map {
+            // Existing drone marker
+            if let coordinate = message.coordinate {
+                Annotation(message.uid, coordinate: coordinate) {
+                    Image(systemName: "airplane")
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                        .rotationEffect(.degrees(message.headingDeg))
+                        .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                        .foregroundStyle(.blue)
+                }
+            }
+
+            // New: draw flight-path polyline
+            if flightCoords.count > 1 {
+                MapPolyline(coordinates: flightCoords)
+                    .stroke(.purple, lineWidth: 2)
+
+//                // Optional: mark start & end
+//                if let start = flightCoords.first {
+//                    Annotation("start", coordinate: start) {
+//                        Image(systemName: "circle.fill")
+//                            .foregroundStyle(.green)
+//                            .frame(width: 8, height: 8)
+//                    }
+//                }
+//                if let end = flightCoords.last {
+//                    Annotation("end", coordinate: end) {
+//                        Image(systemName: "circle.fill")
+//                            .foregroundStyle(.red)
+//                            .frame(width: 8, height: 8)
+//                    }
+//                }
+            }
+        }
+        .frame(height: 150)
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.gray, lineWidth: 1)
+        )
     }
     
     @ViewBuilder
@@ -529,7 +568,9 @@ struct MessageRow: View {
                 NavigationView {
                     DroneDetailView(
                         message: message,
-                        flightPath: [], // Single location view doesn't have flight path
+                        flightPath: DroneStorageManager.shared
+                            .encounters[message.uid]?.flightPath
+                            .map { $0.coordinate } ?? [],
                         cotViewModel: cotViewModel
                     )
                     .toolbar {

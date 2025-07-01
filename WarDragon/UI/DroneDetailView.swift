@@ -67,99 +67,113 @@ struct DroneDetailView: View {
     }
     
     private var mapSection: some View {
-           VStack(spacing: 8) {
-               HStack {
-                   Text("Flight Map")
-                       .font(.headline)
-                   Spacer()
-                   Button(action: {
-                       showAllLocations.toggle()
-                       updateMapRegion()
-                   }) {
-                       Text(showAllLocations ? "Drone Only" : "Show All")
-                           .font(.caption)
-                           .padding(.horizontal, 8)
-                           .padding(.vertical, 4)
-                           .background(.ultraThinMaterial)
-                           .cornerRadius(8)
-                   }
-               }
-               
-               Map(position: $mapCameraPosition) {
-                   // Drone current position
-                   if let droneCoordinate = message.coordinate {
-                       Annotation("Drone", coordinate: droneCoordinate) {
-                           Image(systemName: "airplane")
-                                  .resizable()
-                                  .frame(width: 20, height: 20)
-                                  .rotationEffect(.degrees(message.headingDeg))
-                                  .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
-                                  .foregroundStyle(.blue)
-                          }
-                   }
-                   
-                   // Home location
-                   if message.homeLat != "0.0" && message.homeLon != "0.0",
-                      let homeLat = Double(message.homeLat),
-                      let homeLon = Double(message.homeLon) {
-                       let homeCoordinate = CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
-                       Annotation("Home", coordinate: homeCoordinate) {
-                           Image(systemName: "house.fill")
-                               .foregroundStyle(.green)
-                               .background(Circle().fill(.white))
-                       }
-                   }
-                   
-                   // Pilot/Operator location
-                   if message.pilotLat != "0.0" && message.pilotLon != "0.0",
-                      let pilotLat = Double(message.pilotLat),
-                      let pilotLon = Double(message.pilotLon) {
-                       let pilotCoordinate = CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
-                       Annotation("Pilot", coordinate: pilotCoordinate) {
-                           Image(systemName: "person.fill")
-                               .foregroundStyle(.orange)
-                               .background(Circle().fill(.white))
-                       }
-                   }
-                   
-                   // Flight path polyline
-                   if flightPath.count > 1 {
-                       MapPolyline(coordinates: flightPath)
-                           .stroke(.purple, lineWidth: 3)
-                   }
-                   
-                   // Flight path start and end points
-                   if let startPoint = flightPath.first, flightPath.count > 1 {
-                       Annotation("Start", coordinate: startPoint) {
-                           Image(systemName: "airplane.departure")
-                               .foregroundStyle(.green)
-                               .background(Circle().fill(.white))
-                       }
-                   }
-                   if let endPoint = flightPath.last,
-                      let startPoint = flightPath.first,
-                      flightPath.count > 1,
-                      !(endPoint.latitude == startPoint.latitude && endPoint.longitude == startPoint.longitude) {
-                       Annotation("Latest", coordinate: endPoint) {
-                           Image(systemName: "airplane.arrival")
-                               .foregroundStyle(.red)
-                               .background(Circle().fill(.white))
-                       }
-                   }
-                   
-                   // Alert rings if any
-                   ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
-                       MapCircle(center: ring.centerCoordinate, radius: ring.radius)
-                           .foregroundStyle(.red.opacity(0.2))
-                           .stroke(.red, lineWidth: 2)
-                   }
-               }
-               .frame(height: 300)
-               .cornerRadius(12)
-           }
-       }
-    
-    
+        VStack(spacing: 8) {
+            HStack {
+                Text("Flight Map")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showAllLocations.toggle()
+                    updateMapRegion()
+                } label: {
+                    Text(showAllLocations ? "Drone Only" : "Show All")
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                }
+            }
+
+            Map(position: $mapCameraPosition) {
+                // Drone
+                if let pt = message.coordinate {
+                    Annotation("Drone", coordinate: pt) {
+                        Image(systemName: "airplane")
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                            .rotationEffect(.degrees(message.headingDeg))
+                            .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                            .foregroundStyle(.blue)
+                    }
+                }
+
+                // Home
+                if message.homeLat != "0.0",
+                   let lat = Double(message.homeLat),
+                   let lon = Double(message.homeLon)
+                {
+                    Annotation("Home", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                        Image(systemName: "house.fill")
+                            .foregroundStyle(.green)
+                            .background(Circle().fill(.white))
+                            .frame(width: 18, height: 18)
+                    }
+                }
+
+                // Pilot
+                if message.pilotLat != "0.0",
+                   let plat = Double(message.pilotLat),
+                   let plon = Double(message.pilotLon)
+                {
+                    Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(.orange)
+                            .background(Circle().fill(.white))
+                            .frame(width: 18, height: 18)
+                    }
+                }
+
+                // Flight-path
+                if flightPath.count > 1 {
+                    MapPolyline(coordinates: flightPath)
+                        .stroke(.purple, lineWidth: 3)
+                }
+
+                // Start & Latest
+                if flightPath.count > 1 {
+                    let start = flightPath.first!
+                    let end = flightPath.last!
+
+//                    Annotation("Start", coordinate: start) {
+//                        Image(systemName: "airplane.departure")
+//                            .foregroundStyle(.green)
+//                            .background(Circle().fill(.white))
+//                            .frame(width: 16, height: 16)
+//                    }
+//
+//                    if end.latitude != start.latitude || end.longitude != start.longitude {
+//                        Annotation("Latest", coordinate: end) {
+//                            Image(systemName: "airplane.arrival")
+//                                .foregroundStyle(.red)
+//                                .background(Circle().fill(.white))
+//                                .frame(width: 16, height: 16)
+//                        }
+//                    }
+                }
+
+                // Alert rings
+                ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
+                    MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                        .stroke(.red.opacity(0.2), lineWidth: 2)
+                }
+            }
+            .frame(height: 300)
+            .cornerRadius(12)
+            // Center on first appear
+            .onAppear {
+                updateMapRegion()
+            }
+            // Re-center whenever latitude changes (new closure signature)
+            .onChange(of: message.coordinate?.latitude) { oldLat, newLat in
+                updateMapRegion()
+            }
+        }
+    }
+
+
+
+
     private var droneInfoSection: some View {
         VStack(spacing: 8) {
             HStack {
@@ -215,7 +229,7 @@ struct DroneDetailView: View {
                 if let course = message.trackCourse, course != "0.0" && !course.isEmpty {
                     DroneInfoRow(title: "Course", value: "\(course)°")
                 }
-                if let speed = message.trackSpeed, speed != "0.0" {
+                if let speed = message.trackSpeedFormatted, speed != "0.0" {
                     DroneInfoRow(title: "Track Speed", value: "\(speed) m/s")
                 }
     
@@ -385,12 +399,11 @@ struct DroneDetailView: View {
     }
     
     private func updateMapRegion() {
-        let coordinates = showAllLocations
-        ? Self.getAllRelevantCoordinates(message: message, flightPath: flightPath)
-        : message.coordinate.map { [$0] } ?? []
-        
-        let region = Self.calculateRegionForCoordinates(coordinates)
-        
+        let coords = showAllLocations
+            ? Self.getAllRelevantCoordinates(message: message, flightPath: flightPath)
+            : (message.coordinate.map { [$0] } ?? [])
+
+        let region = Self.calculateRegionForCoordinates(coords)
         withAnimation(.easeInOut(duration: 0.5)) {
             mapCameraPosition = .region(region)
         }
