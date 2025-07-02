@@ -42,17 +42,11 @@
 - Live tracking of Remote/Drone ID–compliant drones
 - Decodes Ocusync and others
 - Instant flight path visualization and telemetry
-- Multi-protocol (ZMQ & multicast) with tri-source detection
-
-  ![image](https://github.com/user-attachments/assets/8f2b82b9-7e0d-410a-9c68-8c5c32c1ae05)
-
+- Multi-protocol (ZMQ & multicast)
+- Source identification 
 
 ### Spoof Detection
 - Advanced analysis: signal strength, position consistency, transmission patterns, and flight physics
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/b06547b7-4f04-4e80-a562-232b96cc8a5b" width="60%" alt="Spoof Detection Screenshot">
-</div>
 
 ### Visualize Encrypted Drones
 - No GPS, no problem. Using the RSSI lets us estimate distance to target.
@@ -72,46 +66,23 @@
 - Identifies WiFi, BT, and SDR signals with source MAC tracking and signal strength monitoring
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/4763ffb4-f8ef-4e42-af17-a22c27b798a5" width="70%" alt="Signal Analysis Interface">
-</div>
-
-<div align="center">
   <img src="https://github.com/user-attachments/assets/4477787a-8877-4421-88b8-ffd7ec38e26b" width="70%" alt="Signal Analysis Interface">
 </div>
 
 ### System Monitoring
 - Real-time performance metrics: memory, CPU load, temperature, GPS & ANTSDR status
 
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/b384b0b1-8a90-48c6-bf3a-bcf41b599703" width="60%" alt="System Monitoring Dashboard">
-</div>
-
 ## Detection & Tracking
 
-- **Swipe-to-delete & untrack**
+- Swipe-to-delete & untrack
+- Label encounters with aliases and trust status
 
-![image](https://github.com/user-attachments/assets/525358d3-576e-44bd-b76e-661fa2201109)
-
-- **Label encounters with aliases and trust status**
-
-![image](https://github.com/user-attachments/assets/5a497881-f270-4213-b542-552ef37b1a3f)
+> [!TIP]
+>  Tap the "Live" map button for all drones with full-screen tracking. Select an active drone for details.
 
 
 ### Dashboard Display
 - Overview of live signal counts, system health, and active drones with proximity alerts
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/063c2922-1dc5-468d-8378-bb7940d32919" width="60%" alt="Dashboard View">
-</div>
-
-### Live Drone View
-- Interactive maps with live flight paths, spoof analysis, and MAC randomization details
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/58a6861d-5a06-4e6b-b862-566f2f8a988b" width="60%" alt="Drone Detection Screenshot">
-</div>
-
-> **Tip:** Tap the "Live" map button for full-screen tracking and select an active drone for details.
 
 ## History & Analysis
 
@@ -133,9 +104,6 @@
 - Customize warning thresholds, proximity alerts, and display preferences.
 - Set limits for CPU usage, temperature (including PLUTO and ZYNQ), memory, and RSSI.
 
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/3a3651c2-38c5-4eab-902a-d61198e677c0" width="70%" alt="Warning Configuration">
-</div>
 
 ---
 
