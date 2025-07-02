@@ -36,6 +36,7 @@ class CoTViewModel: ObservableObject {
     public var macProcessing: [String: Bool] = [:]
     private var lastNotificationTime: Date?
     private var macToCAA: [String: String] = [:]
+    private var backgroundMaintenanceTimer: Timer?
     private var macToHomeLoc: [String: (lat: Double, lon: Double)] = [:]
     private var currentMessageFormat: ZMQHandler.MessageFormat {
         return zmqHandler?.messageFormat ?? .bluetooth
@@ -851,24 +852,22 @@ class CoTViewModel: ObservableObject {
         objectWillChange.send()
         
         if wasListening {
-            BackgroundManager.shared.startBackgroundProcessing()
+            // Only start background processing if not already running and invalidate old timers
+            if !BackgroundManager.shared.isBackgroundModeActive {
+                BackgroundManager.shared.startBackgroundProcessing()
+            }
+            backgroundMaintenanceTimer?.invalidate()
             
             // Set a timer to periodically check status
-            // This will help maintain connections while in background
-            Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] timer in
+            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] timer in
                 guard let self = self, self.isListeningCot else {
                     timer.invalidate()
+                    self?.backgroundMaintenanceTimer = nil
                     return
                 }
-                
-                // Periodic check to maintain connections
                 print("Background maintenance check: \(Date())")
-                
-                // For ZMQ, send a minimal keepalive if needed
-                // For multicast, no action needed as the socket remains open
             }
         }
-        
         print("WarDragon background preparation complete")
     }
     
