@@ -77,7 +77,7 @@ struct SettingsView: View {
                         .onSubmit {
                             settings.updateConnectionHistory(host: settings.multicastHost, isZmq: false)
                         }
-
+                        
                         
                         if !settings.multicastHostHistory.isEmpty {
                             Menu {
@@ -101,6 +101,13 @@ struct SettingsView: View {
                         if newValue {
                             settings.toggleListening(true)
                             cotHandler.startListening()
+                            
+                            // Save host to history when activating
+                            if settings.connectionMode == .zmq {
+                                settings.updateConnectionHistory(host: settings.zmqHost, isZmq: true)
+                            } else {
+                                settings.updateConnectionHistory(host: settings.multicastHost, isZmq: false)
+                            }
                         } else {
                             settings.toggleListening(false)
                             cotHandler.stopListening()
