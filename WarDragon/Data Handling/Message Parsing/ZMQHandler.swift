@@ -113,13 +113,7 @@ class ZMQHandler: ObservableObject {
     ]
     
 
-    func connect(
-        host: String,
-        zmqTelemetryPort: UInt16,
-        zmqStatusPort: UInt16,
-        onTelemetry: @escaping MessageHandler,
-        onStatus: @escaping MessageHandler
-    ) {
+    func connect(host: String, zmqTelemetryPort: UInt16, zmqStatusPort: UInt16, onTelemetry: @escaping MessageHandler, onStatus: @escaping MessageHandler) {
         // Store parameters for reconnection
         self.lastHost = host
         self.lastTelemetryPort = zmqTelemetryPort
@@ -161,45 +155,7 @@ class ZMQHandler: ObservableObject {
             
             // Start polling on background queue
             pollingQueue = DispatchQueue(label: "com.wardragon.zmq.polling")
-            
-            // Initial immediate poll for any pending messages
-            pollingQueue?.async { [weak self] in
-                guard let self = self else { return }
-                do {
-                    print("Performing initial poll...")
-                    if let items = try self.poller?.poll(timeout: 0.1) {
-                        for (socket, events) in items {
-                            if events.contains(.pollIn) {
-                                if let data = try socket.recv(bufferLength: 65536),
-                                   let jsonString = String(data: data, encoding: .utf8) {
-                                    print("Initial poll received data: \(jsonString.prefix(100))...")
-                                    if socket === self.telemetrySocket {
-                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
-                                            DispatchQueue.main.async {
-                                                print("Converting to xml: \(jsonString)")
-                                                onTelemetry(xmlMessage)
-                                            }
-                                        }
-                                    } else if socket === self.statusSocket {
-                                        if let xmlMessage = self.convertStatusToXML(jsonString) {
-                                            DispatchQueue.main.async {
-                                                onStatus(xmlMessage)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Start regular polling after initial poll
-                    self.startPolling(onTelemetry: onTelemetry, onStatus: onStatus)
-                    
-                } catch {
-                    print("Initial poll error: \(error)")
-                    self.startPolling(onTelemetry: onTelemetry, onStatus: onStatus)
-                }
-            }
+            startPolling(onTelemetry: onTelemetry, onStatus: onStatus)
             
             isConnected = true
             isSubscriptionActive = true
@@ -254,9 +210,20 @@ class ZMQHandler: ObservableObject {
     }
     
     func setBackgroundMode(_ enabled: Bool) {
-        isInBackgroundMode = enabled
-        print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
-    }
+           isInBackgroundMode = enabled
+           print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
+           
+           // Adjust polling behavior but don't disconnect
+           if enabled {
+               // Reduce polling frequency in background
+               try? telemetrySocket?.setRecvTimeout(1000)
+               try? statusSocket?.setRecvTimeout(1000)
+           } else {
+               // Resume normal polling in foreground
+               try? telemetrySocket?.setRecvTimeout(250)
+               try? statusSocket?.setRecvTimeout(250)
+           }
+       }
     
     private func configureSocket(_ socket: SwiftyZeroMQ.Socket) throws {
         try socket.setRecvHighWaterMark(1000)
@@ -287,15 +254,19 @@ class ZMQHandler: ObservableObject {
                                     
                                     // Update last message time whenever we receive a message
                                     self.lastMessageTime = Date()
+                                    self.isSubscriptionActive = true
                                     
-                                    // Process immediately instead of dispatching
                                     if socket === self.telemetrySocket {
                                         if let xmlMessage = self.convertTelemetryToXML(jsonString) {
-                                            onTelemetry(xmlMessage)
+                                            DispatchQueue.main.async {
+                                                onTelemetry(xmlMessage)
+                                            }
                                         }
                                     } else if socket === self.statusSocket {
                                         if let xmlMessage = self.convertStatusToXML(jsonString) {
-                                            onStatus(xmlMessage)
+                                            DispatchQueue.main.async {
+                                                onStatus(xmlMessage)
+                                            }
                                         }
                                     }
                                 }
@@ -303,7 +274,7 @@ class ZMQHandler: ObservableObject {
                         }
                     }
                     
-                    // Add a small delay in background mode to reduce CPU usage
+                    // Add a sleep in background mode to reduce CPU usage
                     if self.isInBackgroundMode {
                         Thread.sleep(forTimeInterval: 1.0)
                     }
@@ -311,6 +282,13 @@ class ZMQHandler: ObservableObject {
                 } catch let error as SwiftyZeroMQ.ZeroMQError {
                     if error.description != "Resource temporarily unavailable" && self.shouldContinueRunning {
                         print("ZMQ Polling Error: \(error)")
+                        
+                        // Attempt to reconnect on error in polling
+                        if self.shouldContinueRunning && self.isConnected {
+                            DispatchQueue.main.async {
+                                self.reconnect()
+                            }
+                        }
                     }
                 } catch {
                     if self.shouldContinueRunning {
@@ -534,17 +512,24 @@ class ZMQHandler: ObservableObject {
     
     // ZMQ BG socket check
     func verifySubscription(completion: @escaping (Bool) -> Void) {
-        // Check if we're still connected
         guard isConnected else {
             completion(false)
             return
         }
         
-        // If we're connected and have sockets, consider subscription active
-        let isValid = telemetrySocket != nil && statusSocket != nil
+        // Check if the sockets are valid and has messages
+        let hasValidSockets = telemetrySocket != nil && statusSocket != nil
+        let isActive = Date().timeIntervalSince(lastMessageTime) < subscriptionTimeout
         
-        // Simply report if the connection is valid
-        completion(isValid)
+        // If not then reconnect
+        let isValid = hasValidSockets && isActive
+        
+        if !isValid && shouldContinueRunning {
+            print("ZMQ subscription needs refresh: valid sockets: \(hasValidSockets), active: \(isActive)")
+            completion(false)
+        } else {
+            completion(true)
+        }
     }
     
     //MARK - Parse and format data
@@ -812,8 +797,21 @@ class ZMQHandler: ObservableObject {
             return
         }
         
-        // Disconnect first to clean up
-        disconnect()
+        print("ZMQ: Reconnecting...")
+        
+        // Just disconnect sockets but keep context if possible
+        do {
+            try telemetrySocket?.close()
+            try statusSocket?.close()
+        } catch {
+            print("ZMQ Socket Close Error: \(error)")
+            // If socket close fails, do full disconnect
+            disconnect()
+        }
+        
+        telemetrySocket = nil
+        statusSocket = nil
+        isConnected = false
         
         // Reconnect with stored parameters
         connect(
