@@ -12,6 +12,24 @@ class ZMQHandler: ObservableObject {
     //MARK: - ZMQ Connection
     @Published var messageFormat: MessageFormat = .bluetooth
     var isInBackgroundMode = false
+    private var context: SwiftyZeroMQ.Context?
+    private var telemetrySocket: SwiftyZeroMQ.Socket?
+    private var statusSocket: SwiftyZeroMQ.Socket?
+    private var poller: SwiftyZeroMQ.Poller?
+    private var pollingQueue: DispatchQueue?
+    private var shouldContinueRunning = false
+    private var lastHost = ""
+    private var lastTelemetryPort: UInt16 = 0
+    private var lastStatusPort: UInt16 = 0
+    private var lastTelemetryHandler: MessageHandler = { _ in }
+    private var lastStatusHandler: MessageHandler = { _ in }
+    private var lastMessageTime: Date = Date()
+    private let subscriptionTimeout: TimeInterval = 120
+    private var isSubscriptionActive = true
+    private var connectionMonitorTimer: Timer?
+    private let connectionCheckInterval: TimeInterval = 30
+    
+    typealias MessageHandler = (String) -> Void
     
     @Published var isConnected = false {
         didSet {
@@ -94,20 +112,7 @@ class ZMQHandler: ObservableObject {
         ]
     ]
     
-    private var context: SwiftyZeroMQ.Context?
-    private var telemetrySocket: SwiftyZeroMQ.Socket?
-    private var statusSocket: SwiftyZeroMQ.Socket?
-    private var poller: SwiftyZeroMQ.Poller?
-    private var pollingQueue: DispatchQueue?
-    private var shouldContinueRunning = false
-    private var lastHost = ""
-    private var lastTelemetryPort: UInt16 = 0
-    private var lastStatusPort: UInt16 = 0
-    private var lastTelemetryHandler: MessageHandler = { _ in }
-    private var lastStatusHandler: MessageHandler = { _ in }
-    
-    typealias MessageHandler = (String) -> Void
-    
+
     func connect(
         host: String,
         zmqTelemetryPort: UInt16,
@@ -197,7 +202,11 @@ class ZMQHandler: ObservableObject {
             }
             
             isConnected = true
+            isSubscriptionActive = true
             print("ZMQ: Connected successfully")
+            
+            // Start connection monitoring
+            startConnectionMonitoring()
             
         } catch {
             print("ZMQ Setup Error: \(error)")
@@ -205,9 +214,47 @@ class ZMQHandler: ObservableObject {
         }
     }
     
+    private func startConnectionMonitoring() {
+        // Stop any existing timer
+        connectionMonitorTimer?.invalidate()
+        
+        // Timer to periodically check the connection
+        connectionMonitorTimer = Timer.scheduledTimer(withTimeInterval: connectionCheckInterval, repeats: true) { [weak self] _ in
+            guard let self = self, self.isConnected else { return }
+            
+            // Check if the connection is still valid
+            self.checkConnectionStatus()
+        }
+        
+        // Make sure the timer runs even when the app is in the background
+        RunLoop.main.add(connectionMonitorTimer!, forMode: .common)
+    }
+    
+    private func checkConnectionStatus() {
+        guard isConnected else { return }
+        
+        do {
+            if let items = try poller?.poll(timeout: 0.1) {
+                if items.isEmpty {
+                    print("ZMQ connection appears to be inactive")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.reconnect()
+                    }
+                }
+                else {
+                    print("ZMQ connection appears active..")
+                }
+            }
+        } catch {
+            print("ZMQ connection check failed: \(error)")
+            DispatchQueue.main.async { [weak self] in
+                self?.reconnect()
+            }
+        }
+    }
+    
     func setBackgroundMode(_ enabled: Bool) {
         isInBackgroundMode = enabled
-        // This flag is used to determine timeout values in the poll() call
         print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
     }
     
@@ -237,6 +284,9 @@ class ZMQHandler: ObservableObject {
                             if events.contains(.pollIn) {
                                 if let data = try socket.recv(bufferLength: 65536),
                                    let jsonString = String(data: data, encoding: .utf8) {
+                                    
+                                    // Update last message time whenever we receive a message
+                                    self.lastMessageTime = Date()
                                     
                                     // Process immediately instead of dispatching
                                     if socket === self.telemetrySocket {
@@ -484,14 +534,16 @@ class ZMQHandler: ObservableObject {
     
     // ZMQ BG socket check
     func verifySubscription(completion: @escaping (Bool) -> Void) {
+        // Check if we're still connected
         guard isConnected else {
             completion(false)
             return
         }
         
-        // If we're connected and have sockets, subscription active
+        // If we're connected and have sockets, consider subscription active
         let isValid = telemetrySocket != nil && statusSocket != nil
         
+        // Simply report if the connection is valid
         completion(isValid)
     }
     
@@ -734,6 +786,10 @@ class ZMQHandler: ObservableObject {
         print("ZMQ: Disconnecting...")
         shouldContinueRunning = false
         
+        // Stop the connection monitor
+        connectionMonitorTimer?.invalidate()
+        connectionMonitorTimer = nil
+        
         do {
             try telemetrySocket?.close()
             try statusSocket?.close()
@@ -747,6 +803,7 @@ class ZMQHandler: ObservableObject {
         context = nil
         poller = nil
         isConnected = false
+        isSubscriptionActive = false
         print("ZMQ: Disconnected")
     }
     
