@@ -482,6 +482,21 @@ class ZMQHandler: ObservableObject {
         """
     }
     
+    // ZMQ BG socket check
+    func verifySubscription(completion: @escaping (Bool) -> Void) {
+        guard isConnected else {
+            completion(false)
+            return
+        }
+        
+        // If we're connected and have sockets, subscription active
+        let isValid = telemetrySocket != nil && statusSocket != nil
+        
+        completion(isValid)
+    }
+    
+    //MARK - Parse and format data
+    
     private func formatDoubleValue(_ value: Any?) -> String {
         if let doubleVal = value as? Double {
             return String(format: "%.7f", doubleVal)

@@ -226,15 +226,13 @@ class BackgroundManager {
     
     private func performLightweightConnectionCheck() {
         // Notify that connections should be checked in a lightweight manner
-        // Use a distinct notification name to differentiate from heavier processing
         NotificationCenter.default.post(name: NSNotification.Name("LightweightConnectionCheck"), object: nil)
         
         // If we have direct access to the view model, we could check more directly
         if let cotViewModel = self.cotViewModel, Settings.shared.isListening {
             // Only check if network is available and we should be listening
             if hasActiveConnection {
-                // Add ZMQHandler checkAlive" method TODO
-                cotViewModel.checkConnectionStatus()
+                cotViewModel.verifyZMQSubscription()
             }
         }
     }

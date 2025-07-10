@@ -829,22 +829,21 @@ class CoTViewModel: ObservableObject {
         // Log background transition
         print("WarDragon preparing for background expiry...")
         
-        // Set a flag to indicate reduced processing mode
         isReconnecting = true
         
-        // For ZMQ connections, reduce activity but maintain connection
+        // For ZMQ reduce activity but maintain connection
         if let zmqHandler = self.zmqHandler {
             // Don't fully disconnect ZMQ, just reduce activity
-            // Save current message format for restoration later
-            let currentFormat = zmqHandler.messageFormat
-            
             if zmqHandler.isConnected {
                 print("Reducing ZMQ activity for background mode")
                 zmqHandler.setBackgroundMode(true)
+                
+                // Force a subscription check to ensure we're still connected
+                verifyZMQSubscription()
             }
         }
         
-        // For multicast connections, we'll keep them open but reduce processing rate
+        // For multicast connections keep open but reduce rate
         if multicastConnection != nil {
             print("Reducing multicast processing for background mode")
         }
@@ -859,13 +858,14 @@ class CoTViewModel: ObservableObject {
             backgroundMaintenanceTimer?.invalidate()
             
             // Set a timer to periodically check status
-            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] timer in
+            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] timer in
                 guard let self = self, self.isListeningCot else {
                     timer.invalidate()
                     self?.backgroundMaintenanceTimer = nil
                     return
                 }
                 print("Background maintenance check: \(Date())")
+                self.verifyZMQSubscription()
             }
         }
         print("WarDragon background preparation complete")
@@ -881,6 +881,9 @@ class CoTViewModel: ObservableObject {
         if let zmqHandler = self.zmqHandler, zmqHandler.isConnected {
             print("Restoring ZMQ normal activity")
             zmqHandler.setBackgroundMode(false)
+            
+            // Verify subscription is still active
+            verifyZMQSubscription()
         }
         
         // Stop background task management
@@ -1523,7 +1526,6 @@ class CoTViewModel: ObservableObject {
             print("Listeners properly released after delay")
         }
         
-        // Properly disconnect ZMQ if using it
         if let zmqHandler = zmqHandler {
             zmqHandler.disconnect()
             self.zmqHandler = nil
@@ -1535,15 +1537,40 @@ class CoTViewModel: ObservableObject {
         print("All listeners stopped and connections cleaned up.")
     }
     
+    func verifyZMQSubscription() {
+        guard Settings.shared.connectionMode == .zmq else { return }
+        
+        if zmqHandler == nil {
+            print("ZMQ handler is nil, creating new connection")
+            startZMQListening()
+            return
+        }
+        
+        if zmqHandler?.isConnected != true {
+            print("ZMQ connection lost, reconnecting...")
+            zmqHandler?.disconnect()
+            zmqHandler = nil
+            startZMQListening()
+            return
+        }
+        
+        // Just check if connection is valid, but don't resubscribe
+        zmqHandler?.verifySubscription { [weak self] isValid in
+            if !isValid {
+                print("ZMQ connection invalid, reconnecting...")
+                self?.zmqHandler?.disconnect()
+                self?.zmqHandler = nil
+                self?.startZMQListening()
+            }
+        }
+    }
+    
     @objc private func checkConnections() {
         // Only check if we're supposed to be listening
         guard isListeningCot else { return }
         
         if Settings.shared.connectionMode == .zmq {
-            if zmqHandler == nil || zmqHandler?.isConnected != true {
-                print("ZMQ connection lost in background, reconnecting...")
-                startZMQListening()
-            }
+            verifyZMQSubscription()
         } else if Settings.shared.connectionMode == .multicast {
             if cotListener == nil || statusListener == nil {
                 print("Multicast connection lost in background, reconnecting...")
