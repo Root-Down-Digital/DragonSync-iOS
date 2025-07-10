@@ -47,6 +47,9 @@ struct SettingsView: View {
                         .textContentType(.URL)
                         .autocapitalization(.none)
                         .disabled(settings.isListening)
+                        .onSubmit {
+                            settings.updateConnectionHistory(host: settings.zmqHost, isZmq: true)
+                        }
                         
                         if !settings.zmqHostHistory.isEmpty {
                             Menu {
@@ -71,6 +74,10 @@ struct SettingsView: View {
                         .textContentType(.URL)
                         .autocapitalization(.none)
                         .disabled(settings.isListening)
+                        .onSubmit {
+                            settings.updateConnectionHistory(host: settings.multicastHost, isZmq: false)
+                        }
+
                         
                         if !settings.multicastHostHistory.isEmpty {
                             Menu {

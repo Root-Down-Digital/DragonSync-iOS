@@ -265,13 +265,10 @@ class Settings: ObservableObject {
         if let host = host {
             if isZmqHost {
                 zmqHost = host
-                updateConnectionHistory(host: host, isZmq: true)
             } else {
                 multicastHost = host
-                updateConnectionHistory(host: host, isZmq: false)
             }
         }
-        
         connectionMode = mode
     }
     
@@ -302,11 +299,11 @@ class Settings: ObservableObject {
     
     var zmqHostHistory: [String] {
         get {
-            if let data = zmqHostHistoryJson.data(using: .utf8),
-               let array = try? JSONDecoder().decode([String].self, from: data) {
-                return array
+            guard let data = zmqHostHistoryJson.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
             }
-            return []
+            return array
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -315,14 +312,14 @@ class Settings: ObservableObject {
             }
         }
     }
-    
+
     var multicastHostHistory: [String] {
         get {
-            if let data = multicastHostHistoryJson.data(using: .utf8),
-               let array = try? JSONDecoder().decode([String].self, from: data) {
-                return array
+            guard let data = multicastHostHistoryJson.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
             }
-            return []
+            return array
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -331,6 +328,7 @@ class Settings: ObservableObject {
             }
         }
     }
+
     
     func updateConnectionHistory(host: String, isZmq: Bool) {
         if isZmq {
