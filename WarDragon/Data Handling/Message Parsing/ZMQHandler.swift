@@ -12,6 +12,7 @@ class ZMQHandler: ObservableObject {
     //MARK: - ZMQ Connection
     @Published var messageFormat: MessageFormat = .bluetooth
     var isInBackgroundMode = false
+    static let shared = ZMQHandler()
     private var context: SwiftyZeroMQ.Context?
     private var telemetrySocket: SwiftyZeroMQ.Socket?
     private var statusSocket: SwiftyZeroMQ.Socket?
@@ -824,3 +825,40 @@ class ZMQHandler: ObservableObject {
     }
     
 }
+
+extension ZMQHandler {
+
+    func connectIfNeeded() {
+        guard !isConnected,
+              !lastHost.isEmpty,
+              lastTelemetryPort > 0,
+              lastStatusPort > 0 else { return }
+
+        connect(host: lastHost,
+                zmqTelemetryPort: lastTelemetryPort,
+                zmqStatusPort: lastStatusPort,
+                onTelemetry: lastTelemetryHandler,
+                onStatus: lastStatusHandler)
+    }
+
+    @discardableResult
+    func drainOnce() -> Bool {
+        guard isConnected else { return false }
+        var drained = false
+
+        if let socket = telemetrySocket,
+           let payload = try? socket.recv(bufferLength: 65536),
+           !payload.isEmpty,
+           let text = String(data: payload, encoding: .utf8) {
+            lastTelemetryHandler(text); drained = true
+        }
+        if let socket = statusSocket,
+           let payload = try? socket.recv(bufferLength: 65536),
+           !payload.isEmpty,
+           let text = String(data: payload, encoding: .utf8) {
+            lastStatusHandler(text); drained = true
+        }
+        return drained
+    }
+}
+

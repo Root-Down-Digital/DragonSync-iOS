@@ -289,8 +289,12 @@ class Settings: ObservableObject {
         isListening = active
         objectWillChange.send()
         
+        if isListening && !enableBackgroundDetection {
+            enableBackgroundDetection = true
+        }
+        
         // Start or stop background processing if enabled
-        if isListening && enableBackgroundDetection {
+        if isListening {
             BackgroundManager.shared.startBackgroundProcessing()
         } else if !isListening {
             BackgroundManager.shared.stopBackgroundProcessing()

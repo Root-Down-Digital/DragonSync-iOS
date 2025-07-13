@@ -31,8 +31,6 @@ struct ContentView: View {
         self._cotViewModel = StateObject(wrappedValue: cotVM)
         self._selectedTab = State(initialValue: Settings.shared.isListening ? 0 : 3)
         
-        // Configure background manager with the created instance, not the StateObject wrapper
-        BackgroundManager.shared.configure(with: cotVM)
         
         // Add lightweight connection check listener
         NotificationCenter.default.addObserver(
