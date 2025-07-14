@@ -130,11 +130,11 @@ struct SettingsView: View {
                     set: { settings.updatePreferences(notifications: settings.notificationsEnabled, screenOn: $0) }
                 ))
                 
-                Toggle("Enable Background Detection", isOn: .init(
-                    get: { settings.enableBackgroundDetection },
-                    set: { settings.enableBackgroundDetection = $0 }
-                ))
-                .disabled(settings.isListening) // Can't change while listening is active
+//                Toggle("Enable Background Detection", isOn: .init(
+//                    get: { settings.enableBackgroundDetection },
+//                    set: { settings.enableBackgroundDetection = $0 }
+//                ))
+//                .disabled(settings.isListening) // Can't change while listening is active
             }
             
             Section("Notifications") {

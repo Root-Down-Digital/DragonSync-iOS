@@ -54,7 +54,7 @@ class Settings: ObservableObject {
             UIApplication.shared.isIdleTimerDisabled = keepScreenOn
         }
     }
-    @AppStorage("enableBackgroundDetection") var enableBackgroundDetection = false {
+    @AppStorage("enableBackgroundDetection") var enableBackgroundDetection = true {
         didSet {
             objectWillChange.send()
         }
