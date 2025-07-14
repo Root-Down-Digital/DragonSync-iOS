@@ -19,7 +19,7 @@ final class BackgroundManager {
     private var group: NWConnectionGroup?
     private var running = false
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
-
+    private var bgRefreshTimer: Timer?
     private let monitor = NWPathMonitor()
     private var hasConnection = true
     private init() {
@@ -38,25 +38,32 @@ final class BackgroundManager {
     func startBackgroundProcessing(useBackgroundTask: Bool = true) {
         guard !running else { return }
         running = true
-
+        
         SilentAudioKeepAlive.shared.start()
-
+        
         if useBackgroundTask {
-            bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") {
-                self.stopBackgroundProcessing()
+            beginDrainTask()
+            // Refresh 20 s in; we’ll always end/start before the 30 s warning.
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20,
+                                                  repeats: true) { [weak self] _ in
+                guard let self else { return }
+                if UIApplication.shared.backgroundTimeRemaining < 10 {
+                    self.endDrainTask()
+                    self.beginDrainTask()
+                }
             }
         }
-
+        
         queue.async {
             MulticastDrain.connect(&self.group)
             ZMQHandler.shared.connectIfNeeded()
-
+            
             while self.running &&
-                  (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true) {
+                    (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true) {
                 _ = ZMQHandler.shared.drainOnce()
                 Thread.sleep(forTimeInterval: 0.05)
             }
-
+            
             self.stopBackgroundProcessing()
         }
     }
@@ -66,6 +73,19 @@ final class BackgroundManager {
         ZMQHandler.shared.disconnect()
         MulticastDrain.disconnect(&group)
 
+        bgRefreshTimer?.invalidate()
+        bgRefreshTimer = nil
+        endDrainTask()
+    }
+    
+    private func beginDrainTask() {
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
+            self?.endDrainTask()
+            self?.beginDrainTask()
+        }
+    }
+
+    private func endDrainTask() {
         if bgTaskID != .invalid {
             UIApplication.shared.endBackgroundTask(bgTaskID)
             bgTaskID = .invalid
