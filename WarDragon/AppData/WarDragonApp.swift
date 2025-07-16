@@ -106,6 +106,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         task.setTaskCompleted(success: true)
         scheduleBGTask(id: task.identifier, delay: 15*60)
     }
+    
+    func applicationWillTerminate(_ application: UIApplication) {
+        ZMQHandler.shared.disconnect()
+    }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 }

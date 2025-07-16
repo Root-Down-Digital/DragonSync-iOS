@@ -5,7 +5,6 @@
 //  Created by Luke on 4/16/25.
 //
 
-
 import Foundation
 import Network
 import UIKit
@@ -16,6 +15,7 @@ final class BackgroundManager {
     static let shared = BackgroundManager()
 
     private let queue = DispatchQueue(label: "BackgroundWork")
+    private let groupLock = NSLock()
     private var group: NWConnectionGroup?
     private var running = false
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -36,16 +36,19 @@ final class BackgroundManager {
     func isNetworkAvailable() -> Bool { hasConnection }
 
     func startBackgroundProcessing(useBackgroundTask: Bool = true) {
-        guard !running else { return }
+        groupLock.lock()
+        if running {
+            groupLock.unlock()
+            return
+        }
         running = true
-        
+        groupLock.unlock()
+
         SilentAudioKeepAlive.shared.start()
-        
+
         if useBackgroundTask {
             beginDrainTask()
-            // Refresh 20 s in; we’ll always end/start before the 30 s warning.
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20,
-                                                  repeats: true) { [weak self] _ in
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 if UIApplication.shared.backgroundTimeRemaining < 10 {
                     self.endDrainTask()
@@ -53,31 +56,43 @@ final class BackgroundManager {
                 }
             }
         }
-        
-        queue.async {
-            MulticastDrain.connect(&self.group)
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            MulticastDrain.connect(&self.group, lock: self.groupLock)
             ZMQHandler.shared.connectIfNeeded()
-            
-            while self.running &&
-                    (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true) {
+
+            while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
                 _ = ZMQHandler.shared.drainOnce()
                 Thread.sleep(forTimeInterval: 0.05)
             }
-            
+
             self.stopBackgroundProcessing()
         }
     }
 
     func stopBackgroundProcessing() {
+        groupLock.lock()
+        let wasRunning = running
         running = false
+        groupLock.unlock()
+        guard wasRunning else { return }
+
         ZMQHandler.shared.disconnect()
-        MulticastDrain.disconnect(&group)
+        MulticastDrain.disconnect(&group, lock: groupLock)
 
         bgRefreshTimer?.invalidate()
         bgRefreshTimer = nil
         endDrainTask()
     }
-    
+
+    private func isRunningAndBackgroundOK(useBackgroundTask: Bool) -> Bool {
+        groupLock.lock()
+        let run = running
+        groupLock.unlock()
+        return run && (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true)
+    }
+
     private func beginDrainTask() {
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
             self?.endDrainTask()
@@ -94,7 +109,9 @@ final class BackgroundManager {
 }
 
 enum MulticastDrain {
-    static func connect(_ grp: inout NWConnectionGroup?) {
+    static func connect(_ grp: inout NWConnectionGroup?, lock: NSLock) {
+        lock.lock()
+        defer { lock.unlock() }
         guard grp == nil else { return }
         do {
             let host = NWEndpoint.Host(Settings.shared.multicastHost)
@@ -114,7 +131,9 @@ enum MulticastDrain {
         } catch { }
     }
 
-    static func disconnect(_ grp: inout NWConnectionGroup?) {
+    static func disconnect(_ grp: inout NWConnectionGroup?, lock: NSLock) {
+        lock.lock()
+        defer { lock.unlock() }
         grp?.cancel()
         grp = nil
     }

@@ -275,9 +275,11 @@ class ZMQHandler: ObservableObject {
                         }
                     }
                     
-                    // Add a sleep in background mode to reduce CPU usage
                     if self.isInBackgroundMode {
-                        Thread.sleep(forTimeInterval: 1.0)
+                        for _ in 0..<10 {
+                            if !self.shouldContinueRunning { break }
+                            Thread.sleep(forTimeInterval: 0.1)
+                        }
                     }
                     
                 } catch let error as SwiftyZeroMQ.ZeroMQError {
