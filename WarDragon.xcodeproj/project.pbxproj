@@ -343,7 +343,7 @@
 				CODE_SIGN_ENTITLEMENTS = WarDragon/WarDragon.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1.7;
+				CURRENT_PROJECT_VERSION = 1.8;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"WarDragon/Preview Content\"";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -394,7 +394,7 @@
 				CODE_SIGN_ENTITLEMENTS = WarDragon/WarDragon.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1.7;
+				CURRENT_PROJECT_VERSION = 1.8;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"WarDragon/Preview Content\"";
 				ENABLE_HARDENED_RUNTIME = YES;
