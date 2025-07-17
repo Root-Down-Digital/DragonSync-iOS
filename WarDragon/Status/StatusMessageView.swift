@@ -9,6 +9,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 
+
 // MARK: - Sheet Types for Status View
 enum StatusSheetType: Identifiable {
     case memory
@@ -21,6 +22,27 @@ enum StatusSheetType: Identifiable {
         }
     }
 }
+
+//MARK - Helper for status data
+
+fileprivate func formatBytes(_ bytes: Int64) -> String {
+    let b  = Double(bytes)
+    let KB = 1024.0
+    let MB = KB * 1024.0
+    let GB = MB * 1024.0
+    
+    switch b {
+    case    0 ..< KB:
+        return "\(bytes) B"
+    case   KB ..< MB:
+        return String(format: "%.2f KB", b / KB)
+    case   MB ..< GB:
+        return String(format: "%.2f MB", b / MB)
+    default:
+        return String(format: "%.2f GB", b / GB)
+    }
+}
+
 
 // MARK: - CircularGauge View
 struct CircularGauge: View {
@@ -426,9 +448,9 @@ struct StatusMessageView: View {
                             Text("DISK")
                                 .font(.system(.caption2, design: .monospaced))
                                 .foregroundColor(.secondary)
-                            Text("\(String(format: "%.1f", message.systemStats.disk.percent))%")
+                            Text(String(format: "%.1f%%", diskUsagePercent))
                                 .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(diskColor(message.systemStats.disk.percent))
+                                .foregroundColor(diskColor(diskUsagePercent))
                                 .fontWeight(.bold)
                         }
                         
@@ -612,16 +634,6 @@ struct StatusMessageView: View {
         return Double(message.systemStats.disk.used) / Double(message.systemStats.disk.total) * 100
     }
     
-    private func formatBytes(_ bytes: Int64) -> String {
-        if bytes >= 1_073_741_824 { // GB
-            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
-        } else if bytes >= 1_048_576 { // MB
-            return String(format: "%.0f MB", Double(bytes) / 1_048_576)
-        } else {
-            return String(format: "%.0f KB", Double(bytes) / 1024)
-        }
-    }
-    
     private func formatUptime(_ uptime: Double) -> String {
         let hours = Int(uptime) / 3600
         let minutes = (Int(uptime) % 3600) / 60
@@ -749,11 +761,7 @@ struct MemoryBarView: View {
         return Double(value) / Double(total) * 100
     }
     
-    private func formatBytes(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        return String(format: "%.2f GB", gb)
-    }
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {

@@ -480,32 +480,32 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     latitude: lat,
                     longitude: lon,
                     altitude: altitude,
-                    speed: gps_speed // Add GPS speed
+                    speed: gps_speed
                 ),
                 systemStats: .init(
                     cpuUsage: cpuUsage,
                     memory: .init(
-                        total: Int64(memoryTotal * 1024 * 1024),
-                        available: Int64(memoryAvailable * 1024 * 1024),
-                        percent: memoryPercent,
-                        used: Int64(max(memoryUsed, memoryTotal - memoryAvailable) * 1024 * 1024),
-                        free: Int64(memoryFree * 1024 * 1024),
-                        active: Int64(memoryActive * 1024 * 1024),
-                        inactive: Int64(memoryInactive * 1024 * 1024),
-                        buffers: Int64(memoryBuffers * 1024 * 1024),
-                        cached: Int64(memoryCached * 1024 * 1024),
-                        shared: Int64(memoryShared * 1024 * 1024),
-                        slab: Int64(memorySlab * 1024 * 1024)
+                      total:     Int64(memoryTotal),
+                      available: Int64(memoryAvailable),
+                      percent:   memoryPercent,
+                      used:      Int64(max(memoryUsed, memoryTotal - memoryAvailable)),
+                      free:      Int64(memoryFree),
+                      active:    Int64(memoryActive),
+                      inactive:  Int64(memoryInactive),
+                      buffers:   Int64(memoryBuffers),
+                      cached:    Int64(memoryCached),
+                      shared:    Int64(memoryShared),
+                      slab:      Int64(memorySlab)
                     ),
                     disk: .init(
-                        total: Int64(diskTotal * 1024 * 1024),
-                        used: Int64(diskUsed * 1024 * 1024),
-                        free: Int64(diskFree * 1024 * 1024),
-                        percent: diskPercent
+                      total: Int64(diskTotal),
+                      used:  Int64(diskUsed),
+                      free:  Int64(diskFree),
+                      percent: diskPercent
                     ),
                     temperature: temperature,
-                    uptime: uptime
-                ),
+                    uptime:      uptime
+                  ),
                 antStats: .init(
                     plutoTemp: plutoTemp,
                     zynqTemp: zynqTemp
