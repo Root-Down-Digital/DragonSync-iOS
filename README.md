@@ -108,9 +108,19 @@
    - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW or the dualcore fw
 
   **Configuration B. Single ESP32S3**
-
-  Use the [auto flash & setup script](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/flash_and_install.sh) or:
   
+  ## Installation Options
+  
+  ### I. Auto Installation
+ Review the script before running: [auto flash & setup script](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh), 
+ 
+  The below command will verify the expected sha256sum of `0df71881de74509fb2ed37c96ad1e548e6ae6fdb480a7849cce48b15e9045818` and go on to install both repos and flash an esp32s3 or c3:
+  
+  ```bash
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^0df71881de74509fb2ed37c96ad1e548e6ae6fdb480a7849cce48b15e9045818 ]] && chmod +x setup.sh && ./setup.sh
+  ```
+
+### II. Manual Installation
   1. Choose Firmware:
       - Recommended: [Official WarDragon ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin)
       - [Dualcore BT/WiFI for xiao esp32s3*](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
