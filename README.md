@@ -8,15 +8,12 @@
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="80%" alt="DragonSync Logo">
 </div>
 <br>
+
 <div align="center">
   Real-time drone detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Enjoy professional-grade detection with advanced signal analysis and tracking. 
 </div>
 <br>
-<div align="center">
-  
- 
- 
-</div>
+
 
 ### App
 - [Features](#features)
@@ -40,11 +37,15 @@
 ## Features
 
 ### Real-Time Monitoring
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="55%" />
+</div>
+
 - Live tracking of Remote/Drone ID–compliant drones
 - Decodes Ocusync and others
 - Instant flight path visualization and telemetry
 - Multi-protocol (ZMQ & multicast)
-- Source identification 
+- Source identification
 
 ### Spoof Detection
 - Advanced analysis: signal strength, position consistency, transmission patterns, and flight physics
@@ -52,34 +53,29 @@
 ### Visualize Encrypted Drones
 - No GPS, no problem. Using the RSSI lets us estimate distance to target.
 
-<div align="center">
- <img src="https://github.com/user-attachments/assets/528c818a-9913-4d05-b9fa-eb38c937f356" width="60%" alt="Drone Encounter Screenshot">
-</div>
-
 ### MAC Randomization Detection
 - Real-time alerts for MAC changes with historical tracking and origin ID association
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/a6c0698f-944d-4a41-b38c-fca75778a5e8" width="60%" alt="MAC Randomization Detection Screenshot">
-</div>
 
 ### Multi-Source Signal Analysis
 - Identifies WiFi, BT, and SDR signals with source MAC tracking and signal strength monitoring
 
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/4477787a-8877-4421-88b8-ffd7ec38e26b" width="70%" alt="Signal Analysis Interface">
-</div>
-
 ### System Monitoring
 - Real-time performance metrics: memory, CPU load, temperature, GPS & ANTSDR status
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="50%" />
+</div>
 
 ## Detection & Tracking
 
 - Swipe-to-delete & untrack
 - Label encounters with aliases and trust status
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="50%" />
+</div>
 
 > [!TIP]
->  Tap the "Live" map button for all drones with full-screen tracking. Select an active drone for details.
+>  Find the live map view and other tools in the upper right menu icon of any drone message
 
 
 ### Dashboard Display
@@ -91,12 +87,12 @@
 - Logs each drone encounter automatically with options to search, sort, review, export, or delete records.
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="60%" alt="Encounter History View">
+  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="50%" alt="Encounter History View">
 </div>
 
 ### FAA Database Analysis
 <div align="center">
-<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="60%" alt="Encounter History View">
+<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="50%" alt="Encounter History View">
 </div>
 
 ---
@@ -126,6 +122,22 @@
 
 
 - (Optional) ANTSDR E200 - for decoding Ocusync and others
+
+4. Once you've installed the below requirements:
+
+**Simple WiFi RID using esp32**
+```
+# Run the decoder
+cd DroneID
+python3 zmq_decoder.py -z --uart /dev/youresp32port --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222
+
+# In a new tab, run the system monitor (not a requirement)
+cd Dragonsync
+python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
+
+```
+5. Set app ZMQ IP to your host and enable in settings. The app will continue monitoring in the backround.
+
 ---
 
 ## Software Requirements
