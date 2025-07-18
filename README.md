@@ -108,6 +108,8 @@
    - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW or the dualcore fw
 
   **Configuration B. Single ESP32S3**
+
+  Use the [auto flash & setup script](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/flash_and_install.sh) or:
   
   1. Choose Firmware:
       - Recommended: [Official WarDragon ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin)
