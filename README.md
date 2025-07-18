@@ -113,12 +113,15 @@
       - Recommended: [Official WarDragon ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin)
       - [Dualcore BT/WiFI for xiao esp32s3*](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
       - [WiFI Only for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin)
+      - [WiFI Only for xiao esp32c3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin)
       
   3. Flash
       Change port name and firmware name or filepath: 
-     ```esptool.py --chip esp32s3 --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB 0x10000 firmwareFile.bin```
+     ```python
+     esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
+     ```
 
-   `*` Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using dualcore fw.  
+*Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using dualcore fw.  
 
 
 - (Optional) ANTSDR E200 - for decoding Ocusync and others
@@ -126,7 +129,7 @@
 4. Once you've installed the below requirements:
 
 **Simple WiFi RID using esp32**
-```
+```python
 # Run the decoder
 cd DroneID
 python3 zmq_decoder.py -z --uart /dev/youresp32port --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222
@@ -145,12 +148,19 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 This section covers setting up the backend Python environment on Linux, macOS, and Windows.
 
 **Required**
-- [Sniffle](https://github.com/nccgroup/Sniffle)
-- [DroneID](https://github.com/alphafox02/DroneID)
 
-**Optional**
-- [DJI Firmware - E200](https://github.com/alphafox02/antsdr_dji_droneid), [WiFi Remote ID Firmware](https://github.com/alphafox02/T-Halow/tree/wifi_rid/examples/DragonOS_RID_Scanner), [DragonSync Python](https://github.com/alphafox02/DragonSync)
+`WiFi`
+- [DroneID](https://github.com/alphafox02/DroneID) for decoding RID packets
 
+`Bluetooth`
+- [Sniffle](https://github.com/nccgroup/Sniffle) flashed on BT RID hardware (Sonoff, Catsniffer)
+
+`Status`
+- [DragonSync Python](https://github.com/alphafox02/DragonSync) for system stats, TAK integration and more
+
+
+`Optional`
+- [DJI Firmware - E200](https://github.com/alphafox02/antsdr_dji_droneid) for SDR
 
 ### Python Tools Setup Instructions
 
