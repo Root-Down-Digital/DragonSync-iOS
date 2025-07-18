@@ -117,7 +117,7 @@
   The below command will verify the expected sha256sum of the file and go on to install both repos and flash an esp32s3 or c3:
   
   ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^88dd23e4ad97b42ca6b56424e2aab112abdfc0eb8f896d31cc31be849c05c6b1 ]] && chmod +x setup.sh && ./setup.sh
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^89d1f6d0bd5ba50343cd6f0a72ac4c9a95d5ab7a6c9dcaccd8ec298163c48d85 ]] && chmod +x setup.sh && ./setup.sh
   ```
 
 ### II. Manual Installation
