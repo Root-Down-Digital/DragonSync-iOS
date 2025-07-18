@@ -181,15 +181,17 @@ select_port() {
     return
   fi
   
-  echo "Available serial ports:"
+  echo "Available serial ports:" >&2
   select port in "${ports[@]}" "Manual entry"; do
-    if [[ "$REPLY" -le "${#ports[@]}" ]]; then
+    if [[ -n "$port" && "$port" != "Manual entry" ]]; then
       echo "$port"
       return
-    elif [[ "$REPLY" -eq $((${#ports[@]}+1)) ]]; then
+    elif [[ "$REPLY" -eq $((${#ports[@]}+1)) ]] || [[ "$port" == "Manual entry" ]]; then
       read -rp "Enter serial port: " manual
       echo "$manual"
       return
+    else
+      echo "Invalid selection. Please try again." >&2
     fi
   done
 }
@@ -219,7 +221,10 @@ flash_firmware() {
   local binfile
   binfile=$(basename "$fw_url")
   echo "Downloading $binfile..."
-  curl -sSL -o "$binfile" "$fw_url"
+  if ! curl -sSL -o "$binfile" "$fw_url"; then
+    echo "Failed to download firmware file." >&2
+    return 1
+  fi
   
   local port
   port=$(select_port "$os")
@@ -229,12 +234,22 @@ flash_firmware() {
     return 1
   fi
   
+  echo "Selected port: $port"
   echo "Ready to flash $binfile to $port"
   read -rp "Proceed with flashing? [y/N]: " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Firmware flashing cancelled."; rm -f "$binfile"; return 0; }
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Firmware flashing cancelled."
+    rm -f "$binfile"
+    return 0
+  fi
   
-  pip install esptool
-  esptool --chip auto --port "$port" --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 "$binfile"
+  echo "Flashing firmware..."
+  if ! esptool --chip auto --port "$port" --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 "$binfile"; then
+    echo "Failed to flash firmware." >&2
+    rm -f "$binfile"
+    return 1
+  fi
+  
   echo "✔ Successfully flashed $binfile"
   rm -f "$binfile"
 }
