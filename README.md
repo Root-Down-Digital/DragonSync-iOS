@@ -18,20 +18,19 @@
  
 </div>
 
-**App**
+### App
 - [Features](#features)
 - [Detection & Tracking](#detection--tracking)
 - [History & Analysis](#history--analysis)
-- [App Settings Config](#app-settings)
  - [Build Instructions](#build-instructions)
 
-**Backend Data**
+### Supplying Backend Data
 - [Hardware Requirements](#hardware-requirements)
  - [Software Setup](#software-requirements)
  - [Connection Choices](#connection-choices)
  - [Command Reference](#backend-data-guide)
 
-**About**
+### About
 - [Credits, Disclaimer & License](#credits-disclaimer--license)
 - [Contributing & Contact](#contributing--contact)
 - [Notes](#notes)
@@ -96,38 +95,37 @@
 </div>
 
 ### FAA Database Analysis
-
-![image](https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3)
-
-
-## App Settings
-
-### Settings & Warning Dials
-- Customize warning thresholds, proximity alerts, and display preferences.
-- Set limits for CPU usage, temperature (including PLUTO and ZYNQ), memory, and RSSI.
-
+<div align="center">
+<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="60%" alt="Encounter History View">
+</div>
 
 ---
 
 ## Hardware Requirements
 
-### Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)
+**Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)**
 
-### Option 2: DIY Setup
+**Option 2: DIY:**
 
-Configuration A. WiFi & BT Adapters
-   - ESP32 with WiFi RID Firmware, or a a WiFi adapter using DroneID `wifi_sniffer` below
-   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW.
+  **Configuration A. WiFi & BT Adapters**
+   - ESP32 with WiFi RID Firmware (see below), or a a WiFi adapter using DroneID
+   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW or the dualcore fw
 
-Configuration B. Single Xiao ESP32S3
-   - Flash it with this [firmware](https://github.com/lukeswitz/T-Halow/blob/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
-   - Change port name and firmware filepath: 
+  **Configuration B. Single ESP32S3**
+  
+  1. Choose Firmware:
+      - Recommended: [Official WarDragon ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin)
+      - [Dualcore BT/WiFI for xiao esp32s3*](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
+      - [WiFI Only for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin)
+      
+  3. Flash
+      Change port name and firmware name or filepath: 
      ```esptool.py --chip esp32s3 --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB 0x10000 firmwareFile.bin```
 
-   - Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py)
-  
-- (Optional) ANTSDR E200 & DJI FW
+   `*` Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using dualcore fw.  
 
+
+- (Optional) ANTSDR E200 - for decoding Ocusync and others
 ---
 
 ## Software Requirements
@@ -192,7 +190,7 @@ This section covers setting up the backend Python environment on Linux, macOS, a
 
 ## Connection Choices
 
-### ZMQ Server (JSON) – Recommended
+### ZMQ Server – Recommended
 
 The ZMQ Server option provides direct JSON-based communication with full data access. Ideal for detailed monitoring and SDR decoding.
 
