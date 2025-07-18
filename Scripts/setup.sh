@@ -214,8 +214,8 @@ flash_firmware() {
     2) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin";;
     3) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin";;
     4) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin";;
-    5) echo "Skipping firmware flash."; return 0;;
-    *) echo "Invalid choice, skipping firmware flash."; return 0;;
+    5) echo "Skipping firmware flash."; FLASHED_PORT=""; return 0;;
+    *) echo "Invalid choice, skipping firmware flash."; FLASHED_PORT=""; return 0;;
   esac
   
   local binfile
@@ -223,6 +223,7 @@ flash_firmware() {
   echo "Downloading $binfile..."
   if ! curl -sSL -o "$binfile" "$fw_url"; then
     echo "Failed to download firmware file." >&2
+    FLASHED_PORT=""
     return 1
   fi
   
@@ -231,6 +232,7 @@ flash_firmware() {
   if [[ -z "$port" ]]; then
     echo "No port selected, skipping firmware flash." >&2
     rm -f "$binfile"
+    FLASHED_PORT=""
     return 1
   fi
   
@@ -240,6 +242,7 @@ flash_firmware() {
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Firmware flashing cancelled."
     rm -f "$binfile"
+    FLASHED_PORT=""
     return 0
   fi
   
@@ -247,23 +250,28 @@ flash_firmware() {
   if ! esptool --chip auto --port "$port" --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 "$binfile"; then
     echo "Failed to flash firmware." >&2
     rm -f "$binfile"
+    FLASHED_PORT=""
     return 1
   fi
   
   echo "✔ Successfully flashed $binfile"
   rm -f "$binfile"
+  FLASHED_PORT="$port"
 }
 
 create_run_scripts() {
   local venv_activate=""
   [[ "$USING_VENV" -eq 1 ]] && venv_activate="source $PWD/$VENV_DIR/bin/activate"
   
+  local default_port="/dev/ttyUSB0"
+  [[ -n "$FLASHED_PORT" ]] && default_port="$FLASHED_PORT"
+  
   cat > run_bluetooth_receiver.sh << EOF
 #!/usr/bin/env bash
 set -e
 $venv_activate
 
-SERIAL_PORT="\${1:-/dev/ttyUSB0}"
+SERIAL_PORT="\${1:-$default_port}"
 BAUDRATE="\${2:-2000000}"
 ZMQ_SETTING="\${3:-127.0.0.1:4222}"
 
@@ -276,7 +284,7 @@ cd $DRONEID_DIR
 python3 bluetooth_receiver.py -b "\$BAUDRATE" -s "\$SERIAL_PORT" --zmqsetting "\$ZMQ_SETTING" -v
 EOF
   chmod +x run_bluetooth_receiver.sh
-
+  
   cat > run_wifi_receiver.sh << EOF
 #!/usr/bin/env bash
 set -e
@@ -284,16 +292,18 @@ $venv_activate
 
 INTERFACE="\${1:-wlan0}"
 ZMQ_SETTING="\${2:-127.0.0.1:4223}"
+UART_PORT="\${3:-$default_port}"
 
 echo "Starting WiFi receiver..."
 echo "Interface: \$INTERFACE"
 echo "ZMQ Setting: \$ZMQ_SETTING"
+echo "UART Port: \$UART_PORT"
 
 cd $DRONEID_DIR
-python3 wifi_receiver.py --interface "\$INTERFACE" -z --zmqsetting "\$ZMQ_SETTING"
+python3 wifi_receiver.py --interface "\$INTERFACE" -z --zmqsetting "\$ZMQ_SETTING" 
 EOF
   chmod +x run_wifi_receiver.sh
-
+  
   cat > run_pcap_replay.sh << EOF
 #!/usr/bin/env bash
 set -e
@@ -310,13 +320,13 @@ cd $DRONEID_DIR
 python3 wifi_receiver.py --pcap "\$PCAP_FILE" -z --zmqsetting "\$ZMQ_SETTING"
 EOF
   chmod +x run_pcap_replay.sh
-
+  
   cat > run_drone_decoder.sh << EOF
 #!/usr/bin/env bash
 set -e
 $venv_activate
 
-ZMQ_SETTING="\${1:-127.0.0.1:4224}"
+ZMQ_SETTING="\${1:-0.0.0.0:4224}"
 ZMQ_CLIENTS="\${2:-127.0.0.1:4222,127.0.0.1:4223}"
 
 echo "Starting DroneID decoder..."
@@ -324,16 +334,16 @@ echo "ZMQ Setting: \$ZMQ_SETTING"
 echo "ZMQ Clients: \$ZMQ_CLIENTS"
 
 cd $DRONEID_DIR
-python3 zmq_decoder.py -z --zmqsetting "\$ZMQ_SETTING" --zmqclients "\$ZMQ_CLIENTS" -v
+python3 zmq_decoder.py --uart "\$UART_PORT" -z --zmqsetting "\$ZMQ_SETTING" --zmqclients "\$ZMQ_CLIENTS" -v 
 EOF
   chmod +x run_drone_decoder.sh
-
+  
   cat > run_bluetooth_spoof.sh << EOF
 #!/usr/bin/env bash
 set -e
 $venv_activate
 
-SERIAL_PORT="\${1:-/dev/ttyUSB0}"
+SERIAL_PORT="\${1:-$default_port}"
 BAUDRATE="\${2:-2000000}"
 
 echo "Starting Bluetooth spoofer..."
@@ -345,7 +355,7 @@ cd $DRONEID_DIR
 python3 bluetooth_spoof.py -s "\$SERIAL_PORT" -b "\$BAUDRATE"
 EOF
   chmod +x run_bluetooth_spoof.sh
-
+  
   cat > run_wardragon_monitor.sh << EOF
 #!/usr/bin/env bash
 set -e
@@ -364,8 +374,9 @@ cd $DRAGONSYNC_DIR
 python3 wardragon_monitor.py --zmq_host "\$ZMQ_HOST" --zmq_port "\$ZMQ_PORT" --interval "\$INTERVAL"
 EOF
   chmod +x run_wardragon_monitor.sh
-
+  
   echo "✔ Created run scripts for all DroneID modes"
+  [[ -n "$FLASHED_PORT" ]] && echo "✔ Scripts configured to use flashed port: $FLASHED_PORT"
 }
 
 print_usage() {
@@ -373,7 +384,11 @@ print_usage() {
   [[ "$USING_VENV" -eq 1 ]] && venv_note="
 Virtual environment: $VENV_DIR
 To activate manually: source $VENV_DIR/bin/activate"
-
+  
+  local port_note=""
+  [[ -n "$FLASHED_PORT" ]] && port_note="
+Default port (from flash): $FLASHED_PORT"
+  
   cat << EOF
 
 ===================================================
@@ -384,21 +399,21 @@ Repositories:
 - $DRONEID_DIR (DroneID receiver/decoder/spoofer)
 - $DRAGONSYNC_DIR (DragonSync monitor)
 
-$venv_note
+$venv_note$port_note
 
 DroneID Modes:
 1. Bluetooth Receiver (Sonoff Dongle):
-   run_bluetooth_receiver.sh [port] [baud] [zmq]
+  run_bluetooth_receiver.sh [port] [baud] [zmq]
 2. WiFi Receiver:
-   run_wifi_receiver.sh [iface] [zmq]
+  run_wifi_receiver.sh [iface] [zmq] [uart_port]
 3. PCAP Replay:
-   run_pcap_replay.sh [pcap] [zmq]
+  run_pcap_replay.sh [pcap] [zmq]
 4. Decoder:
-   run_drone_decoder.sh [zmq] [clients]
+  run_drone_decoder.sh [zmq] [clients]
 5. Spoofer:
-   run_bluetooth_spoof.sh [port] [baud]
+  run_bluetooth_spoof.sh [port] [baud]
 6. Monitor:
-   run_wardragon_monitor.sh [host] [port] [interval]
+  run_wardragon_monitor.sh [host] [port] [interval]
 EOF
 }
 
