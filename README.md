@@ -97,50 +97,69 @@
 
 ---
 
-## Hardware Requirements
+# Installation
+
+## 1. Pick a Stack 
+
+#### Hardware Requirements
 
 **Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)**
+- Works out of the box, put its IP into the connection settings and go.
 
-**Option 2: DIY:**
+**Option 2: DIY**
+- Uses your own stack to provide the app data
 
-  **Configuration A. WiFi & BT Adapters**
-   - ESP32 with WiFi RID Firmware (see below), or a a WiFi adapter using DroneID
-   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW or the dualcore fw
+  **Configuration A: WiFi & BT Adapters**
+   - ESP32 with WiFi RID Firmware (see below), **or a a WiFi adapter using DroneID**
+   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW **or the dualcore fw**
+   - GPS module for status & proximity estimates
+   - (Optional) ANTSDR E200 - for decoding Ocusync and others
 
-  **Configuration B. Single ESP32S3**
+  **Configuration B:**
+  - ESP32S3/C3
+  - GPS module for status & proximity estimates
+
+## 2. Install Software & Flash Firmware
   
-  ## Installation Options
+  - ### Auto Installation
+    
+    _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32:**_
+    
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f5749589a00526b8b1d99cd15b7a5d4dd6decb84f5863df78c4fa476322447e5 ]] && chmod +x setup.sh && ./setup.sh
+    ```
+    
+    > **Choose skip flashing when prompted if using your own wireless adapters instead of esp32**
+    
+  ---
   
-  ### I. Auto Installation
- Review the script before running: [auto flash & setup script](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh), 
- 
-  The below command will verify the expected sha256sum of the file and go on to install both repos and flash an esp32s3 or c3:
+  - ### Manual Installation
   
-  ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f5749589a00526b8b1d99cd15b7a5d4dd6decb84f5863df78c4fa476322447e5 ]] && chmod +x setup.sh && ./setup.sh
-  ```
+    **0. Go to [software requirements](#software-requirements) and complete all steps**
+    
+    **1. Choose Firmware:**
+    
+    - [Official WarDragon WiFi RID ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin) - Recommended
+    - [Dualcore BT/WiFI for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)*
+    - [WiFI Only for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin)
+    - [WiFI Only for xiao esp32c3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin)
+    
+    **2. Flash**
+    
+    ```python
+    esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
+    ```    
+    - (Change port name and firmware name/filepath)
 
-### II. Manual Installation
-  1. Choose Firmware:
-      - Recommended: [Official WarDragon ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin)
-      - [Dualcore BT/WiFI for xiao esp32s3*](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
-      - [WiFI Only for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin)
-      - [WiFI Only for xiao esp32c3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin)
-      
-  3. Flash
-      Change port name and firmware name or filepath: 
-     ```python
-     esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
-     ```
+## 3. Start Detection
 
-*Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using dualcore fw.  
+*Swap in this zmq decoder to handle both types over UART RID [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using the dual RID fw.
+  
+- Optional: Persist detection using [service files](https://github.com/alphafox02/DragonSync/tree/main/services) made by @alphafox02.
+- Mod the commands to suite and copy to an OS service dir (`/etc/systemd/system` for example).
 
+**Start Detecting WiFi RID using esp32** _(the setup.sh creates use commands for all hardware cases, this is an example workflow)_
 
-- (Optional) ANTSDR E200 - for decoding Ocusync and others
-
-4. Once you've installed the below requirements:
-
-**Simple WiFi RID using esp32**
 ```python
 # Run the decoder
 cd DroneID
@@ -151,13 +170,16 @@ cd Dragonsync
 python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 
 ```
-5. Set app ZMQ IP to your host and enable in settings. The app will continue monitoring in the backround.
+
+## 4. Start App 
+  - Set app ZMQ IP to your host and enable in settings.
+  - The app will continue monitoring in the backround.
 
 ---
 
 ## Software Requirements
 
-This section covers setting up the backend Python environment on Linux, macOS, and Windows.
+This section covers manually setting up the backend Python environment on Linux, macOS, and Windows.
 
 **Required**
 
