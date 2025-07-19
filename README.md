@@ -123,7 +123,7 @@
   
   - ### Auto Installation
     
-    _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32:**_
+    _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32. FOR MAC & LINUX ONLY, windows see [manual setup](#python-tools-setup-instructions):**_
     
     ```bash
     curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f5749589a00526b8b1d99cd15b7a5d4dd6decb84f5863df78c4fa476322447e5 ]] && chmod +x setup.sh && ./setup.sh
@@ -226,6 +226,7 @@ This section covers manually setting up the backend Python environment on Linux,
        ./setup.sh
 
 #### Windows (Using WSL or Native)
+
 - **WSL (Recommended):**  
   Install WSL (`wsl --install`) and follow the Linux instructions.
 - **Native Setup:**  
