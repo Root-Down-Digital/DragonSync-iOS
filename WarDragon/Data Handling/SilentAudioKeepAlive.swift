@@ -14,6 +14,7 @@ final class SilentAudioKeepAlive {
     private let engine = AVAudioEngine()
     private var started = false
     private let log = OSLog(subsystem: "com.wardragon", category: "AudioKeepAlive")
+    private var sourceNode: AVAudioSourceNode?
 
     func start() {
         guard !started else { return }
@@ -24,14 +25,33 @@ final class SilentAudioKeepAlive {
         startEngine()
         registerObservers()
     }
+    
+    func stop() {
+        guard started else { return }
+        started = false
+        
+        engine.stop()
+        
+        if let sourceNode = sourceNode {
+            engine.detach(sourceNode)
+            self.sourceNode = nil
+        }
+        
+        do {
+            try AVAudioSession.sharedInstance().setActive(false)
+        } catch {
+            os_log("Failed to deactivate audio session: %{public}@", log: log, type: .error,
+                   String(describing: error))
+        }
+    }
 
     // MARK: - helpers
 
     private func configureSession() {
-        let s = AVAudioSession.sharedInstance()
+        let session = AVAudioSession.sharedInstance()
         do {
-            try s.setCategory(.playback, options: [.mixWithOthers])
-            try s.setActive(true)
+            try session.setCategory(.playback, options: [.mixWithOthers])
+            try session.setActive(true)
         } catch {
             os_log("Session activate failed: %{public}@", log: log, type: .error,
                    String(describing: error))
@@ -39,7 +59,21 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureEngine() {
-        let src = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+        // Define a proper audio format
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 44100,
+            channels: 1,
+            interleaved: false
+        )
+        
+        guard let audioFormat = format else {
+            os_log("Failed to create audio format", log: log, type: .error)
+            return
+        }
+        
+        // Create source node that generates silence
+        let sourceNode = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in ablPointer {
                 if let data = buffer.mData {
@@ -48,8 +82,12 @@ final class SilentAudioKeepAlive {
             }
             return noErr
         }
-        engine.attach(src)
-        engine.connect(src, to: engine.mainMixerNode, format: nil)
+        
+        self.sourceNode = sourceNode
+        engine.attach(sourceNode)
+        
+        // Connect with explicit format
+        engine.connect(sourceNode, to: engine.mainMixerNode, format: audioFormat)
     }
 
     private func startEngine() {
@@ -66,28 +104,54 @@ final class SilentAudioKeepAlive {
     private func registerObservers() {
         let nc = NotificationCenter.default
 
-        // 🔑 compile-safe constant here:
         nc.addObserver(forName: .AVAudioEngineConfigurationChange,
                        object: engine, queue: .main) { [weak self] _ in
-            self?.startEngine()
+            self?.handleConfigurationChange()
         }
 
         nc.addObserver(forName: AVAudioSession.interruptionNotification,
-                       object: nil, queue: .main) { [weak self] n in
-            guard
-                let self,
-                let u = n.userInfo,
-                (u[AVAudioSessionInterruptionTypeKey] as? UInt)
-                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:)) == .ended
-            else { return }
-            self.startEngine()
+                       object: nil, queue: .main) { [weak self] notification in
+            self?.handleInterruption(notification)
         }
 
         nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification,
                        object: nil, queue: .main) { [weak self] _ in
-            self?.configureSession()
-            self?.configureEngine()
-            self?.startEngine()
+            self?.handleMediaServicesReset()
         }
+    }
+    
+    private func handleConfigurationChange() {
+        os_log("Audio configuration changed, restarting engine", log: log, type: .info)
+        startEngine()
+    }
+    
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+        
+        switch type {
+        case .began:
+            os_log("Audio interruption began", log: log, type: .info)
+        case .ended:
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    os_log("Audio interruption ended, resuming", log: log, type: .info)
+                    startEngine()
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
+    
+    private func handleMediaServicesReset() {
+        os_log("Media services reset, reconfiguring audio", log: log, type: .info)
+        configureSession()
+        configureEngine()
+        startEngine()
     }
 }

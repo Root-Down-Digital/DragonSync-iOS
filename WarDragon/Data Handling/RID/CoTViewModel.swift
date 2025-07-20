@@ -938,11 +938,7 @@ class CoTViewModel: ObservableObject {
             updateHomeLocation(for: extractedId, message: message)
             return
         }
-        
-        // Early exit for untracked devices
-        let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
-  
-        
+
         DispatchQueue.main.async {
             
             let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"

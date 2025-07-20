@@ -22,6 +22,9 @@ final class BackgroundManager {
     private var bgRefreshTimer: Timer?
     private let monitor = NWPathMonitor()
     private var hasConnection = true
+    private var taskStartTime: Date?
+    private let maxTaskDuration: TimeInterval = 25
+    
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             self?.hasConnection = (path.status == .satisfied)
@@ -48,22 +51,30 @@ final class BackgroundManager {
 
         if useBackgroundTask {
             beginDrainTask()
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 guard let self else { return }
-                if UIApplication.shared.backgroundTimeRemaining < 10 {
-                    self.endDrainTask()
-                    self.beginDrainTask()
-                }
+                self.checkAndRefreshBackgroundTask()
             }
         }
 
         queue.async { [weak self] in
             guard let self else { return }
-            MulticastDrain.connect(&self.group, lock: self.groupLock)
-            ZMQHandler.shared.connectIfNeeded()
+            
+            // Only connect multicast if using multicast mode
+            if Settings.shared.connectionMode == .multicast {
+                MulticastDrain.connect(&self.group, lock: self.groupLock)
+            }
+            
+            // Only connect ZMQ if using ZMQ mode
+            if Settings.shared.connectionMode == .zmq {
+                ZMQHandler.shared.connectIfNeeded()
+            }
 
             while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
-                _ = ZMQHandler.shared.drainOnce()
+                // Only drain ZMQ if using ZMQ mode
+                if Settings.shared.connectionMode == .zmq {
+                    _ = ZMQHandler.shared.drainOnce()
+                }
                 Thread.sleep(forTimeInterval: 0.05)
             }
 
@@ -78,8 +89,15 @@ final class BackgroundManager {
         groupLock.unlock()
         guard wasRunning else { return }
 
-        ZMQHandler.shared.disconnect()
-        MulticastDrain.disconnect(&group, lock: groupLock)
+        // Only disconnect ZMQ if it was being used
+        if Settings.shared.connectionMode == .zmq {
+            ZMQHandler.shared.disconnect()
+        }
+        
+        // Only disconnect multicast if it was being used
+        if Settings.shared.connectionMode == .multicast {
+            MulticastDrain.disconnect(&group, lock: groupLock)
+        }
 
         bgRefreshTimer?.invalidate()
         bgRefreshTimer = nil
@@ -93,10 +111,25 @@ final class BackgroundManager {
         return run && (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true)
     }
 
+    private func checkAndRefreshBackgroundTask() {
+        guard bgTaskID != .invalid else { return }
+        
+        let currentTime = Date()
+        let timeRemaining = UIApplication.shared.backgroundTimeRemaining
+        
+        if let startTime = taskStartTime,
+           currentTime.timeIntervalSince(startTime) >= maxTaskDuration || timeRemaining < 10 {
+            endDrainTask()
+            beginDrainTask()
+        }
+    }
+
     private func beginDrainTask() {
+        endDrainTask()
+        
+        taskStartTime = Date()
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
             self?.endDrainTask()
-            self?.beginDrainTask()
         }
     }
 
@@ -104,6 +137,7 @@ final class BackgroundManager {
         if bgTaskID != .invalid {
             UIApplication.shared.endBackgroundTask(bgTaskID)
             bgTaskID = .invalid
+            taskStartTime = nil
         }
     }
 }
