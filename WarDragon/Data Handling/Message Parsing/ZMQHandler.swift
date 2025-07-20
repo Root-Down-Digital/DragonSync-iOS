@@ -211,28 +211,23 @@ class ZMQHandler: ObservableObject {
     }
     
     func setBackgroundMode(_ enabled: Bool) {
-           isInBackgroundMode = enabled
-           print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
-           
-           // Adjust polling behavior but don't disconnect
-           if enabled {
-               // Reduce polling frequency in background
-               try? telemetrySocket?.setRecvTimeout(1000)
-               try? statusSocket?.setRecvTimeout(1000)
-           } else {
-               // Resume normal polling in foreground
-               try? telemetrySocket?.setRecvTimeout(250)
-               try? statusSocket?.setRecvTimeout(250)
-           }
-       }
+        isInBackgroundMode = enabled
+        print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
+        
+        if enabled {
+            try? telemetrySocket?.setRecvTimeout(2000)
+            try? statusSocket?.setRecvTimeout(2000)
+        } else {
+            try? telemetrySocket?.setRecvTimeout(500)
+            try? statusSocket?.setRecvTimeout(500)
+        }
+    }
     
     private func configureSocket(_ socket: SwiftyZeroMQ.Socket) throws {
-        try socket.setRecvHighWaterMark(1000)
+        try socket.setRecvHighWaterMark(500)
         try socket.setLinger(0)
-        try socket.setRecvTimeout(250) // longer timeout
+        try socket.setRecvTimeout(500)
         try socket.setImmediate(true)
-        
-        // Set TCP keep alive to detect connection issues
         try socket.setIntegerSocketOption(ZMQ_TCP_KEEPALIVE, 1)
         try socket.setIntegerSocketOption(ZMQ_TCP_KEEPALIVE_IDLE, 120)
         try socket.setIntegerSocketOption(ZMQ_TCP_KEEPALIVE_INTVL, 60)
@@ -243,59 +238,58 @@ class ZMQHandler: ObservableObject {
             guard let self = self else { return }
             
             while self.shouldContinueRunning {
-                do {
-                    // Adjust timeout based on background mode
-                    let pollTimeout: Double = self.isInBackgroundMode ? 5.0 : 0.1
-                    
-                    if let items = try self.poller?.poll(timeout: pollTimeout) {
-                        for (socket, events) in items {
-                            if events.contains(.pollIn) {
-                                if let data = try socket.recv(bufferLength: 65536),
-                                   let jsonString = String(data: data, encoding: .utf8) {
-                                    
-                                    // Update last message time whenever we receive a message
-                                    self.lastMessageTime = Date()
-                                    self.isSubscriptionActive = true
-                                    
-                                    if socket === self.telemetrySocket {
-                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
-                                            DispatchQueue.main.async {
-                                                onTelemetry(xmlMessage)
+                autoreleasepool {
+                    do {
+                        let pollTimeout: Double = self.isInBackgroundMode ? 2.0 : 0.1
+                        
+                        if let items = try self.poller?.poll(timeout: pollTimeout) {
+                            for (socket, events) in items {
+                                if events.contains(.pollIn) {
+                                    if let data = try socket.recv(bufferLength: 32768),
+                                       let jsonString = String(data: data, encoding: .utf8) {
+                                        
+                                        self.lastMessageTime = Date()
+                                        self.isSubscriptionActive = true
+                                        
+                                        if socket === self.telemetrySocket {
+                                            if let xmlMessage = self.convertTelemetryToXML(jsonString) {
+                                                DispatchQueue.main.async {
+                                                    onTelemetry(xmlMessage)
+                                                }
                                             }
-                                        }
-                                    } else if socket === self.statusSocket {
-                                        if let xmlMessage = self.convertStatusToXML(jsonString) {
-                                            DispatchQueue.main.async {
-                                                onStatus(xmlMessage)
+                                        } else if socket === self.statusSocket {
+                                            if let xmlMessage = self.convertStatusToXML(jsonString) {
+                                                DispatchQueue.main.async {
+                                                    onStatus(xmlMessage)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    
-                    if self.isInBackgroundMode {
-                        for _ in 0..<10 {
-                            if !self.shouldContinueRunning { break }
-                            Thread.sleep(forTimeInterval: 0.1)
-                        }
-                    }
-                    
-                } catch let error as SwiftyZeroMQ.ZeroMQError {
-                    if error.description != "Resource temporarily unavailable" && self.shouldContinueRunning {
-                        print("ZMQ Polling Error: \(error)")
                         
-                        // Attempt to reconnect on error in polling
-                        if self.shouldContinueRunning && self.isConnected {
-                            DispatchQueue.main.async {
-                                self.reconnect()
+                        if self.isInBackgroundMode {
+                            Thread.sleep(forTimeInterval: 0.5)
+                        }
+                        
+                    } catch let error as SwiftyZeroMQ.ZeroMQError {
+                        if error.description != "Resource temporarily unavailable" &&
+                           error.description != "Operation would block" &&
+                           self.shouldContinueRunning {
+                            print("ZMQ Polling Error: \(error)")
+                            
+                            if self.shouldContinueRunning && self.isConnected {
+                                DispatchQueue.main.async {
+                                    self.reconnect()
+                                }
+                                return
                             }
                         }
-                    }
-                } catch {
-                    if self.shouldContinueRunning {
-                        print("ZMQ Polling Error: \(error)")
+                    } catch {
+                        if self.shouldContinueRunning {
+                            print("ZMQ Polling Error: \(error)")
+                        }
                     }
                 }
             }
@@ -520,11 +514,8 @@ class ZMQHandler: ObservableObject {
             return
         }
         
-        // Check if the sockets are valid and has messages
         let hasValidSockets = telemetrySocket != nil && statusSocket != nil
         let isActive = Date().timeIntervalSince(lastMessageTime) < subscriptionTimeout
-        
-        // If not then reconnect
         let isValid = hasValidSockets && isActive
         
         if !isValid && shouldContinueRunning {
@@ -534,6 +525,7 @@ class ZMQHandler: ObservableObject {
             completion(true)
         }
     }
+
     
     //MARK - Parse and format data
     
@@ -774,9 +766,10 @@ class ZMQHandler: ObservableObject {
         print("ZMQ: Disconnecting...")
         shouldContinueRunning = false
         
-        // Stop the connection monitor
         connectionMonitorTimer?.invalidate()
         connectionMonitorTimer = nil
+        
+        Thread.sleep(forTimeInterval: 0.1)
         
         do {
             try telemetrySocket?.close()
@@ -794,7 +787,7 @@ class ZMQHandler: ObservableObject {
         isSubscriptionActive = false
         print("ZMQ: Disconnected")
     }
-    
+
     func reconnect() {
         if isConnected || lastHost.isEmpty || lastTelemetryPort == 0 || lastStatusPort == 0 {
             return
@@ -802,21 +795,19 @@ class ZMQHandler: ObservableObject {
         
         print("ZMQ: Reconnecting...")
         
-        // Just disconnect sockets but keep context if possible
         do {
             try telemetrySocket?.close()
             try statusSocket?.close()
         } catch {
             print("ZMQ Socket Close Error: \(error)")
-            // If socket close fails, do full disconnect
             disconnect()
+            return
         }
         
         telemetrySocket = nil
         statusSocket = nil
         isConnected = false
         
-        // Reconnect with stored parameters
         connect(
             host: lastHost,
             zmqTelemetryPort: lastTelemetryPort,
@@ -825,6 +816,7 @@ class ZMQHandler: ObservableObject {
             onStatus: lastStatusHandler
         )
     }
+
     
 }
 
@@ -849,17 +841,21 @@ extension ZMQHandler {
         var drained = false
 
         if let socket = telemetrySocket,
-           let payload = try? socket.recv(bufferLength: 65536),
+           let payload = try? socket.recv(bufferLength: 32768),
            !payload.isEmpty,
            let text = String(data: payload, encoding: .utf8) {
-            lastTelemetryHandler(text); drained = true
+            lastTelemetryHandler(text)
+            drained = true
         }
+        
         if let socket = statusSocket,
-           let payload = try? socket.recv(bufferLength: 65536),
+           let payload = try? socket.recv(bufferLength: 32768),
            !payload.isEmpty,
            let text = String(data: payload, encoding: .utf8) {
-            lastStatusHandler(text); drained = true
+            lastStatusHandler(text)
+            drained = true
         }
+        
         return drained
     }
 }

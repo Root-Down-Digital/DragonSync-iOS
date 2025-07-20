@@ -39,9 +39,12 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureEngine() {
-        let src = AVAudioSourceNode { _, _, _, abl -> OSStatus in
-            for b in UnsafeMutableAudioBufferListPointer(abl) {
-                if let p = b.mData { memset(p, 0, Int(b.mDataByteSize)) }
+        let src = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
+            for buffer in ablPointer {
+                if let data = buffer.mData {
+                    memset(data, 0, Int(buffer.mDataByteSize))
+                }
             }
             return noErr
         }
