@@ -370,7 +370,7 @@ class WebhookManager: ObservableObject {
             
             if retryAttempt < config.retryCount {
                 let delay = pow(2.0, Double(retryAttempt)) * 1.0
-                try? await Task.sleep(nanoseconds: UInt64(Double(retryAttempt) * 2_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 await deliverWebhook(config: config, payload: payload, retryAttempt: retryAttempt + 1)
             }
         }

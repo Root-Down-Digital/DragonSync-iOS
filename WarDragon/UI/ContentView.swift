@@ -52,7 +52,7 @@ struct ContentView: View {
         }
     }
     
-    
+
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
@@ -190,15 +190,15 @@ struct ContentView: View {
                 Label("History", systemImage: "clock.arrow.circlepath")
             }
             .tag(4)
-            
-            //            NavigationStack {
-            //                SpectrumView(viewModel: spectrumViewModel)
-            //                    .navigationTitle("Spectrum")
-            //            }
-            //            .tabItem {
-            //                Label("Spectrum", systemImage: "waveform")
-            //            }
-            //            .tag(4)
+            // Spectrum not implemented this branch
+//            NavigationStack {
+//                SpectrumView(viewModel: spectrumViewModel)
+//                    .navigationTitle("Spectrum")
+//            }
+//            .tabItem {
+//                Label("Spectrum", systemImage: "waveform")
+//            }
+//            .tag(4)
         }
         
         .onChange(of: settings.isListening) {
@@ -210,10 +210,9 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { oldValue, newValue in
             if newValue != 3 { // Spectrum tab
-                //                spectrumViewModel.stopListening()
+                // Spectrum not implemented this branch
             } else if settings.isListening {
-                let port = UInt16(UserDefaults.standard.integer(forKey: "spectrumPort"))
-                //                spectrumViewModel.startListening(port: port)
+                // Spectrum not implemented this branch
             }
         }
         .onChange(of: settings.connectionMode) {
