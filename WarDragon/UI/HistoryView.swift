@@ -22,14 +22,12 @@ struct StoredEncountersView: View {
     }
     
     var sortedEncounters: [DroneEncounter] {
-        // Get unique drones by MAC, falling back to ID
         let uniqueEncounters = Dictionary(grouping: storage.encounters.values) { encounter in
             encounter.metadata["mac"] ?? encounter.id
         }.values.map { encounters in
             encounters.max { $0.lastSeen < $1.lastSeen }!
         }
         
-        // CAA ID handler
         let filtered = uniqueEncounters.filter { encounter in
             searchText.isEmpty ||
             encounter.id.localizedCaseInsensitiveContains(searchText) ||
@@ -47,56 +45,59 @@ struct StoredEncountersView: View {
     }
     
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(sortedEncounters) { encounter in
-                    NavigationLink(destination: EncounterDetailView(encounter: encounter)
-                                      .environmentObject(cotViewModel)) {
+        List {
+            ForEach(sortedEncounters) { encounter in
+                NavigationLink(destination: EncounterDetailView(encounter: encounter)
+                    .environmentObject(cotViewModel)) {
                         EncounterRow(encounter: encounter)
                     }
-                }
-                .onDelete { indexSet in
-                    for index in indexSet {
-                        storage.deleteEncounter(id: sortedEncounters[index].id)
-                    }
+            }
+            .onDelete { indexSet in
+                for index in indexSet {
+                    storage.deleteEncounter(id: sortedEncounters[index].id)
                 }
             }
-            .searchable(text: $searchText, prompt: "Search by ID or CAA Registration")
-            .navigationTitle("Encounter History")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Picker("Sort By", selection: $sortOrder) {
-                            Text("Last Seen").tag(SortOrder.lastSeen)
-                            Text("First Seen").tag(SortOrder.firstSeen)
-                            Text("Max Altitude").tag(SortOrder.maxAltitude)
-                            Text("Max Speed").tag(SortOrder.maxSpeed)
-                        }
-                        Button {
-                            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                               let window = windowScene.windows.first,
-                               let rootVC = window.rootViewController {
-                                storage.shareCSV(from: rootVC)
-                            }
-                        } label: {
-                            Label("Export CSV", systemImage: "square.and.arrow.up")
-                        }
-                        Button(role: .destructive) {
-                            showingDeleteConfirmation = true
-                        } label: {
-                            Label("Delete All", systemImage: "trash")
-                        }
+        }
+        .searchable(text: $searchText, prompt: "Search by ID or CAA Registration")
+        .navigationTitle("Encounter History")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let window = windowScene.windows.first,
+                       let rootVC = window.rootViewController {
+                        storage.shareCSV(from: rootVC)
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+            
+            ToolbarItem(placement: .navigationBarLeading) {
+                Menu {
+                    Picker("Sort By", selection: $sortOrder) {
+                        Text("Last Seen").tag(SortOrder.lastSeen)
+                        Text("First Seen").tag(SortOrder.firstSeen)
+                        Text("Max Altitude").tag(SortOrder.maxAltitude)
+                        Text("Max Speed").tag(SortOrder.maxSpeed)
+                    }
+                    
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Label("Delete All", systemImage: "trash")
                     }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
                 }
             }
-            .alert("Delete All Encounters", isPresented: $showingDeleteConfirmation) {
-                Button("Delete", role: .destructive) {
-                    storage.deleteAllEncounters()
-                }
-                Button("Cancel", role: .cancel) {}
+        }
+        .alert("Delete All Encounters", isPresented: $showingDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                storage.deleteAllEncounters()
             }
+            Button("Cancel", role: .cancel) {}
         }
     }
     
@@ -106,7 +107,6 @@ struct StoredEncountersView: View {
         var body: some View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    // Show custom/ID drone name
                     if !encounter.customName.isEmpty {
                         Text(encounter.customName)
                             .font(.appHeadline)
@@ -125,7 +125,7 @@ struct StoredEncountersView: View {
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
                     }
-
+                    
                     Spacer()
                     
                     Image(systemName: "airplane")
@@ -140,37 +140,67 @@ struct StoredEncountersView: View {
                         .font(.appCaption)
                 }
                 
-                HStack {
-                    Label("\(encounter.flightPath.count) points", systemImage: "map")
-                    Label(String(format: "%.0fm", encounter.maxAltitude), systemImage: "arrow.up")
-                    Label(String(format: "%.0fm/s", encounter.maxSpeed), systemImage: "speedometer")
+                HStack(spacing: 4) {
+                    VStack(spacing: 2) {
+                        Image(systemName: "map")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("\(encounter.flightPath.count)")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("points")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    VStack(spacing: 2) {
+                        Image(systemName: "arrow.up")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "%.0f", encounter.maxAltitude))
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("m")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    VStack(spacing: 2) {
+                        Image(systemName: "speedometer")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "%.0f", encounter.maxSpeed))
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("m/s")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
                     if encounter.averageRSSI != 0 {
-                        Label(String(format: "%.0fdB", encounter.averageRSSI),
-                              systemImage: "antenna.radiowaves.left.and.right")
+                        VStack(spacing: 2) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.appCaption)
+                                .foregroundStyle(.secondary)
+                            Text(String(format: "%.0f", encounter.averageRSSI))
+                                .font(.appCaption)
+                                .foregroundStyle(.secondary)
+                            Text("dB")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .font(.appCaption)
-                .foregroundStyle(.secondary)
                 
                 Text("Duration: \(formatDuration(encounter.totalFlightTime))")
                     .font(.appCaption)
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
-            
-//            if !encounter.macHistory.isEmpty && encounter.macHistory.count > 1 {
-//                VStack(alignment: .leading) {
-//                    Text("MAC RANDOMIZATION")
-//                        .font(.appHeadline)
-//                    ForEach(Array(encounter.macHistory).sorted(), id: \.self) { mac in
-//                        Text(mac)
-//                            .font(.appCaption)
-//                    }
-//                }
-//                .padding()
-//                .background(Color.yellow.opacity(0.1))
-//                .cornerRadius(12)
-//            }
         }
         
         private func formatDuration(_ time: TimeInterval) -> String {
