@@ -50,29 +50,23 @@ final class SilentAudioKeepAlive {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, options: [.mixWithOthers])
-            try session.setActive(true)
+            try session.setCategory(
+                .playback,
+                mode: .default,
+                options: [.mixWithOthers, .allowBluetooth, .duckOthers]
+            )
+            
+            try session.setPreferredSampleRate(44100)
+            try session.setPreferredIOBufferDuration(0.005)
+            try session.setActive(true, options: [])
+            
+            os_log("Audio session configured successfully", log: log, type: .info)
         } catch {
-            os_log("Session activate failed: %{public}@", log: log, type: .error,
-                   String(describing: error))
+            os_log("Session activate failed: %{public}@", log: log, type: .error, String(describing: error))
         }
     }
 
     private func configureEngine() {
-        // Define a proper audio format
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 44100,
-            channels: 1,
-            interleaved: false
-        )
-        
-        guard let audioFormat = format else {
-            os_log("Failed to create audio format", log: log, type: .error)
-            return
-        }
-        
-        // Create source node that generates silence
         let sourceNode = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in ablPointer {
@@ -83,22 +77,36 @@ final class SilentAudioKeepAlive {
             return noErr
         }
         
-        self.sourceNode = sourceNode
         engine.attach(sourceNode)
+        engine.connect(sourceNode, to: engine.mainMixerNode, format: nil)
         
-        // Connect with explicit format
-        engine.connect(sourceNode, to: engine.mainMixerNode, format: audioFormat)
+        os_log("Audio engine configured", log: log, type: .info)
     }
 
     private func startEngine() {
-        guard !engine.isRunning else { return }
+        guard !engine.isRunning else {
+            os_log("Engine already running", log: log, type: .debug)
+            return
+        }
+        
         do {
             try engine.start()
             os_log("Keep-alive engine running", log: log, type: .info)
         } catch {
-            os_log("Engine start failed: %{public}@", log: log, type: .error,
-                   String(describing: error))
+            os_log("Engine start failed: %{public}@", log: log, type: .error, String(describing: error))
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.reconfigureAndRestart()
+            }
         }
+    }
+    
+    private func reconfigureAndRestart() {
+        engine.stop()
+        engine.reset()
+        configureSession()
+        configureEngine()
+        startEngine()
     }
 
     private func registerObservers() {

@@ -9,10 +9,10 @@ import SwiftyZeroMQ5
 
 
 class ZMQHandler: ObservableObject {
-    //MARK: - ZMQ Connection
     @Published var messageFormat: MessageFormat = .bluetooth
     var isInBackgroundMode = false
     static let shared = ZMQHandler()
+    
     private var context: SwiftyZeroMQ.Context?
     private var telemetrySocket: SwiftyZeroMQ.Socket?
     private var statusSocket: SwiftyZeroMQ.Socket?
@@ -29,6 +29,8 @@ class ZMQHandler: ObservableObject {
     private var isSubscriptionActive = true
     private var connectionMonitorTimer: Timer?
     private let connectionCheckInterval: TimeInterval = 30
+    private var pollingLock = NSLock()
+    private var isPollingActive = false
     
     typealias MessageHandler = (String) -> Void
     
@@ -188,22 +190,49 @@ class ZMQHandler: ObservableObject {
     }
     
     private func checkConnectionStatus() {
-        guard isConnected else { return }
+        guard isConnected,
+              pollingLock.try() else {
+            return
+        }
+        
+        defer { pollingLock.unlock() }
+        
+        guard !isPollingActive,
+              let poller = self.poller,
+              telemetrySocket != nil,
+              statusSocket != nil else {
+            print("ZMQ: Invalid connection state during check")
+            DispatchQueue.main.async { [weak self] in
+                self?.reconnect()
+            }
+            return
+        }
         
         do {
-            if let items = try poller?.poll(timeout: 0.1) {
-                if items.isEmpty {
-                    print("ZMQ connection appears to be inactive")
-                    DispatchQueue.main.async { [weak self] in
-                        self?.reconnect()
-                    }
+            isPollingActive = true
+            let items = try poller.poll(timeout: 0.05)
+            isPollingActive = false
+            
+            if items.isEmpty {
+                print("ZMQ: Connection appears inactive")
+                DispatchQueue.main.async { [weak self] in
+                    self?.reconnect()
                 }
-                else {
-                    print("ZMQ connection appears active..")
+            } else {
+                print("ZMQ: Connection appears active")
+            }
+        } catch let error as SwiftyZeroMQ.ZeroMQError {
+            isPollingActive = false
+            if error.description != "Resource temporarily unavailable" &&
+               error.description != "Operation would block" {
+                print("ZMQ: Connection check failed: \(error)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.reconnect()
                 }
             }
         } catch {
-            print("ZMQ connection check failed: \(error)")
+            isPollingActive = false
+            print("ZMQ: Connection check failed: \(error)")
             DispatchQueue.main.async { [weak self] in
                 self?.reconnect()
             }
@@ -239,29 +268,44 @@ class ZMQHandler: ObservableObject {
             
             while self.shouldContinueRunning {
                 autoreleasepool {
+                    guard self.pollingLock.try() else {
+                        Thread.sleep(forTimeInterval: 0.01)
+                        return
+                    }
+                    
+                    defer { self.pollingLock.unlock() }
+                    
+                    guard let poller = self.poller,
+                          self.telemetrySocket != nil,
+                          self.statusSocket != nil else {
+                        Thread.sleep(forTimeInterval: 0.1)
+                        return
+                    }
+                    
                     do {
                         let pollTimeout: Double = self.isInBackgroundMode ? 2.0 : 0.1
+                        self.isPollingActive = true
+                        let items = try poller.poll(timeout: pollTimeout)
+                        self.isPollingActive = false
                         
-                        if let items = try self.poller?.poll(timeout: pollTimeout) {
-                            for (socket, events) in items {
-                                if events.contains(.pollIn) {
-                                    if let data = try socket.recv(bufferLength: 32768),
-                                       let jsonString = String(data: data, encoding: .utf8) {
-                                        
-                                        self.lastMessageTime = Date()
-                                        self.isSubscriptionActive = true
-                                        
-                                        if socket === self.telemetrySocket {
-                                            if let xmlMessage = self.convertTelemetryToXML(jsonString) {
-                                                DispatchQueue.main.async {
-                                                    onTelemetry(xmlMessage)
-                                                }
+                        for (socket, events) in items {
+                            if events.contains(.pollIn) {
+                                if let data = try socket.recv(bufferLength: 32768),
+                                   let jsonString = String(data: data, encoding: .utf8) {
+                                    
+                                    self.lastMessageTime = Date()
+                                    self.isSubscriptionActive = true
+                                    
+                                    if socket === self.telemetrySocket {
+                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
+                                            DispatchQueue.main.async {
+                                                onTelemetry(xmlMessage)
                                             }
-                                        } else if socket === self.statusSocket {
-                                            if let xmlMessage = self.convertStatusToXML(jsonString) {
-                                                DispatchQueue.main.async {
-                                                    onStatus(xmlMessage)
-                                                }
+                                        }
+                                    } else if socket === self.statusSocket {
+                                        if let xmlMessage = self.convertStatusToXML(jsonString) {
+                                            DispatchQueue.main.async {
+                                                onStatus(xmlMessage)
                                             }
                                         }
                                     }
@@ -274,6 +318,7 @@ class ZMQHandler: ObservableObject {
                         }
                         
                     } catch let error as SwiftyZeroMQ.ZeroMQError {
+                        self.isPollingActive = false
                         if error.description != "Resource temporarily unavailable" &&
                            error.description != "Operation would block" &&
                            self.shouldContinueRunning {
@@ -287,12 +332,15 @@ class ZMQHandler: ObservableObject {
                             }
                         }
                     } catch {
+                        self.isPollingActive = false
                         if self.shouldContinueRunning {
                             print("ZMQ Polling Error: \(error)")
                         }
                     }
                 }
             }
+            
+            print("ZMQ: Polling stopped")
         }
     }
     
@@ -766,23 +814,36 @@ class ZMQHandler: ObservableObject {
         print("ZMQ: Disconnecting...")
         shouldContinueRunning = false
         
+        pollingLock.lock()
+        isPollingActive = false
+        pollingLock.unlock()
+        
         connectionMonitorTimer?.invalidate()
         connectionMonitorTimer = nil
         
-        Thread.sleep(forTimeInterval: 0.1)
-        
-        do {
-            try telemetrySocket?.close()
-            try statusSocket?.close()
-            try context?.terminate()
-        } catch {
-            print("ZMQ Cleanup Error: \(error)")
+        if let queue = pollingQueue {
+            queue.sync {
+                do {
+                    try telemetrySocket?.close()
+                    try statusSocket?.close()
+                    try context?.terminate()
+                } catch {
+                    print("ZMQ Cleanup Error: \(error)")
+                }
+                
+                telemetrySocket = nil
+                statusSocket = nil
+                poller = nil
+                context = nil
+            }
+        } else {
+            telemetrySocket = nil
+            statusSocket = nil
+            poller = nil
+            context = nil
         }
         
-        telemetrySocket = nil
-        statusSocket = nil
-        context = nil
-        poller = nil
+        pollingQueue = nil
         isConnected = false
         isSubscriptionActive = false
         print("ZMQ: Disconnected")
@@ -826,7 +887,18 @@ extension ZMQHandler {
         guard !isConnected,
               !lastHost.isEmpty,
               lastTelemetryPort > 0,
-              lastStatusPort > 0 else { return }
+              lastStatusPort > 0 else {
+            return
+        }
+
+        pollingLock.lock()
+        let isCurrentlyPolling = isPollingActive
+        pollingLock.unlock()
+        
+        guard !isCurrentlyPolling else {
+            print("ZMQ: Cannot connect while polling is active")
+            return
+        }
 
         connect(host: lastHost,
                 zmqTelemetryPort: lastTelemetryPort,
@@ -837,26 +909,55 @@ extension ZMQHandler {
 
     @discardableResult
     func drainOnce() -> Bool {
-        guard isConnected else { return false }
-        var drained = false
-
-        if let socket = telemetrySocket,
-           let payload = try? socket.recv(bufferLength: 32768),
-           !payload.isEmpty,
-           let text = String(data: payload, encoding: .utf8) {
-            lastTelemetryHandler(text)
-            drained = true
+        guard isConnected,
+              pollingLock.try() else {
+            return false
         }
         
-        if let socket = statusSocket,
-           let payload = try? socket.recv(bufferLength: 32768),
-           !payload.isEmpty,
-           let text = String(data: payload, encoding: .utf8) {
-            lastStatusHandler(text)
-            drained = true
+        defer { pollingLock.unlock() }
+        
+        guard !isPollingActive,
+              let telemetrySocket = self.telemetrySocket,
+              let statusSocket = self.statusSocket else {
+            return false
+        }
+        
+        var drained = false
+
+        do {
+            if let payload = try telemetrySocket.recv(bufferLength: 32768),
+               !payload.isEmpty,
+               let text = String(data: payload, encoding: .utf8) {
+                lastTelemetryHandler(text)
+                drained = true
+            }
+        } catch let error as SwiftyZeroMQ.ZeroMQError {
+            if error.description != "Resource temporarily unavailable" &&
+               error.description != "Operation would block" {
+                print("ZMQ telemetry drain error: \(error)")
+            }
+        } catch {
+            print("ZMQ telemetry drain error: \(error)")
+        }
+        
+        do {
+            if let payload = try statusSocket.recv(bufferLength: 32768),
+               !payload.isEmpty,
+               let text = String(data: payload, encoding: .utf8) {
+                lastStatusHandler(text)
+                drained = true
+            }
+        } catch let error as SwiftyZeroMQ.ZeroMQError {
+            if error.description != "Resource temporarily unavailable" &&
+               error.description != "Operation would block" {
+                print("ZMQ status drain error: \(error)")
+            }
+        } catch {
+            print("ZMQ status drain error: \(error)")
         }
         
         return drained
     }
+
 }
 

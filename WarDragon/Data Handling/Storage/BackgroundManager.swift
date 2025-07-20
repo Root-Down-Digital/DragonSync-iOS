@@ -51,31 +51,27 @@ final class BackgroundManager {
 
         if useBackgroundTask {
             beginDrainTask()
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
                 guard let self else { return }
-                self.checkAndRefreshBackgroundTask()
+                if UIApplication.shared.backgroundTimeRemaining < 10 {
+                    self.endDrainTask()
+                    self.beginDrainTask()
+                }
             }
         }
 
         queue.async { [weak self] in
             guard let self else { return }
-            
-            // Only connect multicast if using multicast mode
-            if Settings.shared.connectionMode == .multicast {
-                MulticastDrain.connect(&self.group, lock: self.groupLock)
-            }
-            
-            // Only connect ZMQ if using ZMQ mode
-            if Settings.shared.connectionMode == .zmq {
-                ZMQHandler.shared.connectIfNeeded()
-            }
+            MulticastDrain.connect(&self.group, lock: self.groupLock)
+            ZMQHandler.shared.connectIfNeeded()
 
             while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
-                // Only drain ZMQ if using ZMQ mode
-                if Settings.shared.connectionMode == .zmq {
-                    _ = ZMQHandler.shared.drainOnce()
+                autoreleasepool {
+                    if ZMQHandler.shared.isConnected {
+                        ZMQHandler.shared.drainOnce()
+                    }
+                    Thread.sleep(forTimeInterval: 0.05)
                 }
-                Thread.sleep(forTimeInterval: 0.05)
             }
 
             self.stopBackgroundProcessing()
