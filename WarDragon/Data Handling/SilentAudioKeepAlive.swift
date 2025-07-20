@@ -45,8 +45,6 @@ final class SilentAudioKeepAlive {
         }
     }
 
-    // MARK: - helpers
-
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
@@ -56,8 +54,8 @@ final class SilentAudioKeepAlive {
                 options: [.mixWithOthers, .allowBluetooth, .duckOthers]
             )
             
-            try session.setPreferredSampleRate(44100)
-            try session.setPreferredIOBufferDuration(0.005)
+            try session.setPreferredSampleRate(8000)
+            try session.setPreferredIOBufferDuration(0.1)
             try session.setActive(true, options: [])
             
             os_log("Audio session configured successfully", log: log, type: .info)
@@ -67,6 +65,8 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureEngine() {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1)
+        
         let sourceNode = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in ablPointer {
@@ -77,8 +77,9 @@ final class SilentAudioKeepAlive {
             return noErr
         }
         
+        self.sourceNode = sourceNode
         engine.attach(sourceNode)
-        engine.connect(sourceNode, to: engine.mainMixerNode, format: nil)
+        engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
         
         os_log("Audio engine configured", log: log, type: .info)
     }
@@ -95,7 +96,7 @@ final class SilentAudioKeepAlive {
         } catch {
             os_log("Engine start failed: %{public}@", log: log, type: .error, String(describing: error))
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.reconfigureAndRestart()
             }
         }
@@ -130,7 +131,9 @@ final class SilentAudioKeepAlive {
     
     private func handleConfigurationChange() {
         os_log("Audio configuration changed, restarting engine", log: log, type: .info)
-        startEngine()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.startEngine()
+        }
     }
     
     private func handleInterruption(_ notification: Notification) {
@@ -148,7 +151,9 @@ final class SilentAudioKeepAlive {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                 if options.contains(.shouldResume) {
                     os_log("Audio interruption ended, resuming", log: log, type: .info)
-                    startEngine()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.startEngine()
+                    }
                 }
             }
         @unknown default:
@@ -158,8 +163,10 @@ final class SilentAudioKeepAlive {
     
     private func handleMediaServicesReset() {
         os_log("Media services reset, reconfiguring audio", log: log, type: .info)
-        configureSession()
-        configureEngine()
-        startEngine()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.configureSession()
+            self?.configureEngine()
+            self?.startEngine()
+        }
     }
 }

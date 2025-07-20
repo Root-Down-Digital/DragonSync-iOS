@@ -23,7 +23,7 @@ final class BackgroundManager {
     private let monitor = NWPathMonitor()
     private var hasConnection = true
     private var taskStartTime: Date?
-    private let maxTaskDuration: TimeInterval = 25
+    private let maxTaskDuration: TimeInterval = 20
     
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -51,24 +51,30 @@ final class BackgroundManager {
 
         if useBackgroundTask {
             beginDrainTask()
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                if UIApplication.shared.backgroundTimeRemaining < 10 {
-                    self.endDrainTask()
-                    self.beginDrainTask()
-                }
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                self?.checkAndRefreshBackgroundTask()
             }
         }
 
         queue.async { [weak self] in
             guard let self else { return }
-            MulticastDrain.connect(&self.group, lock: self.groupLock)
-            ZMQHandler.shared.connectIfNeeded()
+            
+            switch Settings.shared.connectionMode {
+            case .multicast:
+                MulticastDrain.connect(&self.group, lock: self.groupLock)
+            case .zmq:
+                ZMQHandler.shared.connectIfNeeded()
+            }
 
             while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
                 autoreleasepool {
-                    if ZMQHandler.shared.isConnected {
-                        ZMQHandler.shared.drainOnce()
+                    switch Settings.shared.connectionMode {
+                    case .multicast:
+                        break
+                    case .zmq:
+                        if ZMQHandler.shared.isConnected {
+                            ZMQHandler.shared.drainOnce()
+                        }
                     }
                     Thread.sleep(forTimeInterval: 0.05)
                 }
@@ -85,26 +91,24 @@ final class BackgroundManager {
         groupLock.unlock()
         guard wasRunning else { return }
 
-        // Only disconnect ZMQ if it was being used
-        if Settings.shared.connectionMode == .zmq {
+        switch Settings.shared.connectionMode {
+        case .zmq:
             ZMQHandler.shared.disconnect()
-        }
-        
-        // Only disconnect multicast if it was being used
-        if Settings.shared.connectionMode == .multicast {
+        case .multicast:
             MulticastDrain.disconnect(&group, lock: groupLock)
         }
 
         bgRefreshTimer?.invalidate()
         bgRefreshTimer = nil
         endDrainTask()
+        SilentAudioKeepAlive.shared.stop()
     }
 
     private func isRunningAndBackgroundOK(useBackgroundTask: Bool) -> Bool {
         groupLock.lock()
         let run = running
         groupLock.unlock()
-        return run && (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 1 : true)
+        return run && (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 5 : true)
     }
 
     private func checkAndRefreshBackgroundTask() {
@@ -114,7 +118,7 @@ final class BackgroundManager {
         let timeRemaining = UIApplication.shared.backgroundTimeRemaining
         
         if let startTime = taskStartTime,
-           currentTime.timeIntervalSince(startTime) >= maxTaskDuration || timeRemaining < 10 {
+           currentTime.timeIntervalSince(startTime) >= maxTaskDuration || timeRemaining < 15 {
             endDrainTask()
             beginDrainTask()
         }
@@ -125,7 +129,13 @@ final class BackgroundManager {
         
         taskStartTime = Date()
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
+            NotificationCenter.default.post(name: NSNotification.Name("BackgroundTaskExpiring"), object: nil)
             self?.endDrainTask()
+        }
+        
+        guard bgTaskID != .invalid else {
+            print("Failed to begin background task")
+            return
         }
     }
 
