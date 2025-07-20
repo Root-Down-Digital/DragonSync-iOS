@@ -202,7 +202,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Message Processing Interval")
                         Spacer()
-                        Stepper(value: $settings.messageProcessingInterval, in: 300...5000, step: 50) {
+                        Stepper(value: $settings.messageProcessingInterval, in: 100...3000, step: 50) {
                             Text("\(settings.messageProcessingInterval) ms")
                                 .font(.appCaption)
                                 .bold()
