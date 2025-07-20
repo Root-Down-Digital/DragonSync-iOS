@@ -8,30 +8,26 @@
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="80%" alt="DragonSync Logo">
 </div>
 <br>
+
 <div align="center">
   Real-time drone detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Enjoy professional-grade detection with advanced signal analysis and tracking. 
 </div>
 <br>
-<div align="center">
-  
- 
- 
-</div>
 
-**App**
+
+### App
 - [Features](#features)
 - [Detection & Tracking](#detection--tracking)
 - [History & Analysis](#history--analysis)
-- [App Settings Config](#app-settings)
  - [Build Instructions](#build-instructions)
 
-**Backend Data**
+### Supplying Backend Data
 - [Hardware Requirements](#hardware-requirements)
  - [Software Setup](#software-requirements)
  - [Connection Choices](#connection-choices)
  - [Command Reference](#backend-data-guide)
 
-**About**
+### About
 - [Credits, Disclaimer & License](#credits-disclaimer--license)
 - [Contributing & Contact](#contributing--contact)
 - [Notes](#notes)
@@ -41,11 +37,15 @@
 ## Features
 
 ### Real-Time Monitoring
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="55%" />
+</div>
+
 - Live tracking of Remote/Drone ID–compliant drones
 - Decodes Ocusync and others
 - Instant flight path visualization and telemetry
 - Multi-protocol (ZMQ & multicast)
-- Source identification 
+- Source identification
 
 ### Spoof Detection
 - Advanced analysis: signal strength, position consistency, transmission patterns, and flight physics
@@ -53,34 +53,29 @@
 ### Visualize Encrypted Drones
 - No GPS, no problem. Using the RSSI lets us estimate distance to target.
 
-<div align="center">
- <img src="https://github.com/user-attachments/assets/528c818a-9913-4d05-b9fa-eb38c937f356" width="60%" alt="Drone Encounter Screenshot">
-</div>
-
 ### MAC Randomization Detection
 - Real-time alerts for MAC changes with historical tracking and origin ID association
-
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/a6c0698f-944d-4a41-b38c-fca75778a5e8" width="60%" alt="MAC Randomization Detection Screenshot">
-</div>
 
 ### Multi-Source Signal Analysis
 - Identifies WiFi, BT, and SDR signals with source MAC tracking and signal strength monitoring
 
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/4477787a-8877-4421-88b8-ffd7ec38e26b" width="70%" alt="Signal Analysis Interface">
-</div>
-
 ### System Monitoring
 - Real-time performance metrics: memory, CPU load, temperature, GPS & ANTSDR status
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="50%" />
+</div>
 
 ## Detection & Tracking
 
 - Swipe-to-delete & untrack
 - Label encounters with aliases and trust status
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="50%" />
+</div>
 
 > [!TIP]
->  Tap the "Live" map button for all drones with full-screen tracking. Select an active drone for details.
+>  Find the live map view and other tools in the upper right menu icon of any drone message
 
 
 ### Dashboard Display
@@ -92,55 +87,114 @@
 - Logs each drone encounter automatically with options to search, sort, review, export, or delete records.
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="60%" alt="Encounter History View">
+  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="50%" alt="Encounter History View">
 </div>
 
 ### FAA Database Analysis
-
-![image](https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3)
-
-
-## App Settings
-
-### Settings & Warning Dials
-- Customize warning thresholds, proximity alerts, and display preferences.
-- Set limits for CPU usage, temperature (including PLUTO and ZYNQ), memory, and RSSI.
-
+<div align="center">
+<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="50%" alt="Encounter History View">
+</div>
 
 ---
 
-## Hardware Requirements
+# Installation
 
-### Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)
+## 1. Pick a Stack 
 
-### Option 2: DIY Setup
+#### Hardware Requirements
 
-Configuration A. WiFi & BT Adapters
-   - ESP32 with WiFi RID Firmware, or a a WiFi adapter using DroneID `wifi_sniffer` below
-   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW.
+**Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)**
+- Works out of the box, put its IP into the connection settings and go.
 
-Configuration B. Single Xiao ESP32S3
-   - Flash it with this [firmware](https://github.com/lukeswitz/T-Halow/blob/master/firmware/xiao_s3dualcoreRIDfirmware.bin)
-   - Change port name and firmware filepath: 
-     ```esptool.py --chip esp32s3 --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB 0x10000 firmwareFile.bin```
+**Option 2: DIY**
+- Uses your own stack to provide the app data
 
-   - Swap in updated zmq decoder that handles both types over UART [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py)
+  **Configuration A: WiFi & BT Adapters**
+   - ESP32 with WiFi RID Firmware (see below), **or a a WiFi adapter using DroneID**
+   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW **or the dualcore fw**
+   - GPS module for status & proximity estimates
+   - (Optional) ANTSDR E200 - for decoding Ocusync and others
+
+  **Configuration B:**
+  - ESP32S3/C3
+  - GPS module for status & proximity estimates
+
+## 2. Install Software & Flash Firmware
   
-- (Optional) ANTSDR E200 & DJI FW
+  - ### Auto Installation
+    
+    _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32. FOR MAC & LINUX ONLY, windows see [manual setup](#python-tools-setup-instructions):**_
+    
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f5749589a00526b8b1d99cd15b7a5d4dd6decb84f5863df78c4fa476322447e5 ]] && chmod +x setup.sh && ./setup.sh
+    ```
+    
+    > **Choose skip flashing when prompted if using your own wireless adapters instead of esp32**
+    
+  ---
+  
+  - ### Manual Installation
+  
+    **0. Go to [software requirements](#software-requirements) and complete all steps**
+    
+    **1. Choose Firmware:**
+    
+    - [Official WarDragon WiFi RID ESP32 FW for T-Halow Dongle](https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin) - Recommended
+    - [Dualcore BT/WiFI for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin)*
+    - [WiFI Only for xiao esp32s3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin)
+    - [WiFI Only for xiao esp32c3](https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin)
+    
+    **2. Flash**
+    
+    ```python
+    esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
+    ```    
+    - (Change port name and firmware name/filepath)
+
+## 3. Start Detection
+
+*Swap in this zmq decoder to handle both types over UART RID [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using the dual RID fw.
+  
+- Optional: Persist detection using [service files](https://github.com/alphafox02/DragonSync/tree/main/services) made by @alphafox02.
+- Mod the commands to suite and copy to an OS service dir (`/etc/systemd/system` for example).
+
+**Start Detecting WiFi RID using esp32** _(the setup.sh creates use commands for all hardware cases, this is an example workflow)_
+
+```python
+# Run the decoder
+cd DroneID
+python3 zmq_decoder.py -z --uart /dev/youresp32port --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222
+
+# In a new tab, run the system monitor (not a requirement)
+cd Dragonsync
+python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
+
+```
+
+## 4. Start App 
+  - Set app ZMQ IP to your host and enable in settings.
+  - The app will continue monitoring in the backround.
 
 ---
 
 ## Software Requirements
 
-This section covers setting up the backend Python environment on Linux, macOS, and Windows.
+This section covers manually setting up the backend Python environment on Linux, macOS, and Windows.
 
 **Required**
-- [Sniffle](https://github.com/nccgroup/Sniffle)
-- [DroneID](https://github.com/alphafox02/DroneID)
 
-**Optional**
-- [DJI Firmware - E200](https://github.com/alphafox02/antsdr_dji_droneid), [WiFi Remote ID Firmware](https://github.com/alphafox02/T-Halow/tree/wifi_rid/examples/DragonOS_RID_Scanner), [DragonSync Python](https://github.com/alphafox02/DragonSync)
+`WiFi`
+- [DroneID](https://github.com/alphafox02/DroneID) for decoding RID packets
 
+`Bluetooth`
+- [Sniffle](https://github.com/nccgroup/Sniffle) flashed on BT RID hardware (Sonoff, Catsniffer)
+
+`Status`
+- [DragonSync Python](https://github.com/alphafox02/DragonSync) for system stats, TAK integration and more
+
+
+`Optional`
+- [DJI Firmware - E200](https://github.com/alphafox02/antsdr_dji_droneid) for SDR
 
 ### Python Tools Setup Instructions
 
@@ -172,6 +226,7 @@ This section covers setting up the backend Python environment on Linux, macOS, a
        ./setup.sh
 
 #### Windows (Using WSL or Native)
+
 - **WSL (Recommended):**  
   Install WSL (`wsl --install`) and follow the Linux instructions.
 - **Native Setup:**  
@@ -192,7 +247,7 @@ This section covers setting up the backend Python environment on Linux, macOS, a
 
 ## Connection Choices
 
-### ZMQ Server (JSON) – Recommended
+### ZMQ Server – Recommended
 
 The ZMQ Server option provides direct JSON-based communication with full data access. Ideal for detailed monitoring and SDR decoding.
 
