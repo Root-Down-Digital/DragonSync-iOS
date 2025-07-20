@@ -26,7 +26,7 @@ struct FAALookupButton: View {
                         if let data = await faaService.queryFAAData(mac: mac, remoteId: remoteId) {
                             faaData = data
                             showingFAAInfo = true
-                        } else if let error = faaService.error {
+                        } else if faaService.error != nil {
                             showingError = true
                         }
                         isLoading = false

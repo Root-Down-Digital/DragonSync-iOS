@@ -60,7 +60,7 @@ enum WebhookEvent: String, CaseIterable, Codable {
 }
 
 struct WebhookConfiguration: Codable, Identifiable {
-    let id = UUID()
+    var id: UUID
     var name: String
     var type: WebhookType
     var url: String
@@ -71,13 +71,14 @@ struct WebhookConfiguration: Codable, Identifiable {
     var timeoutSeconds: Double
     
     // Type-specific configurations
-    var iftttEventName: String? // For IFTTT
-    var matrixRoomId: String? // For Matrix
-    var matrixAccessToken: String? // For Matrix
-    var discordUsername: String? // For Discord
-    var discordAvatarURL: String? // For Discord
+    var iftttEventName: String?
+    var matrixRoomId: String?
+    var matrixAccessToken: String?
+    var discordUsername: String?
+    var discordAvatarURL: String?
     
     init(name: String, type: WebhookType, url: String) {
+        self.id = UUID()
         self.name = name
         self.type = type
         self.url = url
@@ -331,15 +332,15 @@ class WebhookManager: ObservableObject {
     private func deliverWebhook(config: WebhookConfiguration, payload: WebhookPayload, retryAttempt: Int = 0) async {
         do {
             let request = try buildRequest(config: config, payload: payload)
-            let (data, response) = try await session.data(for: request)
+            let (_, response) = try await session.data(for: request)
             
             let httpResponse = response as? HTTPURLResponse
             let statusCode = httpResponse?.statusCode ?? 0
             
             let success = statusCode >= 200 && statusCode < 300
             
-            DispatchQueue.main.async {
-                self.recordDelivery(
+            await MainActor.run {
+                recordDelivery(
                     webhookName: config.name,
                     event: payload.event,
                     success: success,
@@ -350,15 +351,14 @@ class WebhookManager: ObservableObject {
             }
             
             if !success && retryAttempt < config.retryCount {
-                // Exponential backoff
                 let delay = pow(2.0, Double(retryAttempt)) * 1.0
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 await deliverWebhook(config: config, payload: payload, retryAttempt: retryAttempt + 1)
             }
             
         } catch {
-            DispatchQueue.main.async {
-                self.recordDelivery(
+            await MainActor.run {
+                recordDelivery(
                     webhookName: config.name,
                     event: payload.event,
                     success: false,
@@ -370,7 +370,7 @@ class WebhookManager: ObservableObject {
             
             if retryAttempt < config.retryCount {
                 let delay = pow(2.0, Double(retryAttempt)) * 1.0
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(Double(retryAttempt) * 2_000_000_000))
                 await deliverWebhook(config: config, payload: payload, retryAttempt: retryAttempt + 1)
             }
         }
@@ -473,17 +473,18 @@ extension WebhookManager {
     ) {
         let delivery = WebhookDelivery(
             webhookName: config.name,
-            event: .systemAlert,          // use a generic event for test
+            event: .systemAlert,
             timestamp: Date(),
             success: success,
             responseCode: responseCode,
             error: error,
             retryAttempt: 0
         )
-        DispatchQueue.main.async {
-            self.recentDeliveries.insert(delivery, at: 0)
-            if self.recentDeliveries.count > 100 {
-                self.recentDeliveries.removeLast(self.recentDeliveries.count - 100)
+        
+        Task { @MainActor in
+            recentDeliveries.insert(delivery, at: 0)
+            if recentDeliveries.count > 100 {
+                recentDeliveries.removeLast(recentDeliveries.count - 100)
             }
         }
     }

@@ -73,7 +73,7 @@ class FAAService: ObservableObject {
     
     func queryFAAData(mac: String, remoteId: String) async -> [String: Any]? {
         guard !remoteId.isEmpty else {
-            DispatchQueue.main.async {
+            await MainActor.run {
                 self.error = "Remote ID is empty"
             }
             return nil
@@ -85,7 +85,7 @@ class FAAService: ObservableObject {
             return cachedData
         }
         
-        DispatchQueue.main.async {
+        await MainActor.run {
             self.isFetching = true
             self.error = nil
         }
@@ -145,7 +145,7 @@ class FAAService: ObservableObject {
                         // Success
                         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                             cacheResult(mac: mac, remoteId: remoteId, data: json)
-                            DispatchQueue.main.async {
+                            await MainActor.run {
                                 self.isFetching = false
                             }
                             return json
@@ -165,7 +165,7 @@ class FAAService: ObservableObject {
                     try? await Task.sleep(nanoseconds: UInt64(Double(retryCount) * 2_000_000_000))
                     continue
                 } else {
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.isFetching = false
                         self.error = error.localizedDescription
                     }
@@ -174,7 +174,7 @@ class FAAService: ObservableObject {
             }
         }
         
-        DispatchQueue.main.async {
+        await MainActor.run {
             self.isFetching = false
         }
         
