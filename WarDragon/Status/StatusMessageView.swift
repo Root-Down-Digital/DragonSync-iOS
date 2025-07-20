@@ -798,21 +798,24 @@ struct MemoryBarView: View {
 
 struct MapDetailView: View {
     let coordinate: CLLocationCoordinate2D
-    @State private var region: MKCoordinateRegion
+    @State private var mapCameraPosition: MapCameraPosition
     @Environment(\.dismiss) private var dismiss
     
     init(coordinate: CLLocationCoordinate2D) {
         self.coordinate = coordinate
-        self._region = State(initialValue: MKCoordinateRegion(
-            center: coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        self._mapCameraPosition = State(initialValue: .region(
+            MKCoordinateRegion(
+                center: coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            )
         ))
     }
     
     var body: some View {
         NavigationView {
-            Map(coordinateRegion: $region, annotationItems: [MapPoint(coordinate: coordinate)]) { point in
-                MapPin(coordinate: point.coordinate, tint: .red)
+            Map(position: $mapCameraPosition) {
+                Marker("System Location", coordinate: coordinate)
+                    .tint(.red)
             }
             .navigationTitle("System Location")
             .navigationBarTitleDisplayMode(.inline)
