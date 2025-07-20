@@ -155,7 +155,8 @@ extension DroneEncounter {
         "ID,CAA Registration,Primary MAC,Flight Path Points," +
         "Max Altitude (m),Max Speed (m/s),Average RSSI (dBm)," +
         "Flight Duration (HH:MM:SS),Height (m),Manufacturer," +
-        "MAC Count,MAC History"
+        "MAC Count,MAC History,Pilot Latitude,Pilot Longitude," +
+        "Takeoff Latitude,Takeoff Longitude"
     }
     
     func toCSVRow() -> String {
@@ -186,30 +187,56 @@ extension DroneEncounter {
         // Identifiers
         row.append(id)
         row.append(metadata["caaRegistration"] ?? "")
-        row.append(macHistory.isEmpty ? "" : macHistory.first ?? "")  // Primary MAC
-        row.append(String(flightPath.count))  // Flight Path Points
+        row.append(macHistory.isEmpty ? "" : macHistory.first ?? "")
         
-        // Flight stats
-        row.append(String(format: "%.1f", maxAltitude))
+        // Flight path stats
+        row.append("\(flightPath.count)")
+        
+        // Flight metrics
+        let maxAlt = flightPath.isEmpty ? 0 : flightPath.map { $0.altitude }.max() ?? 0
+        row.append(String(format: "%.1f", maxAlt))
+        
+        let maxSpeed = signatures.isEmpty ? 0 : signatures.map { $0.speed }.max() ?? 0
         row.append(String(format: "%.1f", maxSpeed))
-        row.append(String(format: "%.1f", averageRSSI))
         
-        // Format flight duration as HH:MM:SS
-        let duration = Int(totalFlightTime)
-        let hours = duration / 3600
-        let minutes = (duration % 3600) / 60
-        let seconds = duration % 60
+        let avgRssi = signatures.isEmpty ? 0 : signatures.map { $0.rssi }.reduce(0, +) / Double(signatures.count)
+        row.append(String(format: "%.1f", avgRssi))
+        
+        // Flight duration
+        let duration = lastSeen.timeIntervalSince(firstSeen)
+        let hours = Int(duration) / 3600
+        let minutes = Int(duration) % 3600 / 60
+        let seconds = Int(duration) % 60
         row.append(String(format: "%02d:%02d:%02d", hours, minutes, seconds))
         
         // Height and manufacturer
-        row.append(String(format: "%.1f", signatures.last?.height ?? 0.0))
+        let avgHeight = signatures.isEmpty ? 0 : signatures.map { $0.height }.reduce(0, +) / Double(signatures.count)
+        row.append(String(format: "%.1f", avgHeight))
         row.append(metadata["manufacturer"] ?? "")
         
-        // MAC Count and MAC History
-        row.append(String(macHistory.count))
+        // MAC info
+        row.append("\(macHistory.count)")
         row.append(macHistory.joined(separator: ";"))
         
-        return row.joined(separator: ",")
+        // Pilot location
+        if let pilotLat = metadata["pilotLat"], let pilotLon = metadata["pilotLon"] {
+            row.append(pilotLat)
+            row.append(pilotLon)
+        } else {
+            row.append("")
+            row.append("")
+        }
+        
+        // Takeoff location (using homeLat/homeLon)
+        if let takeoffLat = metadata["homeLat"], let takeoffLon = metadata["homeLon"] {
+            row.append(takeoffLat)
+            row.append(takeoffLon)
+        } else {
+            row.append("")
+            row.append("")
+        }
+        
+        return row.map { "\"\($0)\"" }.joined(separator: ",")
     }
 }
 

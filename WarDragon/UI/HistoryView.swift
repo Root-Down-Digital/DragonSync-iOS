@@ -713,7 +713,7 @@ private func formatDuration(_ time: TimeInterval) -> String {
 
 extension StoredEncountersView.EncounterDetailView {
     private func generateKML(for encounter: DroneEncounter) -> String {
-        let kml = """
+        var kmlContent = """
         <?xml version="1.0" encoding="UTF-8"?>
         <kml xmlns="http://www.opengis.net/kml/2.2">
           <Document>
@@ -724,6 +724,24 @@ extension StoredEncountersView.EncounterDetailView {
                 <width>4</width>
               </LineStyle>
             </Style>
+            <Style id="pilotLocation">
+              <IconStyle>
+                <color>ff00aaff</color>
+                <scale>1.0</scale>
+                <Icon>
+                  <href>http://maps.google.com/mapfiles/kml/shapes/man.png</href>
+                </Icon>
+              </IconStyle>
+            </Style>
+            <Style id="takeoffLocation">
+              <IconStyle>
+                <color>ff00ff00</color>
+                <scale>1.0</scale>
+                <Icon>
+                  <href>http://maps.google.com/mapfiles/kml/shapes/airports.png</href>
+                </Icon>
+              </IconStyle>
+            </Style>
             <Placemark>
               <name>\(encounter.id) Track</name>
               <styleUrl>#flightPath</styleUrl>
@@ -732,14 +750,54 @@ extension StoredEncountersView.EncounterDetailView {
                 <coordinates>
                     \(encounter.flightPath.map { point in
                         "\(point.longitude),\(point.latitude),\(point.altitude)"
-                    }.joined(separator: "\n                    "))
+                    }.joined(separator: "\n                "))
                 </coordinates>
               </LineString>
             </Placemark>
+        """
+        
+        // Add pilot location if available
+        if let pilotLatStr = encounter.metadata["pilotLat"],
+           let pilotLonStr = encounter.metadata["pilotLon"],
+           let pilotLat = Double(pilotLatStr),
+           let pilotLon = Double(pilotLonStr),
+           pilotLat != 0 || pilotLon != 0 {
+            kmlContent += """
+            
+            <Placemark>
+              <name>Pilot Location</name>
+              <styleUrl>#pilotLocation</styleUrl>
+              <Point>
+                <coordinates>\(pilotLon),\(pilotLat),0</coordinates>
+              </Point>
+            </Placemark>
+            """
+        }
+        
+        // Add takeoff location if available
+        if let takeoffLatStr = encounter.metadata["homeLat"],
+           let takeoffLonStr = encounter.metadata["homeLon"],
+           let takeoffLat = Double(takeoffLatStr),
+           let takeoffLon = Double(takeoffLonStr),
+           takeoffLat != 0 || takeoffLon != 0 {
+            kmlContent += """
+            
+            <Placemark>
+              <name>Takeoff Location</name>
+              <styleUrl>#takeoffLocation</styleUrl>
+              <Point>
+                <coordinates>\(takeoffLon),\(takeoffLat),0</coordinates>
+              </Point>
+            </Placemark>
+            """
+        }
+        
+        kmlContent += """
           </Document>
         </kml>
         """
-        return kml
+        
+        return kmlContent
     }
     
     func exportKML(from viewController: UIViewController? = nil) {
