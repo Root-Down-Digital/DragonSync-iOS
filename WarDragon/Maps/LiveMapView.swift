@@ -16,34 +16,34 @@ struct LiveMapView: View {
     @State private var selectedDrone: CoTViewModel.CoTMessage?
     @State private var selectedFlightPath: [CLLocationCoordinate2D] = []
     @State private var flightPaths: [String: [(coordinate: CLLocationCoordinate2D, timestamp: Date)]] = [:]
-    @State private var lastProcessedDrones: [String: CoTViewModel.CoTMessage] = [:] // Track last processed drones
+    @State private var lastProcessedDrones: [String: CoTViewModel.CoTMessage] = [:]
     @State private var shouldUpdateMapView: Bool = false
     @State private var userHasMovedMap = false
-    let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect() // Timer for updates
+    let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
     
     init(cotViewModel: CoTViewModel, initialMessage: CoTViewModel.CoTMessage) {
         self.cotViewModel = cotViewModel
         let lat = Double(initialMessage.lat) ?? 0
         let lon = Double(initialMessage.lon) ?? 0
         
-        // Prioritize alert ring if coordinates are 0,0
         if lat == 0 && lon == 0,
            let ring = cotViewModel.alertRings.first(where: { $0.droneId == initialMessage.uid }) {
-            _mapCameraPosition = State(initialValue: .region(MKCoordinateRegion(
-                center: ring.centerCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: max(ring.radius / 250, 0.1),
-                                        longitudeDelta: max(ring.radius / 250, 0.1))
-            )))
+            let ringSpan = MKCoordinateSpan(
+                latitudeDelta: max(ring.radius / 250, 0.1),
+                longitudeDelta: max(ring.radius / 250, 0.1)
+            )
+            let ringRegion = MKCoordinateRegion(center: ring.centerCoordinate, span: ringSpan)
+            _mapCameraPosition = State(initialValue: .region(ringRegion))
         } else {
-            _mapCameraPosition = State(initialValue: .region(MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-            )))
+            let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let span = MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+            let region = MKCoordinateRegion(center: coordinate, span: span)
+            _mapCameraPosition = State(initialValue: .region(region))
         }
     }
     
     private func cleanOldPathPoints() {
-        let maxAge: TimeInterval = 3600 // 1 hour
+        let maxAge: TimeInterval = 3600
         let now = Date()
         
         for (droneId, path) in flightPaths {
@@ -54,11 +54,13 @@ struct LiveMapView: View {
     
     private var uniqueDrones: [CoTViewModel.CoTMessage] {
         var latestDronePositions: [String: CoTViewModel.CoTMessage] = [:]
-        var droneOrder: [String] = [] // Track the original order of appearance
+        var droneOrder: [String] = []
         
         for message in cotViewModel.parsedMessages {
-            // Only include valid non-CAA messages with coordinates
-            if !message.idType.contains("CAA"), let _ = message.coordinate {
+            let hasCoordinate = message.coordinate != nil
+            let isNotCAA = !message.idType.contains("CAA")
+            
+            if isNotCAA && hasCoordinate {
                 if latestDronePositions[message.uid] == nil {
                     droneOrder.append(message.uid)
                 }
@@ -66,19 +68,18 @@ struct LiveMapView: View {
             }
         }
         
-        // Return drones in their original order of first appearance
         return droneOrder.compactMap { latestDronePositions[$0] }
     }
     
     func updateFlightPathsIfNewData() {
         let newMessages = cotViewModel.parsedMessages.filter { message in
             guard let lastMessage = lastProcessedDrones[message.uid] else {
-                return true // Always process first time
+                return true
             }
             
-            // Only process if significant coordinate change occurred
-            return message.lat != lastMessage.lat ||
-                   message.lon != lastMessage.lon
+            let latChanged = message.lat != lastMessage.lat
+            let lonChanged = message.lon != lastMessage.lon
+            return latChanged || lonChanged
         }
         
         guard !newMessages.isEmpty else { return }
@@ -86,10 +87,32 @@ struct LiveMapView: View {
         for message in newMessages {
             guard let coordinate = message.coordinate else { continue }
             
-            var path = flightPaths[message.uid] ?? []
-            path.append((coordinate: coordinate, timestamp: Date()))
+            let hasValidLat = coordinate.latitude != 0
+            let hasValidLon = coordinate.longitude != 0
+            guard hasValidLat || hasValidLon else { continue }
             
-            // Limit path length
+            var path = flightPaths[message.uid] ?? []
+            
+            if let lastPoint = path.last {
+                let lastLocation = CLLocation(
+                    latitude: lastPoint.coordinate.latitude,
+                    longitude: lastPoint.coordinate.longitude
+                )
+                let currentLocation = CLLocation(
+                    latitude: coordinate.latitude,
+                    longitude: coordinate.longitude
+                )
+                let distance = lastLocation.distance(from: currentLocation)
+                let timeDiff = Date().timeIntervalSince(lastPoint.timestamp)
+                
+                if distance < 1.0 && timeDiff < 5.0 {
+                    continue
+                }
+            }
+            
+            let pathPoint = (coordinate: coordinate, timestamp: Date())
+            path.append(pathPoint)
+            
             if path.count > 200 {
                 path.removeFirst()
             }
@@ -99,35 +122,96 @@ struct LiveMapView: View {
         }
     }
     
+    private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
+        guard let path = flightPaths[uid] else { return [] }
+        return path.compactMap { pathPoint in
+            let coord = pathPoint.coordinate
+            let hasValidLat = coord.latitude != 0
+            let hasValidLon = coord.longitude != 0
+            guard hasValidLat || hasValidLon else { return nil }
+            return coord
+        }
+    }
+    
+    private func createDroneDetailView(for message: CoTViewModel.CoTMessage) -> DroneDetailView {
+        let flightPath = getValidFlightPath(for: message.uid)
+        return DroneDetailView(message: message, flightPath: flightPath, cotViewModel: cotViewModel)
+    }
+    
+    private func resetMapView() {
+        userHasMovedMap = false
+        let validCoords = uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
+            guard let coord = drone.coordinate else { return nil }
+            let hasValidLat = coord.latitude != 0
+            let hasValidLon = coord.longitude != 0
+            guard hasValidLat || hasValidLon else { return nil }
+            return coord
+        }
+        
+        guard !validCoords.isEmpty else { return }
+        
+        let latitudes = validCoords.map(\.latitude)
+        let longitudes = validCoords.map(\.longitude)
+        let minLat = latitudes.min()!
+        let maxLat = latitudes.max()!
+        let minLon = longitudes.min()!
+        let maxLon = longitudes.max()!
+        
+        let centerLat = (minLat + maxLat) / 2
+        let centerLon = (minLon + maxLon) / 2
+        let center = CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon)
+        
+        let deltaLat = max((maxLat - minLat) * 1.2, 0.05)
+        let deltaLon = max((maxLon - minLon) * 1.2, 0.05)
+        let span = MKCoordinateSpan(latitudeDelta: deltaLat, longitudeDelta: deltaLon)
+        let region = MKCoordinateRegion(center: center, span: span)
+        
+        withAnimation {
+            mapCameraPosition = .region(region)
+        }
+    }
+    
     var body: some View {
         ZStack {
-            Map(position: $mapCameraPosition) {
+            Map(position: $mapCameraPosition, interactionModes: .all) {
                 ForEach(flightPaths.keys.sorted(), id: \.self) { droneId in
                     if let path = flightPaths[droneId], path.count > 1 {
-                        MapPolyline(coordinates: path.map { $0.coordinate })
-                            .stroke(Color.blue, lineWidth: 2)
-                    }
-                }
-                // Draw drone markers with valid coordinates
-                ForEach(uniqueDrones, id: \.uid) { message in
-                    if let coordinate = message.coordinate,
-                       coordinate.latitude != 0 || coordinate.longitude != 0 {
-                        Annotation(message.uid, coordinate: coordinate) {
-                            Circle()
-                                .fill(message.uid == uniqueDrones.last?.uid ? Color.red : Color.blue)
-                                .frame(width: 10, height: 10)
+                        let validPath = path.filter { pathPoint in
+                            let coord = pathPoint.coordinate
+                            return coord.latitude != 0 || coord.longitude != 0
+                        }
+                        if validPath.count > 1 {
+                            let coordinates = validPath.map { $0.coordinate }
+                            MapPolyline(coordinates: coordinates)
+                                .stroke(Color.blue, lineWidth: 2)
                         }
                     }
                 }
                 
-                // Draw alert rings for drones with no valid coordinates
+                ForEach(uniqueDrones, id: \.uid) { message in
+                    if let coordinate = message.coordinate {
+                        let hasValidLat = coordinate.latitude != 0
+                        let hasValidLon = coordinate.longitude != 0
+                        if hasValidLat || hasValidLon {
+                            let isLastDrone = message.uid == uniqueDrones.last?.uid
+                            let color = isLastDrone ? Color.red : Color.blue
+                            
+                            Annotation(message.uid, coordinate: coordinate) {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 10, height: 10)
+                            }
+                        }
+                    }
+                }
+                
                 ForEach(cotViewModel.alertRings, id: \.id) { ring in
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.yellow.opacity(0.1))
                         .stroke(.yellow, lineWidth: 2)
                     
-                    
-                    Annotation("RSSI: \(ring.rssi) dBm", coordinate: ring.centerCoordinate) {
+                    let rssiText = "RSSI: \(ring.rssi) dBm"
+                    Annotation(rssiText, coordinate: ring.centerCoordinate) {
                         VStack {
                             Text("Encrypted Drone")
                                 .font(.caption)
@@ -147,34 +231,18 @@ struct LiveMapView: View {
                         userHasMovedMap = true
                     }
             )
+            .gesture(
+                MagnificationGesture(minimumScaleDelta: 0.01)
+                    .onChanged { _ in
+                        userHasMovedMap = true
+                    }
+            )
+            
             VStack {
-                // Reset view button
                 if userHasMovedMap {
                     HStack {
                         Spacer()
-                        Button(action: {
-                            // Force an immediate camera update
-                            let allCoordinates = uniqueDrones.compactMap { $0.coordinate }
-                            if !allCoordinates.isEmpty {
-                                let latitudes = allCoordinates.map(\.latitude)
-                                let longitudes = allCoordinates.map(\.longitude)
-                                let minLat = latitudes.min()!
-                                let maxLat = latitudes.max()!
-                                let minLon = longitudes.min()!
-                                let maxLon = longitudes.max()!
-                                let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
-                                                                    longitude: (minLon + maxLon) / 2)
-                                let deltaLat = max((maxLat - minLat) * 1.2, 0.05)
-                                let deltaLon = max((maxLon - minLon) * 1.2, 0.05)
-                                withAnimation {
-                                    mapCameraPosition = .region(
-                                        MKCoordinateRegion(center: center,
-                                                           span: MKCoordinateSpan(latitudeDelta: deltaLat,
-                                                                                  longitudeDelta: deltaLon))
-                                    )
-                                }
-                            }
-                        }) {
+                        Button(action: resetMapView) {
                             Image(systemName: "arrow.counterclockwise")
                                 .padding(8)
                                 .background(.ultraThinMaterial)
@@ -185,8 +253,9 @@ struct LiveMapView: View {
                 }
                 
                 Spacer()
+                let droneCount = uniqueDrones.count
                 Button(action: { showDroneList.toggle() }) {
-                    Text("\(uniqueDrones.count) Drones")
+                    Text("\(droneCount) Drones")
                         .padding()
                         .background(.ultraThinMaterial)
                         .cornerRadius(20)
@@ -197,30 +266,9 @@ struct LiveMapView: View {
         .sheet(isPresented: $showDroneList) {
             NavigationView {
                 List(uniqueDrones) { message in
-                    NavigationLink(destination: DroneDetailView(message: message, flightPath: flightPaths[message.uid]?.map { $0.coordinate } ?? [], cotViewModel: cotViewModel)) {
-                        VStack(alignment: .leading) {
-                            Text(message.uid)
-                                .font(.appHeadline)
-                            Text("Position: \(message.lat), \(message.lon)")
-                                .font(.appCaption)
-                            if !message.description.isEmpty {
-                                Text("Description: \(message.description)")
-                                    .font(.appCaption)
-                            }
-                            if message.pilotLat != "0.0" && message.pilotLon != "0.0" {
-                                Text("Pilot: \(message.pilotLat), \(message.pilotLon)")
-                                    .font(.appCaption)
-                            }
-                            if let macs = cotViewModel.macIdHistory[message.uid], macs.count > 1 {
-                                HStack {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.yellow)
-                                    Text("MAC randomizing (\(macs.count))")
-                                        .font(.appCaption)
-                                        .foregroundColor(.yellow)
-                                }
-                            }
-                        }
+                    let destination = createDroneDetailView(for: message)
+                    NavigationLink(destination: destination) {
+                        DroneListRowView(message: message, cotViewModel: cotViewModel)
                     }
                 }
                 .navigationTitle("Active Drones")
@@ -256,27 +304,79 @@ struct LiveMapView: View {
         .onReceive(timer) { _ in
             updateFlightPathsIfNewData()
             
-            // Only auto-update camera if user hasn't moved map and we have new data
             if !userHasMovedMap && shouldUpdateMapView {
-                let allCoordinates = uniqueDrones.compactMap { $0.coordinate }
-                if !allCoordinates.isEmpty {
+                let validCoords = uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
+                    guard let coord = drone.coordinate else { return nil }
+                    let hasValidLat = coord.latitude != 0
+                    let hasValidLon = coord.longitude != 0
+                    guard hasValidLat || hasValidLon else { return nil }
+                    return coord
+                }
+                
+                if !validCoords.isEmpty {
                     print("Rendering new flightpaths & map...")
-                    let latitudes = allCoordinates.map(\.latitude)
-                    let longitudes = allCoordinates.map(\.longitude)
+                    let latitudes = validCoords.map(\.latitude)
+                    let longitudes = validCoords.map(\.longitude)
                     let minLat = latitudes.min()!
                     let maxLat = latitudes.max()!
                     let minLon = longitudes.min()!
                     let maxLon = longitudes.max()!
-                    let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
-                                                        longitude: (minLon + maxLon) / 2)
+                    
+                    let centerLat = (minLat + maxLat) / 2
+                    let centerLon = (minLon + maxLon) / 2
+                    let center = CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon)
+                    
                     let deltaLat = max((maxLat - minLat) * 1.2, 0.05)
                     let deltaLon = max((maxLon - minLon) * 1.2, 0.05)
+                    let span = MKCoordinateSpan(latitudeDelta: deltaLat, longitudeDelta: deltaLon)
+                    let region = MKCoordinateRegion(center: center, span: span)
+                    
                     withAnimation {
-                        mapCameraPosition = .region(
-                            MKCoordinateRegion(center: center,
-                                               span: MKCoordinateSpan(latitudeDelta: deltaLat,
-                                                                      longitudeDelta: deltaLon))
-                        )
+                        mapCameraPosition = .region(region)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DroneListRowView: View {
+    let message: CoTViewModel.CoTMessage
+    let cotViewModel: CoTViewModel
+    
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(message.uid)
+                .font(.appHeadline)
+            
+            let positionText = "Position: \(message.lat), \(message.lon)"
+            Text(positionText)
+                .font(.appCaption)
+            
+            if !message.description.isEmpty {
+                let descText = "Description: \(message.description)"
+                Text(descText)
+                    .font(.appCaption)
+            }
+            
+            let pilotLatValid = message.pilotLat != "0.0"
+            let pilotLonValid = message.pilotLon != "0.0"
+            if pilotLatValid && pilotLonValid {
+                let pilotText = "Pilot: \(message.pilotLat), \(message.pilotLon)"
+                Text(pilotText)
+                    .font(.appCaption)
+            }
+            
+            if let macs = cotViewModel.macIdHistory[message.uid] {
+                let macCount = macs.count
+                if macCount > 1 {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        let macText = "MAC randomizing (\(macCount))"
+                        Text(macText)
+                            .font(.appCaption)
+                            .foregroundColor(.yellow)
                     }
                 }
             }
