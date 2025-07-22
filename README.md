@@ -110,14 +110,15 @@
 - Uses your own stack to provide the app data
 
   **Configuration A: WiFi & BT Adapters**
-   - ESP32 with WiFi RID Firmware (see below), **or a a WiFi adapter using DroneID**
-   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW **or the dualcore fw**
+   - WiFi adapter 
+   - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW
    - GPS module for status & proximity estimates
-   - (Optional) ANTSDR E200 - for decoding Ocusync and others
 
   **Configuration B:**
   - ESP32S3/C3
   - GPS module for status & proximity estimates
+
+- (Optional) ANTSDR E200 - for decoding Ocusync and others
 
 ## 2. Install Software & Flash Firmware
   
@@ -154,8 +155,8 @@
 ## 3. Start Detection
 
 *Swap in this zmq decoder to handle both types over UART RID [here](https://github.com/lukeswitz/DroneID/blob/dual-esp32-rid/zmq_decoder.py) if using the dual RID fw.
-  
-- Optional: Persist detection using [service files](https://github.com/alphafox02/DragonSync/tree/main/services) made by @alphafox02.
+
+**Optional: Persist detection using [service files](https://github.com/alphafox02/DragonSync/tree/main/services)** made by @alphafox02.
 - Mod the commands to suite and copy to an OS service dir (`/etc/systemd/system` for example).
 
 **Start Detecting WiFi RID using esp32** _(the setup.sh creates use commands for all hardware cases, this is an example workflow)_
