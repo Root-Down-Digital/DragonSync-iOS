@@ -253,7 +253,6 @@ class DroneStorageManager: ObservableObject {
     }
     
     func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
-        // Allow zero coordinates for encrypted messages
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
         
@@ -280,34 +279,33 @@ class DroneStorageManager: ObservableObject {
         )
         
         encounter.metadata["course"] = message.trackCourse
-        
         encounter.lastSeen = Date()
         var didAddPoint = false
         
-        // Handle proximity points for encrypted devices
         if ((lat == 0 && lon == 0) && message.rssi != nil && message.rssi != 0) {
             var pointToAdd: FlightPathPoint? = nil
             
-            // --- PRIORITY 1: Use monitorStatus if available ---
             if let monitor = monitorStatus, let rssiValue = message.rssi {
-                var calculatedRadius: Double = 0.0 // Default to 0.0
+                var calculatedRadius: Double = 0.0
                 
                 if rssiValue > 0 {
-                    // Get the ACTUAL radius from alert ring if available
                     if let ring = cotViewModel?.alertRings.first(where: { $0.droneId == message.uid }) {
-                        calculatedRadius = ring.radius // Use the ACTUAL radius from the alert ring
-                        print("✅ Proximity: Using actual ring radius (\(calculatedRadius)m) for RSSI \(rssiValue)")
+                        calculatedRadius = ring.radius
+                        print("Proximity: Using actual ring radius (\(calculatedRadius)m) for RSSI \(rssiValue)")
+                    } else {
+                        let signatureGenerator = DroneSignatureGenerator()
+                        calculatedRadius = signatureGenerator.calculateDistance(Double(rssiValue))
+                        print(" Proximity: Calculated radius (\(calculatedRadius)m) for RSSI \(rssiValue)")
                     }
                 } else {
-                    // RSSI is zero or otherwise unexpected
-                    print("⚠️ Proximity: RSSI (\(rssiValue)) is zero or invalid, using default radius.")
-                    calculatedRadius = 100.0 // Use a default radius instead of 0
+                    print("Proximity: RSSI (\(rssiValue)) is zero or invalid, using default radius.")
+                    calculatedRadius = 100.0
                 }
                 
                 pointToAdd = FlightPathPoint(
                     latitude: monitor.gpsData.latitude,
                     longitude: monitor.gpsData.longitude,
-                    altitude: monitor.gpsData.altitude, // Use monitor altitude
+                    altitude: monitor.gpsData.altitude,
                     timestamp: Date().timeIntervalSince1970,
                     homeLatitude: nil,
                     homeLongitude: nil,
@@ -315,48 +313,35 @@ class DroneStorageManager: ObservableObject {
                     proximityRssi: Double(rssiValue),
                     proximityRadius: calculatedRadius
                 )
-                print("💾 Added proximity point using Monitor Status for \(droneId)")
-            }
-            
-            // Add the point if one was created
-            if let point = pointToAdd {
-                encounter.flightPath.append(point)
-                encounter.metadata["hasProximityPoints"] = "true"
+                print("Added proximity point using Monitor Status for \(droneId)")
                 didAddPoint = true
-            } else {
-                print("⚠️ Could not add proximity point for \(droneId) - No Monitor Status or CoT Ring found.")
             }
-            
-            
-            // --- PRIORITY 2: Fallback to cotViewModel.alertRings if no point added yet ---
-            if pointToAdd == nil, let currentRing = cotViewModel?.alertRings.first(where: { $0.droneId == droneId }) {
-                // Use data from the existing alert ring
+            else if let currentRing = cotViewModel?.alertRings.first(where: { $0.droneId == droneId }) {
                 pointToAdd = FlightPathPoint(
                     latitude: currentRing.centerCoordinate.latitude,
                     longitude: currentRing.centerCoordinate.longitude,
-                    altitude: 0, // Altitude might not be known from the ring, default or use monitor if available?
-                    timestamp: Date().timeIntervalSince1970, // Use current time for the point
+                    altitude: 0,
+                    timestamp: Date().timeIntervalSince1970,
                     homeLatitude: nil,
                     homeLongitude: nil,
                     isProximityPoint: true,
                     proximityRssi: Double(currentRing.rssi),
                     proximityRadius: Double(currentRing.radius)
                 )
-                print("💾 Added proximity point using CoTViewModel Ring for \(droneId)")
+                print("Added proximity point using CoTViewModel Ring for \(droneId)")
+                didAddPoint = true
             }
             
-            // Add the point if one was created
             if let point = pointToAdd {
                 encounter.flightPath.append(point)
                 encounter.metadata["hasProximityPoints"] = "true"
-                didAddPoint = true
             } else {
-                print("⚠️ Could not add proximity point for \(droneId) - No Monitor Status or CoT Ring found.")
+                print("Could not add proximity point for \(droneId) - No Monitor Status or CoT Ring found.")
             }
-            
         }
         
-        if !didAddPoint && (lat != 0 || lon != 0) {
+        // Only add regular points if BOTH lat AND lon are non-zero
+        if !didAddPoint && lat != 0 && lon != 0 {
             let point = FlightPathPoint(
                 latitude: lat,
                 longitude: lon,
@@ -369,16 +354,14 @@ class DroneStorageManager: ObservableObject {
                 proximityRadius: nil
             )
             encounter.flightPath.append(point)
-            print("💾 Added regular flight point for \(droneId)")
+            print("Added regular flight point for \(droneId)")
             didAddPoint = true
         }
         
-        // If no point was added at all (e.g., zero coords, no RSSI, no monitor, no ring), log it.
         if !didAddPoint {
-            print("🚫 No flight point added for this update for \(droneId). Message: \(message)")
+            print("No flight point added for this update for \(droneId). Message: \(message)")
         }
         
-        // Update MAC history from signal sources
         for source in message.signalSources {
             if !source.mac.isEmpty {
                 encounter.macHistory.insert(source.mac)
@@ -389,7 +372,6 @@ class DroneStorageManager: ObservableObject {
             encounter.macHistory.insert(mac)
         }
         
-        // Validate the new signature before adding
         if let sig = SignatureData(
             timestamp: Date().timeIntervalSince1970,
             rssi: Double(message.rssi ?? 0),
@@ -397,17 +379,18 @@ class DroneStorageManager: ObservableObject {
             height: Double(message.height ?? "0.0") ?? 0.0,
             mac: String(message.mac ?? "")
         ) {
-            
-            encounter.signatures.append(sig) // Only add valid signatures
+            encounter.signatures.append(sig)
+            if encounter.signatures.count > 500 {
+                encounter.signatures.removeFirst(100)
+            }
         }
         
         var updatedMetadata = encounter.metadata
-
-        // Add other metadata first
+        
         if let mac = message.mac {
             updatedMetadata["mac"] = mac
         }
-
+        
         if let caaReg = message.caaRegistration {
             updatedMetadata["caaRegistration"] = caaReg
         }
@@ -416,37 +399,24 @@ class DroneStorageManager: ObservableObject {
             updatedMetadata["manufacturer"] = manufacturer
         }
         
-        // Add pilot location
+        updatedMetadata["idType"] = message.idType
+        
         if let pilotLat = Double(message.pilotLat), let pilotLon = Double(message.pilotLon),
-           pilotLat != 0 || pilotLon != 0 {
+           pilotLat != 0 && pilotLon != 0 {
             updatedMetadata["pilotLat"] = message.pilotLat
             updatedMetadata["pilotLon"] = message.pilotLon
         }
         
-        // Add home location
         if let homeLat = Double(message.homeLat), let homeLon = Double(message.homeLon),
-           homeLat != 0 || homeLon != 0 {
+           homeLat != 0 && homeLon != 0 {
             updatedMetadata["homeLat"] = message.homeLat
             updatedMetadata["homeLon"] = message.homeLon
-        }
-        
-        // Apply the updated metadata to the encounter
-        encounter.metadata = updatedMetadata
-        // Add pilot location
-        if let pilotLat = Double(message.pilotLat), let pilotLon = Double(message.pilotLon),
-           pilotLat != 0 || pilotLon != 0 {
-            updatedMetadata["pilotLat"] = message.pilotLat
-            updatedMetadata["pilotLon"] = message.pilotLon
-        }
-        
-        // Add home location (which you're calling takeoff)
-        if let lat = Double(message.homeLat), let lon = Double(message.homeLon),
-           lat != 0 || lon != 0 {
             updatedMetadata["takeoffLat"] = message.homeLat
             updatedMetadata["takeoffLon"] = message.homeLon
         }
         
-        // Update name or trust status
+        encounter.metadata = updatedMetadata
+        
         if encounters[droneId] != nil {
             let existingName = encounters[droneId]?.customName ?? ""
             let existingTrust = encounters[droneId]?.trustStatus ?? .unknown
@@ -460,7 +430,6 @@ class DroneStorageManager: ObservableObject {
             }
         }
         
-        // Save the drone encounters array and device
         encounters[droneId] = encounter
         saveToStorage()
     }
