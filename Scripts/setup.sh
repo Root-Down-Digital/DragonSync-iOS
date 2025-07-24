@@ -438,36 +438,7 @@ Repositories:
 - $DRONEID_DIR (DroneID receiver/decoder/spoofer)
 - $DRAGONSYNC_DIR (DragonSync monitor)
 
-Advanced Usage:
-1. Bluetooth Receiver (ESP32/Sonoff Dongle):
-    ./run_bluetooth_receiver.sh [port] [baud] [zmq]
-
-2. WiFi Receiver:
-    ./run_wifi_receiver.sh [interface] [zmq] [uart_port]
-
-3. PCAP Replay:
-    ./run_pcap_replay.sh [pcap_file] [zmq]
-
-4. Custom Decoder:
-    ./run_drone_decoder.sh [zmq_bind] [zmq_clients] [uart_port]
-
-5. Bluetooth Spoofer:
-    ./run_bluetooth_spoof.sh [port] [baud]
-
-6. System Monitor:
-    ./run_wardragon_monitor.sh [host] [port] [interval]
-
-Quick Start - Run the decoder (most common use case):
-./run_drone_decoder.sh
-
-This starts the decoder listening on $local_ip:4224
-Access the web interface at: http://$local_ip:4224
-
-Network Access:
-- To access from other devices on your network, use: $local_ip
-- To check your IP address manually: ifconfig (macOS) or ip addr (Linux)
-
-Example Commands:
+Quick Start:
 
 # Start with your flashed ESP32 port
 ./run_drone_decoder.sh 0.0.0.0:4224 127.0.0.1:4222,127.0.0.1:4223 $example_port
