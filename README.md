@@ -126,15 +126,23 @@
     
     _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32. FOR MAC & LINUX ONLY, windows see [manual setup](#python-tools-setup-instructions):**_
 
-  ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f5749589a00526b8b1d99cd15b7a5d4dd6decb84f5863df78c4fa476322447e5 ]] && chmod +x setup.sh && ./setup.sh
-  ```
+```bash
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^be41d0ca3cfb0727d1780d37c033a354d9a32f2f53d8e6433fc096ea9d5dfe04 ]] && chmod +x setup.sh && ./setup.sh
+```
+
+Choose option 3:
+```
+WarDragon DroneID Setup Script
+==============================
+1) Install software only
+2) Flash firmware only
+3) Install software and flash firmware
+4) Exit
+```
 
   > [!NOTE]
-  > Placeholder commands are created for the different hardware options. **You need to add the flags** such as `uart` with your COM port to them or use the examples below. 
-    
+  > Placeholder commands are created for the different hardware options. **You need to add the flags**, use the examples below. An autostart option is given when using option 3.
   
-    
  **Choose skip flashing when prompted if using your own wireless adapters instead of esp32**
     
   ---
