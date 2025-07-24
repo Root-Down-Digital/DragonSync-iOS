@@ -18,9 +18,22 @@ detect_os() {
   fi
 }
 
+get_local_ip() {
+  local os="$1"
+  local ip=""
+  
+  if [[ "$os" == "macos" ]]; then
+    ip=$(ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+  else
+    ip=$(ip route get 1 2>/dev/null | awk '{print $NF; exit}' 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || ifconfig | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+  fi
+  
+  [[ -n "$ip" ]] && echo "$ip" || echo "127.0.0.1"
+}
+
 install_system_deps() {
   local os="$1"
-  echo "Installing system dependencies for $os…"
+  echo "Installing system dependencies for $os..."
   
   case "$os" in
     "linux")
@@ -71,36 +84,47 @@ install_esptool() {
 setup_venv() {
   echo "→ Setting up Python virtual environment…"
   
-  # Create venv (try stdlib, else fallback to virtualenv)
-  if [[ ! -d "$VENV_DIR" ]]; then
-    echo "  Creating virtual environment..."
-    if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
-      echo "  stdlib venv failed; trying to install virtualenv in user space"
-      if ! python3 -m pip install --user virtualenv --break-system-packages 2>/dev/null; then
-        echo "  Installing virtualenv with pipx..."
-        if ! command -v pipx &>/dev/null; then
-          if command -v brew &>/dev/null; then
-            brew install pipx
-          else
-            echo "Error: Cannot install virtualenv. Please install pipx manually." >&2
-            exit 1
-          fi
-        fi
-        pipx install virtualenv
-        python3 -m virtualenv "$VENV_DIR"
-      else
-        python3 -m virtualenv "$VENV_DIR"
-      fi
+  if [[ -d "$VENV_DIR" ]]; then
+    echo "  Virtual environment already exists, checking activation script..."
+    if [[ -f "$VENV_DIR/bin/activate" ]]; then
+      source "$VENV_DIR/bin/activate"
+      pip install --upgrade pip setuptools wheel
+      echo "✔ Existing virtual environment activated."
+      export USING_VENV=1
+      return
+    else
+      echo "  Existing venv corrupted, removing and recreating..."
+      rm -rf "$VENV_DIR"
     fi
   fi
   
-  # Avoid racing on slow filesystems
-  until [[ -f "$VENV_DIR/bin/activate" ]]; do
-    echo "  waiting for venv to finish…"
-    sleep 1
-  done
+  echo "  Creating virtual environment..."
+  if python3 -m venv "$VENV_DIR" 2>&1; then
+    echo "  Successfully created venv with python3 -m venv"
+  elif python3 -m pip install --user virtualenv --break-system-packages 2>/dev/null && python3 -m virtualenv "$VENV_DIR" 2>&1; then
+    echo "  Created venv using virtualenv module"
+  elif command -v pipx &>/dev/null && pipx install virtualenv && python3 -m virtualenv "$VENV_DIR" 2>&1; then
+    echo "  Created venv using pipx-installed virtualenv"
+  elif command -v brew &>/dev/null && brew install pipx && pipx install virtualenv && python3 -m virtualenv "$VENV_DIR" 2>&1; then
+    echo "  Created venv using brew pipx virtualenv"
+  else
+    echo "Error: Failed to create virtual environment. Please install virtualenv manually." >&2
+    exit 1
+  fi
   
-  # Activate and prep
+  sleep 2
+  
+  if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
+    echo "Error: Virtual environment created but activation script missing." >&2
+    echo "Directory contents:"
+    ls -la "$VENV_DIR"
+    if [[ -d "$VENV_DIR/bin" ]]; then
+      echo "Bin directory contents:"
+      ls -la "$VENV_DIR/bin"
+    fi
+    exit 1
+  fi
+  
   source "$VENV_DIR/bin/activate"
   pip install --upgrade pip setuptools wheel
   
@@ -300,7 +324,7 @@ echo "ZMQ Setting: \$ZMQ_SETTING"
 echo "UART Port: \$UART_PORT"
 
 cd $DRONEID_DIR
-python3 wifi_receiver.py --interface "\$INTERFACE" -z --zmqsetting "\$ZMQ_SETTING" 
+python3 wifi_receiver.py --interface "\$INTERFACE" -z --zmqsetting "\$ZMQ_SETTING"
 EOF
   chmod +x run_wifi_receiver.sh
   
@@ -328,13 +352,15 @@ $venv_activate
 
 ZMQ_SETTING="\${1:-0.0.0.0:4224}"
 ZMQ_CLIENTS="\${2:-127.0.0.1:4222,127.0.0.1:4223}"
+UART_PORT="\${3:-$default_port}"
 
 echo "Starting DroneID decoder..."
 echo "ZMQ Setting: \$ZMQ_SETTING"
 echo "ZMQ Clients: \$ZMQ_CLIENTS"
+echo "UART Port: \$UART_PORT"
 
 cd $DRONEID_DIR
-python3 zmq_decoder.py --uart "\$UART_PORT" -z --zmqsetting "\$ZMQ_SETTING" --zmqclients "\$ZMQ_CLIENTS" -v 
+python3 zmq_decoder.py --uart "\$UART_PORT" -z --zmqsetting "\$ZMQ_SETTING" --zmqclients "\$ZMQ_CLIENTS" -v
 EOF
   chmod +x run_drone_decoder.sh
   
@@ -380,14 +406,23 @@ EOF
 }
 
 print_usage() {
+  local os
+  os=$(detect_os)
+  local local_ip
+  local_ip=$(get_local_ip "$os")
+  
   local venv_note=""
   [[ "$USING_VENV" -eq 1 ]] && venv_note="
 Virtual environment: $VENV_DIR
 To activate manually: source $VENV_DIR/bin/activate"
   
   local port_note=""
-  [[ -n "$FLASHED_PORT" ]] && port_note="
+  local example_port="/dev/ttyUSB0"
+  if [[ -n "$FLASHED_PORT" ]]; then
+    port_note="
 Default port (from flash): $FLASHED_PORT"
+    example_port="$FLASHED_PORT"
+  fi
   
   cat << EOF
 
@@ -395,35 +430,147 @@ Default port (from flash): $FLASHED_PORT"
 WarDragon DroneID Setup Complete
 ===================================================
 
+System Information:
+- Your local IP address: $local_ip
+- Detected OS: $os$venv_note$port_note
+
 Repositories:
 - $DRONEID_DIR (DroneID receiver/decoder/spoofer)
 - $DRAGONSYNC_DIR (DragonSync monitor)
 
-$venv_note$port_note
+Advanced Usage:
+1. Bluetooth Receiver (ESP32/Sonoff Dongle):
+    ./run_bluetooth_receiver.sh [port] [baud] [zmq]
 
-DroneID Modes:
-1. Bluetooth Receiver (Sonoff Dongle):
-  run_bluetooth_receiver.sh [port] [baud] [zmq]
 2. WiFi Receiver:
-  run_wifi_receiver.sh [iface] [zmq] [uart_port]
+    ./run_wifi_receiver.sh [interface] [zmq] [uart_port]
+
 3. PCAP Replay:
-  run_pcap_replay.sh [pcap] [zmq]
-4. Decoder:
-  run_drone_decoder.sh [zmq] [clients]
-5. Spoofer:
-  run_bluetooth_spoof.sh [port] [baud]
-6. Monitor:
-  run_wardragon_monitor.sh [host] [port] [interval]
+    ./run_pcap_replay.sh [pcap_file] [zmq]
+
+4. Custom Decoder:
+    ./run_drone_decoder.sh [zmq_bind] [zmq_clients] [uart_port]
+
+5. Bluetooth Spoofer:
+    ./run_bluetooth_spoof.sh [port] [baud]
+
+6. System Monitor:
+    ./run_wardragon_monitor.sh [host] [port] [interval]
+
+Quick Start - Run the decoder (most common use case):
+./run_drone_decoder.sh
+
+This starts the decoder listening on $local_ip:4224
+Access the web interface at: http://$local_ip:4224
+
+Network Access:
+- To access from other devices on your network, use: $local_ip
+- To check your IP address manually: ifconfig (macOS) or ip addr (Linux)
+
+Example Commands:
+
+# Start with your flashed ESP32 port
+./run_drone_decoder.sh 0.0.0.0:4224 127.0.0.1:4222,127.0.0.1:4223 $example_port
+
+# Monitor system resources
+./run_wardragon_monitor.sh 0.0.0.0 4225 30
+
+Need help? Check the README files in $DRONEID_DIR and $DRAGONSYNC_DIR
 EOF
 }
 
-main() {
+show_main_menu() {
+  echo "WarDragon DroneID Setup Script"
+  echo "=============================="
+  echo "1) Install software only"
+  echo "2) Flash firmware only"
+  echo "3) Install software and flash firmware"
+  echo "4) Exit"
+  echo ""
+  read -rp "Select option [1-4]: " choice
+  echo "$choice"
+}
+
+install_software() {
   local os
   os=$(detect_os)
   
-  echo "WarDragon DroneID Setup Script"
+  echo "Installing WarDragon DroneID software..."
   echo "Detected OS: $os"
-  echo "============================"
+  echo
+  
+  install_system_deps "$os"
+  setup_venv
+  
+  clone_or_update "$DRONEID_REPO" "$DRONEID_DIR"
+  clone_or_update "$DRAGONSYNC_REPO" "$DRAGONSYNC_DIR"
+  
+  install_python_deps "$DRONEID_DIR"
+  install_python_deps "$DRAGONSYNC_DIR"
+  
+  create_run_scripts
+  
+  echo
+  echo "✔ Software installation complete!"
+}
+
+flash_firmware_only() {
+  local os
+  os=$(detect_os)
+  
+  echo "Flashing ESP32 firmware only..."
+  echo "Detected OS: $os"
+  echo
+  
+  # Only install minimal dependencies needed for esptool
+  if ! command -v python3 &>/dev/null; then
+    echo "Python3 required for esptool. Installing..."
+    if [[ "$os" == "macos" ]]; then
+      if ! command -v brew &>/dev/null; then
+        echo "Homebrew required to install Python3. Installing..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      fi
+      brew install python3
+    else
+      echo "Please install python3 manually and re-run this script."
+      exit 1
+    fi
+  fi
+  
+  # Check if esptool is already available
+  if ! command -v esptool &>/dev/null && ! python3 -c "import esptool" 2>/dev/null; then
+    echo "Installing esptool..."
+    if command -v pipx &>/dev/null; then
+      pipx install esptool
+    else
+      python3 -m pip install --user esptool --break-system-packages 2>/dev/null || python3 -m pip install --user esptool
+    fi
+  else
+    echo "esptool already available."
+  fi
+  
+  flash_firmware "$os"
+  
+  echo
+  if [[ -n "$FLASHED_PORT" ]]; then
+    echo "✔ Firmware flashing complete!"
+    echo "Flashed to port: $FLASHED_PORT"
+    echo
+    echo "To use the flashed device, install the software with:"
+    echo "./setup.sh (choose option 1)"
+  else
+    echo "Firmware flashing skipped or failed."
+  fi
+}
+
+
+install_and_flash() {
+  local os
+  os=$(detect_os)
+  
+  echo "Installing software and flashing firmware..."
+  echo "Detected OS: $os"
+  echo
   
   install_system_deps "$os"
   setup_venv
@@ -437,7 +584,181 @@ main() {
   
   flash_firmware "$os"
   create_run_scripts
+  
+  echo
+  echo "✔ Complete installation finished!"
+  
   print_usage
+  
+  echo
+  echo "====================================================="
+  echo "Ready to start DroneID monitoring!"
+  echo "====================================================="
+  echo "1) Start DroneID decoder now"
+  echo "2) Start system monitor now"  
+  echo "3) Create system service (auto-start on boot)"
+  echo "4) Exit (run manually later)"
+  echo
+  read -rp "Select option [1-4]: " start_choice
+  
+  case "$start_choice" in
+    1)
+      echo "Starting DroneID decoder..."
+      echo "Press Ctrl+C to stop"
+      sleep 2
+      ./run_drone_decoder.sh
+    ;;
+    2)
+      echo "Starting system monitor..."
+      echo "Press Ctrl+C to stop"
+      sleep 2
+      ./run_wardragon_monitor.sh
+    ;;
+    3)
+      create_system_service "$os"
+    ;;
+    4|*)
+      echo "Setup complete. You can start services manually using the run scripts."
+      echo "Quick start: ./run_drone_decoder.sh"
+      echo "To run both, open two terminal tabs and run:"
+      echo "  Tab 1: ./run_drone_decoder.sh"
+      echo "  Tab 2: ./run_wardragon_monitor.sh"
+    ;;
+  esac
+}
+
+create_system_service() {
+  local os="$1"
+  local current_dir="$PWD"
+  local user="$USER"
+  
+  echo "Creating system service for auto-start on boot..."
+  
+  case "$os" in
+    "linux")
+      cat > wardragon-droneid.service << EOF
+[Unit]
+Description=WarDragon DroneID Decoder
+After=network.target
+
+[Service]
+Type=simple
+User=$user
+WorkingDirectory=$current_dir
+ExecStart=$current_dir/run_drone_decoder.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      
+      echo "Installing systemd service..."
+      sudo cp wardragon-droneid.service /etc/systemd/system/
+      sudo systemctl daemon-reload
+      sudo systemctl enable wardragon-droneid.service
+      
+      echo "✔ Service installed. Commands:"
+      echo "  Start:   sudo systemctl start wardragon-droneid"
+      echo "  Stop:    sudo systemctl stop wardragon-droneid"
+      echo "  Status:  sudo systemctl status wardragon-droneid"
+      echo "  Logs:    sudo journalctl -u wardragon-droneid -f"
+      
+      read -rp "Start the service now? [y/N]: " start_now
+      if [[ "$start_now" =~ ^[Yy]$ ]]; then
+        sudo systemctl start wardragon-droneid
+        echo "Service started!"
+      fi
+      
+      rm wardragon-droneid.service
+    ;;
+    
+    "macos")
+      local plist_file="com.wardragon.droneid.plist"
+      
+      cat > "$plist_file" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wardragon.droneid</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$current_dir/run_drone_decoder.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$current_dir</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wardragon-droneid.err</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/wardragon-droneid.out</string>
+</dict>
+</plist>
+EOF
+      
+      echo "Installing LaunchAgent..."
+      cp "$plist_file" ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/"$plist_file"
+      
+      echo "✔ LaunchAgent installed. Commands:"
+      echo "  Start:   launchctl start com.wardragon.droneid"
+      echo "  Stop:    launchctl stop com.wardragon.droneid"
+      echo "  Unload:  launchctl unload ~/Library/LaunchAgents/$plist_file"
+      echo "  Logs:    tail -f /tmp/wardragon-droneid.out"
+      
+      read -rp "Start the service now? [y/N]: " start_now
+      if [[ "$start_now" =~ ^[Yy]$ ]]; then
+        launchctl start com.wardragon.droneid
+        echo "Service started!"
+      fi
+      
+      rm "$plist_file"
+    ;;
+    
+    *)
+      echo "System service creation not supported on $os"
+      echo "You'll need to set up auto-start manually."
+    ;;
+  esac
+}
+
+
+main() {
+  echo "WarDragon DroneID Setup Script"
+  echo "=============================="
+  echo "1) Install software only"
+  echo "2) Flash firmware only" 
+  echo "3) Install software and flash firmware"
+  echo "4) Exit"
+  echo ""
+  read -rp "Select option [1-4]: " choice
+  
+  case "$choice" in
+    1)
+      install_software
+      print_usage
+    ;;
+    2)
+      flash_firmware_only
+    ;;
+    3)
+      install_and_flash
+      print_usage
+    ;;
+    4)
+      echo "Exiting..."
+      exit 0
+    ;;
+    *)
+      echo "Invalid choice. Exiting..."
+      exit 1
+    ;;
+  esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
