@@ -305,6 +305,7 @@ class CoTViewModel: ObservableObject {
         }
         
         var rawMessage: [String: Any]
+        var originalRawString: String?
         
         static func == (lhs: CoTViewModel.CoTMessage, rhs: CoTViewModel.CoTMessage) -> Bool {
             return lhs.uid == rhs.uid &&
@@ -779,12 +780,12 @@ class CoTViewModel: ObservableObject {
                     }
                     return
                 }
-                
+               
                 // Finally check for regular XML drone message
                 if message.trimmingCharacters(in: .whitespacesAndNewlines).starts(with: "<") {
-                    //                    print("Processing XML Drone message: \(message)")
                     let parser = XMLParser(data: data)
                     let cotParserDelegate = CoTMessageParser()
+                    cotParserDelegate.originalRawString = message 
                     parser.delegate = cotParserDelegate
                     
                     if parser.parse(), let cotMessage = cotParserDelegate.cotMessage {

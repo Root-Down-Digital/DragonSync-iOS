@@ -418,6 +418,12 @@ struct DroneDetailView: View {
 
 
     private func formatRawMessage() -> String {
+        // Return the original raw string if available, otherwise fall back to formatted JSON
+        if let originalRaw = message.originalRawString {
+            return originalRaw
+        }
+        
+        // Fallback to formatted JSON
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: message.rawMessage, options: .prettyPrinted)
             if let jsonString = String(data: jsonData, encoding: .utf8) {

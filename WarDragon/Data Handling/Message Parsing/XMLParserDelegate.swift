@@ -57,6 +57,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     private var sid: Int?
     private var index: String?
     private var runtime: String?
+    var originalRawString: String?
     
     private var trackAttributes: [String: String] = [:]
     private var track_course: String?
@@ -239,7 +240,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 operator_id_type: droneData["operator_id_type"] as? String,
                 index: droneData["index"] as? String,
                 runtime: droneData["runtime"] as? String ?? "",
-                rawMessage: droneData
+                rawMessage: droneData,
+                originalRawString: originalRawString 
             )
             
             cotMessage?.trackCourse  = track_course
@@ -626,7 +628,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     runtime: runtime ?? "",
                     trackCourse: trackCourse?.description,
                     trackSpeed: trackSpeed?.description,
-                    rawMessage: buildRawMessage(mac, rssi, description)
+                    rawMessage: buildRawMessage(mac, rssi, description),
+                    originalRawString: originalRawString
                 )
             }
         case "location_protocol", "op_status", "height_type", "ew_dir_segment",
@@ -762,7 +765,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     trackCourse: track_course?.description,
                     trackSpeed: track_speed?.description,
 //                    operatorAltGeo: operatorAltGeo,
-                    rawMessage: jsonFormat
+                    rawMessage: jsonFormat,
+                    originalRawString: originalRawString
                 )
             }
         default:

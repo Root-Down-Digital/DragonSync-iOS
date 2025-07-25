@@ -286,6 +286,9 @@ struct StoredEncountersView: View {
                     
                     // Flight data stats
                     flightDataSection
+                    
+                    // Raw message
+                    rawMessagesSection
                 }
                 .padding()
             }
@@ -433,6 +436,43 @@ struct StoredEncountersView: View {
             .mapStyle(mapStyleForSelectedType())
             .frame(height: 300)
             .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        
+        private var rawMessagesSection: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("RAW MESSAGES")
+                    .font(.appHeadline)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                
+                if let latestMessage = cotViewModel.parsedMessages.first(where: { $0.uid == encounter.id }),
+                   let originalRaw = latestMessage.originalRawString {
+                    
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(originalRaw)
+                            .font(.system(.caption, design: .monospaced))
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(UIColor.tertiarySystemBackground))
+                    )
+                    
+                } else {
+                    Text("No raw message data available")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(UIColor.tertiarySystemBackground))
+                        )
+                }
+            }
+            .padding()
+            .background(Color(UIColor.secondarySystemBackground))
+            .cornerRadius(12)
         }
         
         private func setupInitialMapPosition() {

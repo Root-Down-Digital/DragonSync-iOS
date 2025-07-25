@@ -501,7 +501,7 @@ struct MessageRow: View {
                         .padding(-8)
                 )
             }
-            .contextMenu {  // Add context menu for long press
+            .contextMenu {
                 Button(action: {
                     removeDroneFromTracking()
                 }) {
@@ -578,6 +578,15 @@ struct MessageRow: View {
                     }
             }
             .presentationDetents([.medium])
+        }
+        .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                removeDroneFromTracking()
+                deleteDroneFromStorage()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete this drone from tracking and history? This action cannot be undone.")
         }
     }
 }
