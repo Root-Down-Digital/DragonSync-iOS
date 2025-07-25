@@ -286,19 +286,9 @@ class Settings: ObservableObject {
             return
         }
         
+        print("Settings: Toggle listening to \(active)")
         isListening = active
         objectWillChange.send()
-        
-        if isListening && !enableBackgroundDetection {
-            enableBackgroundDetection = true
-        }
-        
-        // Start or stop background processing if enabled
-        if isListening {
-            BackgroundManager.shared.startBackgroundProcessing()
-        } else if !isListening {
-            BackgroundManager.shared.stopBackgroundProcessing()
-        }
     }
     
     var zmqHostHistory: [String] {
