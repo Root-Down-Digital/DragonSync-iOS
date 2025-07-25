@@ -15,9 +15,11 @@ final class SilentAudioKeepAlive {
     private var started = false
     private let log = OSLog(subsystem: "com.wardragon", category: "AudioKeepAlive")
     private var sourceNode: AVAudioSourceNode?
+    private var terminationRequested = false
+    private var observersRegistered = false
 
     func start() {
-        guard !started else { return }
+        guard !started, !terminationRequested else { return }
         started = true
 
         configureSession()
@@ -29,6 +31,9 @@ final class SilentAudioKeepAlive {
     func stop() {
         guard started else { return }
         started = false
+        terminationRequested = true
+        
+        removeObservers()
         
         engine.stop()
         
@@ -38,7 +43,7 @@ final class SilentAudioKeepAlive {
         }
         
         do {
-            try AVAudioSession.sharedInstance().setActive(false)
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
             os_log("Failed to deactivate audio session: %{public}@", log: log, type: .error,
                    String(describing: error))
@@ -46,6 +51,8 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureSession() {
+        guard !terminationRequested else { return }
+        
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, options: [.mixWithOthers])
@@ -59,7 +66,11 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureEngine() {
+        guard !terminationRequested else { return }
+        
         let sourceNode = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+            guard !self.terminationRequested else { return noErr }
+            
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in ablPointer {
                 if let data = buffer.mData {
@@ -79,6 +90,8 @@ final class SilentAudioKeepAlive {
     }
 
     private func startEngine() {
+        guard !terminationRequested else { return }
+        
         guard !engine.isRunning else {
             os_log("Engine already running", log: log, type: .debug)
             return
@@ -90,13 +103,18 @@ final class SilentAudioKeepAlive {
         } catch {
             os_log("Engine start failed: %{public}@", log: log, type: .error, String(describing: error))
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.reconfigureAndRestart()
+            if !terminationRequested {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self = self, !self.terminationRequested else { return }
+                    self.reconfigureAndRestart()
+                }
             }
         }
     }
     
     private func reconfigureAndRestart() {
+        guard !terminationRequested else { return }
+        
         engine.stop()
         engine.reset()
         configureSession()
@@ -105,30 +123,49 @@ final class SilentAudioKeepAlive {
     }
 
     private func registerObservers() {
+        guard !terminationRequested, !observersRegistered else { return }
+        observersRegistered = true
+        
         let nc = NotificationCenter.default
 
         nc.addObserver(forName: .AVAudioEngineConfigurationChange,
                        object: engine, queue: .main) { [weak self] _ in
-            self?.handleConfigurationChange()
+            guard let self = self, !self.terminationRequested else { return }
+            self.handleConfigurationChange()
         }
 
         nc.addObserver(forName: AVAudioSession.interruptionNotification,
                        object: nil, queue: .main) { [weak self] notification in
-            self?.handleInterruption(notification)
+            guard let self = self, !self.terminationRequested else { return }
+            self.handleInterruption(notification)
         }
 
         nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification,
                        object: nil, queue: .main) { [weak self] _ in
-            self?.handleMediaServicesReset()
+            guard let self = self, !self.terminationRequested else { return }
+            self.handleMediaServicesReset()
         }
     }
     
+    private func removeObservers() {
+        guard observersRegistered else { return }
+        observersRegistered = false
+        
+        let nc = NotificationCenter.default
+        nc.removeObserver(self, name: .AVAudioEngineConfigurationChange, object: engine)
+        nc.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
+        nc.removeObserver(self, name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+    }
+    
     private func handleConfigurationChange() {
+        guard !terminationRequested else { return }
         os_log("Audio configuration changed, restarting engine", log: log, type: .info)
         startEngine()
     }
     
     private func handleInterruption(_ notification: Notification) {
+        guard !terminationRequested else { return }
+        
         guard let userInfo = notification.userInfo,
               let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
@@ -141,7 +178,7 @@ final class SilentAudioKeepAlive {
         case .ended:
             if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume) {
+                if options.contains(.shouldResume) && !terminationRequested {
                     os_log("Audio interruption ended, resuming", log: log, type: .info)
                     startEngine()
                 }
@@ -152,6 +189,7 @@ final class SilentAudioKeepAlive {
     }
     
     private func handleMediaServicesReset() {
+        guard !terminationRequested else { return }
         os_log("Media services reset, reconfiguring audio", log: log, type: .info)
         configureSession()
         configureEngine()
