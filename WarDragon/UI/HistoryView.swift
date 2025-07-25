@@ -694,43 +694,59 @@ struct StoredEncountersView: View {
     }
     
     struct FlightDataChart: View {
-       let title: String
-       let data: [Double]
-       
-       var body: some View {
-           VStack {
-               Text(title)
-                   .font(.appCaption)
-               
-               if let minValue = data.min(), let maxValue = data.max(), data.count > 1 {
-                   GeometryReader { geometry in
-                       Path { path in
-                           let step = geometry.size.width / CGFloat(data.count - 1)
-                           let difference = maxValue - minValue
-                           let scale = difference != 0 ? geometry.size.height / CGFloat(difference) : 0
-                           
-                           path.move(to: CGPoint(
-                               x: 0,
-                               y: geometry.size.height - (data[0] - minValue) * scale
-                           ))
-                           
-                           for i in 1..<data.count {
-                               path.addLine(to: CGPoint(
-                                   x: CGFloat(i) * step,
-                                   y: geometry.size.height - (data[i] - minValue) * scale
-                               ))
-                           }
-                       }
-                       .stroke(.blue, lineWidth: 2)
-                   }
-               } else {
-                   Text("Insufficient data")
-                       .font(.appCaption)
-                       .foregroundColor(.secondary)
-               }
-           }
-           .frame(width: 200, height: 100)
-       }
+        let title: String
+        let data: [Double]
+        
+        var body: some View {
+            VStack {
+                Text(title)
+                    .font(.appCaption)
+                
+                if let minValue = data.min(), let maxValue = data.max(), data.count > 1 {
+                    VStack(spacing: 4) {
+                        HStack {
+                            Text("Max: \(String(format: "%.1f", maxValue))")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        
+                        GeometryReader { geometry in
+                            Path { path in
+                                let step = geometry.size.width / CGFloat(data.count - 1)
+                                let difference = maxValue - minValue
+                                let scale = difference != 0 ? geometry.size.height / CGFloat(difference) : 0
+                                
+                                path.move(to: CGPoint(
+                                    x: 0,
+                                    y: geometry.size.height - (data[0] - minValue) * scale
+                                ))
+                                
+                                for i in 1..<data.count {
+                                    path.addLine(to: CGPoint(
+                                        x: CGFloat(i) * step,
+                                        y: geometry.size.height - (data[i] - minValue) * scale
+                                    ))
+                                }
+                            }
+                            .stroke(.blue, lineWidth: 2)
+                        }
+                        
+                        HStack {
+                            Text("Min: \(String(format: "%.1f", minValue))")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                    }
+                } else {
+                    Text("Insufficient data")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 200, height: 120)
+        }
     }
 }
 
