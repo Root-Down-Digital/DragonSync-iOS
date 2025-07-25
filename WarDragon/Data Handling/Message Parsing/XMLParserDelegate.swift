@@ -935,20 +935,16 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                         caaReg = droneId.replacingOccurrences(of: "drone-", with: "")
                     }
                 }
-            } else if trimmed.hasPrefix("Index:") {
-                let indexStr = trimmed.dropFirst(6)
-                    .replacingOccurrences(of: "]", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                index = indexStr
-            } else if trimmed.hasPrefix("Runtime:") {
-                let runtimeStr = trimmed.dropFirst(8)
-                    .replacingOccurrences(of: "]", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                runtime = runtimeStr
+            } else if trimmed.hasPrefix("UA Type:") {
+                uaType = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("Manufacturer:") {
+                manufacturer = trimmed.dropFirst(13).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Channel:") {
                 channel = Int(trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("PHY:") {
                 phy = Int(trimmed.dropFirst(4).trimmingCharacters(in: .whitespaces))
+            } else if trimmed.hasPrefix("Operator ID:") {
+                operatorID = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Access Address:") {
                 accessAddress = Int(trimmed.dropFirst(15).trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Advertisement Mode:") {
@@ -989,8 +985,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 vspeed = Double(trimmed.dropFirst(11).replacingOccurrences(of: "m/s", with: "").trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Geodetic Altitude:") {
                 alt = Double(trimmed.dropFirst(18).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
-            } else if trimmed.hasPrefix("AGL:") {
-                heightAGL = Double(trimmed.dropFirst(4).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
+            } else if trimmed.hasPrefix("Height AGL:") {
+                heightAGL = Double(trimmed.dropFirst(11).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Height Type:") {
                 heightType = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Pressure Altitude:") {
@@ -1006,9 +1002,15 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             } else if trimmed.hasPrefix("Timestamp:") {
                 timestamp = trimmed.dropFirst(10).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Runtime:") {
-                runtime = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
+                let runtimeStr = trimmed.dropFirst(8)
+                    .replacingOccurrences(of: "]", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                runtime = runtimeStr
             } else if trimmed.hasPrefix("Index:") {
-                index = trimmed.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                let indexStr = trimmed.dropFirst(6)
+                    .replacingOccurrences(of: "]", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                index = indexStr
             } else if trimmed.hasPrefix("Status:") {
                 status = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Alt Pressure:") {
@@ -1021,16 +1023,14 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 baroAcc = Int(trimmed.dropFirst(14).trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Speed Accuracy:") {
                 speedAcc = Int(trimmed.dropFirst(15).trimmingCharacters(in: .whitespaces))
+            } else if trimmed.hasPrefix("Text:") {
+                selfIDtext = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Self-ID Message: Text:") {
                 selfIDtext = trimmed.dropFirst(22).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Self-ID Message: Description:") {
                 selfIDDesc = trimmed.dropFirst(30).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("Operator ID:") {
-                operatorID = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("UA Type:") {
-                uaType = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("Manufacturer:") {
-                manufacturer = trimmed.dropFirst(13).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("SelfID Description:") {
+                selfIDDesc = trimmed.dropFirst(19).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("System:") {
                 // Since components are already split, need to reconstruct full System string first
                 let systemComponents = components.filter { $0.contains("System:") || $0.contains("Operator") || $0.contains("Home") }
@@ -1086,10 +1086,10 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         
         if manufacturer == "Unknown", let mac = mac {
             print("MAC is \(mac)")
-            let cleanMac = mac.replacingOccurrences(of: ":", with: "").uppercased()  // Normalize MAC address
+            let cleanMac = mac.replacingOccurrences(of: ":", with: "").uppercased()
             for (brand, prefixes) in macPrefixesByManufacturer {
                 for prefix in prefixes {
-                    let cleanPrefix = prefix.replacingOccurrences(of: ":", with: "").uppercased()  // Normalize prefix
+                    let cleanPrefix = prefix.replacingOccurrences(of: ":", with: "").uppercased()
                     if cleanMac.hasPrefix(cleanPrefix) {
                         manufacturer = brand
                         print("Match found! Manufacturer: \(manufacturer)")
@@ -1100,16 +1100,54 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             }
         }
         
-        print("Manufacturer: \(String(describing: manufacturer))")
-        
-        
-        return (mac, rssi, caaReg, idRegType, manufacturer, protocolVersion, description, speed, vspeed, alt, heightAGL,
-                heightType, pressureAltitude, ewDirSegment, speedMultiplier, opStatus,
-                direction, timestamp, runtime, index, status, altPressure, horizAcc,
-                vertAcc, baroAcc, speedAcc, selfIDtext, selfIDDesc, operatorID, uaType,
-                operatorLat, operatorLon, operatorAltGeo, classification,
-                channel, phy, accessAddress, advMode, deviceId, sequenceId, advAddress,
-                timestampAdv, homeLat, homeLon, trackSpeed, trackCourse)
+        return (
+            mac: mac,
+            rssi: rssi,
+            caaReg: caaReg,
+            idRegType: idRegType,
+            manufacturer: manufacturer,
+            protocolVersion: protocolVersion,
+            description: description,
+            speed: speed,
+            vspeed: vspeed,
+            alt: alt,
+            heightAGL: heightAGL,
+            heightType: heightType,
+            pressureAltitude: pressureAltitude,
+            ewDirSegment: ewDirSegment,
+            speedMultiplier: speedMultiplier,
+            opStatus: opStatus,
+            direction: direction,
+            timestamp: timestamp,
+            runtime: runtime,
+            index: index,
+            status: status,
+            altPressure: altPressure,
+            horizAcc: horizAcc,
+            vertAcc: vertAcc,
+            baroAcc: baroAcc,
+            speedAcc: speedAcc,
+            selfIDtext: selfIDtext,
+            selfIDDesc: selfIDDesc,
+            operatorID: operatorID,
+            uaType: uaType,
+            operatorLat: operatorLat,
+            operatorLon: operatorLon,
+            operatorAltGeo: operatorAltGeo,
+            classification: classification,
+            channel: channel,
+            phy: phy,
+            accessAddress: accessAddress,
+            advMode: advMode,
+            deviceId: deviceId,
+            sequenceId: sequenceId,
+            advAddress: advAddress,
+            timestampAdv: timestampAdv,
+            homeLat: homeLat,
+            homeLon: homeLon,
+            trackCourse: trackCourse,
+            trackSpeed: trackSpeed
+        )
     }
     
     

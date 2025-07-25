@@ -435,15 +435,16 @@ struct MessageRow: View {
             if message.pilotLat != "0.0" {
                 Text("Pilot Location: \(message.pilotLat), \(message.pilotLon)")
             }
-            if let operatorId = message.operator_id {
-                Text("Operator ID: \(operatorId)")
+            if let mac = message.mac, !mac.isEmpty {
+                Text("MAC: \(mac)")
+            }
+            if message.operator_id != "" {
+                Text("Operator ID: \(message.operator_id ?? "")")
             }
             if let manufacturer = message.manufacturer, manufacturer != "Unknown" {
                 Text("Manufacturer: \(manufacturer)")
             }
-            if let mac = message.mac, !mac.isEmpty {
-                Text("MAC: \(mac)")
-            }
+            
         }
         .font(.appCaption)
         .foregroundColor(.primary)
