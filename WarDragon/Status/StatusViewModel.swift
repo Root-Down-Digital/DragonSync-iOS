@@ -12,6 +12,8 @@ import SwiftUI
 class StatusViewModel: ObservableObject {
     @Published var statusMessages: [StatusMessage] = []
     @Published var lastStatusMessageReceived: Date?
+    @Published var showESP32LocationAlert = false
+    private var locationManager = LocationManager.shared
     
     // MARK: - Status Connection Logic
     
@@ -116,13 +118,40 @@ class StatusViewModel: ObservableObject {
     }
     
     func updateExistingStatusMessage(_ message: StatusMessage) {
+        let processedMessage = processStatusMessage(message)
+        
         if let index = statusMessages.firstIndex(where: { $0.uid == message.uid }) {
-            statusMessages[index] = message
+            statusMessages[index] = processedMessage
         } else {
-            addStatusMessage(message)
+            addStatusMessage(processedMessage)
         }
         lastStatusMessageReceived = Date()
     }
+    
+    private func processStatusMessage(_ message: StatusMessage) -> StatusMessage {
+        var processedMessage = message
+        
+        if needsLocationSubstitution(message) {
+            if !Settings.shared.hasShownStatusLocationPrompt {
+                DispatchQueue.main.async { self.showESP32LocationAlert = true }
+            }
+            
+            if Settings.shared.useUserLocationForStatus, let userLocation = locationManager.userLocation {
+                processedMessage.gpsData.latitude = userLocation.coordinate.latitude
+                processedMessage.gpsData.longitude = userLocation.coordinate.longitude
+                processedMessage.gpsData.altitude = userLocation.altitude
+                processedMessage.gpsData.speed = max(0, userLocation.speed)
+            }
+        }
+        return processedMessage
+    }
+
+    private func needsLocationSubstitution(_ message: StatusMessage) -> Bool {
+        let isESP32 = message.serialNumber.contains("ESP32")
+        let hasNoGPS = message.gpsData.latitude == 0.0 && message.gpsData.longitude == 0.0
+        return isESP32 || hasNoGPS
+    }
+    
 }
 
 extension StatusViewModel {

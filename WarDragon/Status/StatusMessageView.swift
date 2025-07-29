@@ -189,6 +189,19 @@ struct StatusMessageView: View {
                 MapDetailView(coordinate: message.gpsData.coordinate)
             }
         }
+        .alert("Use Your Location for Status?", isPresented: $statusViewModel.showESP32LocationAlert) {
+            Button("Allow") {
+                Settings.shared.updateStatusLocationSettings(useLocation: true)
+                LocationManager.shared.requestLocationPermission()
+                statusViewModel.showESP32LocationAlert = false
+            }
+            Button("Don't Allow") {
+                Settings.shared.updateStatusLocationSettings(useLocation: false)
+                statusViewModel.showESP32LocationAlert = false
+            }
+        } message: {
+            Text("This device doesn't have GPS coordinates. Would you like to use your device's location for status messages?")
+        }
     }
     
     // MARK: - Status Header

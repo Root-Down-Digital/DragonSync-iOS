@@ -2,17 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIBackgroundModes</key>
-	<array>
-        <string>audio</string>
-		<string>processing</string>
-		<string>remote-notification</string>
-	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.wardragon.processMessages</string>
 		<string>com.wardragon.updateStatus</string>
 		<string>com.wardragon.refreshConnections</string>
+	</array>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Location access is required to provide GPS coordinates for ESP32 device status messages when no GPS module is available.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+		<string>remote-notification</string>
+		<string>location</string>
 	</array>
 </dict>
 </plist>

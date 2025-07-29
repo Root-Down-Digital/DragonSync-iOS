@@ -252,7 +252,15 @@ class Settings: ObservableObject {
         }
     }
     @AppStorage("enableProximityWarnings") var enableProximityWarnings = true
-    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 350
+    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 150
+    @AppStorage("useUserLocationForStatus") var useUserLocationForStatus = false {
+        didSet { objectWillChange.send() }
+    }
+
+    @AppStorage("hasShownStatusLocationPrompt") var hasShownStatusLocationPrompt = false {
+        didSet { objectWillChange.send() }
+    }
+
     
     //MARK: - Connection
     
@@ -271,7 +279,12 @@ class Settings: ObservableObject {
         }
         connectionMode = mode
     }
-    
+
+    func updateStatusLocationSettings(useLocation: Bool) {
+        useUserLocationForStatus = useLocation
+        hasShownStatusLocationPrompt = true
+    }
+
     func isHostConfigurationValid() -> Bool {
         switch connectionMode {
         case .multicast:
