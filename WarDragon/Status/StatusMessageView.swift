@@ -200,7 +200,7 @@ struct StatusMessageView: View {
                 statusViewModel.showESP32LocationAlert = false
             }
         } message: {
-            Text("This device doesn't have GPS coordinates. Would you like to use your device's location for status messages?")
+            Text("This external device doesn't have GPS coordinates. Would you like to use your device's location?")
         }
     }
     
