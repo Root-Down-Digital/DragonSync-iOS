@@ -1501,16 +1501,19 @@ class CoTViewModel: ObservableObject {
         
         isListeningCot = false
         
+        // Remove notification observer
         NotificationCenter.default.removeObserver(
             self,
             name: Notification.Name("RefreshNetworkConnections"),
             object: nil
         )
         
+        // Clean up multicast if using it
         multicastConnection?.cancel()
         cotListener?.cancel()
         statusListener?.cancel()
         
+        // Chill and let it die
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self else { return }
             self.multicastConnection = nil
@@ -1525,55 +1528,11 @@ class CoTViewModel: ObservableObject {
             self.zmqHandler = nil
         }
         
+        // Stop background processing
         backgroundManager.stopBackgroundProcessing()
         
         print("All listeners stopped and connections cleaned up.")
     }
-
-    func performCleanTermination() {
-        print("CoTViewModel: Performing clean termination")
-        
-        isListeningCot = false
-        isReconnecting = false
-        
-        NotificationCenter.default.removeObserver(
-            self,
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-        NotificationCenter.default.removeObserver(
-            self,
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
-        NotificationCenter.default.removeObserver(
-            self,
-            name: Notification.Name("RefreshNetworkConnections"),
-            object: nil
-        )
-        
-        multicastConnection?.cancel()
-        cotListener?.cancel()
-        statusListener?.cancel()
-        
-        multicastConnection = nil
-        cotListener = nil
-        statusListener = nil
-        
-        if let zmqHandler = zmqHandler {
-            zmqHandler.disconnect()
-            self.zmqHandler = nil
-        }
-        
-        backgroundManager.stopBackgroundProcessing()
-        
-        backgroundMaintenanceTimer?.invalidate()
-        backgroundMaintenanceTimer = nil
-        
-        print("CoTViewModel: Clean termination completed")
-    }
-    
-    //MARK: - BG network services
     
     func verifyZMQSubscription() {
         guard Settings.shared.connectionMode == .zmq else { return }
@@ -1619,7 +1578,6 @@ class CoTViewModel: ObservableObject {
     
 }
 
-//MARK: - CoT:Multicast & ZMQ:JSON Message extension
 
 extension CoTViewModel.CoTMessage {
     

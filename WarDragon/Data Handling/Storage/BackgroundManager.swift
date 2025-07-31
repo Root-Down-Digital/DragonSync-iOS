@@ -14,7 +14,7 @@ final class BackgroundManager {
 
     static let shared = BackgroundManager()
 
-    private let queue = DispatchQueue(label: "BackgroundWork", qos: .utility)
+    private let queue = DispatchQueue(label: "BackgroundWork")
     private let groupLock = NSLock()
     private var group: NWConnectionGroup?
     private var running = false
@@ -24,9 +24,6 @@ final class BackgroundManager {
     private var hasConnection = true
     private var taskStartTime: Date?
     private let maxTaskDuration: TimeInterval = 20
-    private var terminationRequested = false
-    private var allBackgroundTasks: [UIBackgroundTaskIdentifier] = []
-    
     
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -38,17 +35,10 @@ final class BackgroundManager {
     private weak var cotViewModel: CoTViewModel?
     func configure(with viewModel: CoTViewModel) { cotViewModel = viewModel }
 
-    var isBackgroundModeActive: Bool {
-        groupLock.lock()
-        defer { groupLock.unlock() }
-        return running
-    }
-    
+    var isBackgroundModeActive: Bool { running }
     func isNetworkAvailable() -> Bool { hasConnection }
 
     func startBackgroundProcessing(useBackgroundTask: Bool = true) {
-        if terminationRequested { return }
-        
         groupLock.lock()
         if running {
             groupLock.unlock()
@@ -62,13 +52,12 @@ final class BackgroundManager {
         if useBackgroundTask {
             beginDrainTask()
             bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-                guard let self = self, !self.terminationRequested else { return }
-                self.checkAndRefreshBackgroundTask()
+                self?.checkAndRefreshBackgroundTask()
             }
         }
 
         queue.async { [weak self] in
-            guard let self = self, !self.terminationRequested else { return }
+            guard let self else { return }
             
             switch Settings.shared.connectionMode {
             case .multicast:
@@ -77,26 +66,23 @@ final class BackgroundManager {
                 ZMQHandler.shared.connectIfNeeded()
             }
 
-            while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) && !self.terminationRequested {
+            while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
                 autoreleasepool {
                     switch Settings.shared.connectionMode {
                     case .multicast:
                         break
                     case .zmq:
-                        if ZMQHandler.shared.isConnected && !self.terminationRequested {
+                        if ZMQHandler.shared.isConnected {
                             ZMQHandler.shared.drainOnce()
                         }
                     }
-                    if !self.terminationRequested {
-                        Thread.sleep(forTimeInterval: 0.05)
-                    }
+                    Thread.sleep(forTimeInterval: 0.05)
                 }
             }
 
             self.stopBackgroundProcessing()
         }
     }
-    
 
     func stopBackgroundProcessing() {
         groupLock.lock()
@@ -119,8 +105,6 @@ final class BackgroundManager {
     }
 
     private func isRunningAndBackgroundOK(useBackgroundTask: Bool) -> Bool {
-        if terminationRequested { return false }
-        
         groupLock.lock()
         let run = running
         groupLock.unlock()
@@ -128,7 +112,7 @@ final class BackgroundManager {
     }
 
     private func checkAndRefreshBackgroundTask() {
-        guard bgTaskID != .invalid, !terminationRequested else { return }
+        guard bgTaskID != .invalid else { return }
         
         let currentTime = Date()
         let timeRemaining = UIApplication.shared.backgroundTimeRemaining
@@ -141,66 +125,26 @@ final class BackgroundManager {
     }
 
     private func beginDrainTask() {
-        if terminationRequested { return }
-        
         endDrainTask()
         
         taskStartTime = Date()
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
-            guard let self = self, !self.terminationRequested else { return }
             NotificationCenter.default.post(name: NSNotification.Name("BackgroundTaskExpiring"), object: nil)
-            self.endDrainTask()
+            self?.endDrainTask()
         }
         
         guard bgTaskID != .invalid else {
             print("Failed to begin background task")
             return
         }
-        
-        allBackgroundTasks.append(bgTaskID)
     }
 
     private func endDrainTask() {
         if bgTaskID != .invalid {
             UIApplication.shared.endBackgroundTask(bgTaskID)
-            allBackgroundTasks.removeAll { $0 == bgTaskID }
             bgTaskID = .invalid
             taskStartTime = nil
         }
-    }
-    
-    func forceStopAllBackgroundTasks() {
-        print("BackgroundManager: Force stopping all background tasks")
-        
-        groupLock.lock()
-        let wasRunning = running
-        running = false
-        groupLock.unlock()
-        
-        guard wasRunning else {
-            print("BackgroundManager: Already stopped")
-            return
-        }
-        
-        bgRefreshTimer?.invalidate()
-        bgRefreshTimer = nil
-        
-        if bgTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(bgTaskID)
-            bgTaskID = .invalid
-            taskStartTime = nil
-        }
-        
-        switch Settings.shared.connectionMode {
-        case .zmq:
-            ZMQHandler.shared.disconnect()
-        case .multicast:
-            MulticastDrain.disconnect(&group, lock: groupLock)
-        }
-        
-        SilentAudioKeepAlive.shared.stop()
-        
-        print("BackgroundManager: All background tasks force stopped")
     }
 }
 
