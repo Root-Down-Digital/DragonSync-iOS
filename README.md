@@ -99,6 +99,13 @@
 
 # Installation
 
+> [!TIP]
+> New standalone method to detect WiFi RID for the app!
+
+**Flash an esp32c3 and connect to it; hosts a WebUI and ZMQ publisher.**
+
+- **No PC, no Python, just flash, connect, done. Check it out [here](https://github.com/lukeswitz/T-Halow/tree/master/firmware) or continue with a stack below:**
+
 ## 1. Pick a Stack 
 
 #### Hardware Requirements
