@@ -74,7 +74,7 @@
   <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="50%" />
 </div>
 
-> [!TIP]
+
 >  Find the live map view and other tools in the upper right menu icon of any drone message
 
 
@@ -99,13 +99,6 @@
 
 # Installation
 
-> [!TIP]
-> New standalone method to detect WiFi RID for the app!
-
-**Flash an esp32c3 and connect to it; hosts a WebUI and ZMQ publisher.**
-
-- **No PC, no Python, just flash, connect, done. Check it out [here](https://github.com/lukeswitz/T-Halow/tree/master/firmware) or continue with a stack below:**
-
 ## 1. Pick a Stack 
 
 #### Hardware Requirements
@@ -119,13 +112,20 @@
   **Configuration A: WiFi & BT Adapters**
    - WiFi adapter 
    - Sniffle-compatible BT dongle (Catsniffer, Sonoff) flashed with Sniffle FW
-   - GPS module for status & proximity estimates
 
   **Configuration B:**
   - ESP32S3/C3
-  - GPS module for status & proximity estimates
 
 - (Optional) ANTSDR E200 - for decoding Ocusync and others
+- (Optional) GPS USB module to use host instead of on-device GPS
+    
+> [!TIP]
+> **New standalone WiFi RID option for the app:**
+> - Flash an ESP32 and connect to its WiFi AP
+> - Hosts a WebUI and ZMQ publisher
+> - **No PC, no Python, just flash, connect, done.**
+>  Check it out [here](https://github.com/lukeswitz/T-Halow/tree/master/firmware) or continue with a stack.
+> - _Note this is for WiFi RID only (the most prevalant)_
 
 ## 2. Install Software & Flash Firmware
   
