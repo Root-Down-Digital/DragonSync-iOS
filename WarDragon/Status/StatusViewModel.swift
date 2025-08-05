@@ -105,7 +105,8 @@ class StatusViewModel: ObservableObject {
     // MARK: - Message Management
     
     func addStatusMessage(_ message: StatusMessage) {
-        statusMessages.append(message)
+        let processedMessage = processStatusMessage(message)
+        statusMessages.append(processedMessage)
         lastStatusMessageReceived = Date()
         
         // Keep only the last 100 messages to prevent memory issues
