@@ -964,7 +964,7 @@ class CoTViewModel: ObservableObject {
             updatedMessage.trackCourse = trackCourse
             
             // Update alert ring if zero coordinate drone
-            self.updateAlertRing(for: message)
+            self.updateAlertRing(for: updatedMessage)
             
             // Determine signal type and update sources
             let signalType = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
@@ -1215,34 +1215,47 @@ class CoTViewModel: ObservableObject {
         }
     }
     
-    private func updateAlertRing(for message: CoTMessage) {
+    public func updateAlertRing(for message: CoTMessage) {
         let latValue = Double(message.lat) ?? 0
         let lonValue = Double(message.lon) ?? 0
         
         // Check if we have a drone with zero coordinates but valid RSSI
         if (latValue == 0 && lonValue == 0) && message.rssi != nil && message.rssi != 0 {
-            // Use the latest status message for monitor location
+            
+            var monitorLocation: CLLocationCoordinate2D?
+            
+            // First try status message location
             if let monitorStatus = statusViewModel.statusMessages.last {
-                let monitorLocation = CLLocationCoordinate2D(
-                    latitude: monitorStatus.gpsData.latitude,
-                    longitude: monitorStatus.gpsData.longitude
-                )
+                let statusLat = monitorStatus.gpsData.latitude
+                let statusLon = monitorStatus.gpsData.longitude
                 
-                // Use the SignatureGenerator to calculate distance
+                // If status has valid coordinates, use them
+                if statusLat != 0.0 || statusLon != 0.0 {
+                    monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
+                }
+            }
+            
+            // If no valid status location, use user location directly
+            if monitorLocation == nil,
+               let userLocation = LocationManager.shared.userLocation {
+                monitorLocation = userLocation.coordinate
+            }
+            
+            // Create alert ring with valid monitor location
+            if let location = monitorLocation {
                 let signatureGenerator = DroneSignatureGenerator()
                 let distance = signatureGenerator.calculateDistance(Double(message.rssi!))
                 
-                // Add or update alert ring
                 if let index = alertRings.firstIndex(where: { $0.droneId == message.uid }) {
                     alertRings[index] = AlertRing(
-                        centerCoordinate: monitorLocation,
+                        centerCoordinate: location,
                         radius: distance,
                         droneId: message.uid,
                         rssi: message.rssi!
                     )
                 } else {
                     alertRings.append(AlertRing(
-                        centerCoordinate: monitorLocation,
+                        centerCoordinate: location,
                         radius: distance,
                         droneId: message.uid,
                         rssi: message.rssi!
