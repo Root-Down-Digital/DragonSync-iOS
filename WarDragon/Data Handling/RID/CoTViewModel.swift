@@ -18,7 +18,10 @@ class CoTViewModel: ObservableObject {
     @Published var randomMacIdHistory: [String: Set<String>] = [:]
     @Published var alertRings: [AlertRing] = []
     @Published private(set) var isReconnecting = false
-    private var lastProcessTime: Date = Date()
+    private var lastProcessTime = Date.distantPast
+    private var isInBackground = false
+    private var backgroundMessageBuffer: [Data] = []
+    private let backgroundBufferLock = NSLock()
     private let signatureGenerator = DroneSignatureGenerator()
     private var spectrumViewModel: SpectrumData.SpectrumViewModel?
     private var zmqHandler: ZMQHandler?
@@ -491,12 +494,14 @@ class CoTViewModel: ObservableObject {
     
     
     @objc private func handleAppDidEnterBackground() {
-        // Prepare connections for background mode
+        isInBackground = true
         prepareForBackgroundExpiry()
     }
-    
+
     @objc private func handleAppWillEnterForeground() {
-        // Resume normal connection behavior
+        isInBackground = false
+        // Process any buffered messages from background
+        processBackgroundBuffer()
         resumeFromBackground()
     }
     
@@ -738,77 +743,45 @@ class CoTViewModel: ObservableObject {
                 return
             }
             
-            // Also bail if throttled
+            // Adaptive throttling based on app state
             let now = Date()
-            if now.timeIntervalSince(self.lastProcessTime) < Settings.shared.messageProcessingIntervalSeconds {
-                // Skip this message if we're processing too fast
-                print("Processing too fast for set interval, throttling...")
+            let throttleInterval = isInBackground ?
+                Settings.shared.backgroundMessageIntervalSeconds :
+                Settings.shared.messageProcessingIntervalSeconds
+                
+            if now.timeIntervalSince(self.lastProcessTime) < throttleInterval {
+                // In background mode, buffer messages instead of dropping them
+                if isInBackground {
+                    backgroundBufferLock.lock()
+                    backgroundMessageBuffer.append(data)
+                    // Keep only last 50 messages to prevent memory issues
+                    if backgroundMessageBuffer.count > 50 {
+                        backgroundMessageBuffer.removeFirst(backgroundMessageBuffer.count - 50)
+                    }
+                    backgroundBufferLock.unlock()
+                }
                 return
             }
             self.lastProcessTime = now
             
-            
-            if let message = String(data: data, encoding: .utf8) {
-                print("DEBUG - Received data: \(message)")
-                
-                // Check for Status message first (has both status code type and remarks with CPU Usage)
-                if message.contains("<remarks>CPU Usage:") {
-                    print("Processing Status XML message")
-                    let parser = XMLParser(data: data)
-                    let cotParserDelegate = CoTMessageParser()
-                    parser.delegate = cotParserDelegate
-                    
-                    if parser.parse(), let statusMessage = cotParserDelegate.statusMessage {
-                        self.updateStatusMessage(statusMessage)
-                    } else {
-                        print("Failed to parse Status XML message.")
-                    }
-                    return
-                }
-                
-                // If not a status message, check for JSON
-                if message.trimmingCharacters(in: .whitespacesAndNewlines).starts(with: "{"),
-                   let jsonData = message.data(using: .utf8),
-                   let parsedJson = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                   parsedJson["Basic ID"] != nil {
-                    print("Processing json message: \(message)")
-                    let parser = CoTMessageParser()
-                    if let parsedMessage = parser.parseESP32Message(parsedJson) {
-                        DispatchQueue.main.async {
-                            self.updateMessage(parsedMessage)
-                        }
-                    }
-                    return
-                }
-               
-                // Finally check for regular XML drone message
-                if message.trimmingCharacters(in: .whitespacesAndNewlines).starts(with: "<") {
-                    let parser = XMLParser(data: data)
-                    let cotParserDelegate = CoTMessageParser()
-                    cotParserDelegate.originalRawString = message 
-                    parser.delegate = cotParserDelegate
-                    
-                    if parser.parse(), let cotMessage = cotParserDelegate.cotMessage {
-                        // Set message format based on Index/Runtime presence
-                        if cotMessage.index != "0" || cotMessage.runtime != "0" {
-                            self.zmqHandler?.messageFormat = .wifi
-                        } else {
-                            self.zmqHandler?.messageFormat = .bluetooth
-                        }
-                        
-                        DispatchQueue.main.async {
-                            self.updateMessage(cotMessage)
-                        }
-                    } else {
-                        print("Failed to parse Drone XML message.")
-                    }
-                    return
-                }
-                
-                print("Unrecognized message format.")
-            }
+            processIncomingMessage(data)
         }
     }
+
+    private func processBackgroundBuffer() {
+        backgroundBufferLock.lock()
+        let bufferedMessages = backgroundMessageBuffer
+        backgroundMessageBuffer.removeAll()
+        backgroundBufferLock.unlock()
+        
+        print("Processing \(bufferedMessages.count) buffered background messages")
+        for data in bufferedMessages {
+            processIncomingMessage(data)
+            // Small delay to prevent overwhelming the system
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+    
     private func updateStatusMessage(_ message: StatusViewModel.StatusMessage) {
         DispatchQueue.main.async {
             self.statusViewModel.updateExistingStatusMessage(message)
@@ -1173,46 +1146,49 @@ class CoTViewModel: ObservableObject {
     
     
     private func updateDroneSignaturesAndEncounters(_ signature: DroneSignature, message: CoTMessage) {
-        
-        // UNCOMMENT THIS BLOCK TO DISALLOW ZERO COORDINATE DETECTIONS
-        //        guard signature.position.coordinate.latitude != 0 &&
-        //              signature.position.coordinate.longitude != 0 else {
-        //            return // Skip update if coordinates are 0,0
-        //        }
-        
-        // Update drone signatures
-        if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
-            self.droneSignatures[index] = signature
-            print("Updating existing signature")
-        } else {
-            print("Added new signature")
-            self.droneSignatures.append(signature)
-        }
-        
-        //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
-        //        guard signature.position.coordinate.latitude != 0 &&
-        //              signature.position.coordinate.longitude != 0 else {
-        //            return // Skip update if coordinates are 0,0
-        //        }
-        
-        // Update encounters storage history
-        let encounters = DroneStorageManager.shared.encounters
-        let currentMonitorStatus = self.statusViewModel.statusMessages.last
-        
-        if encounters[signature.primaryId.id] != nil {
-            let existing = encounters[signature.primaryId.id]!
-            let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
-            existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
-            existing.flightPath.last?.altitude != signature.position.altitude
-            
-            if hasNewPosition {
-                DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
-                print("Updated existing encounter with new position")
-            }
-        } else {
-            DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
-            print("Added new encounter to storage")
-        }
+       
+       // UNCOMMENT THIS BLOCK TO DISALLOW ZERO COORDINATE DETECTIONS
+       //        guard signature.position.coordinate.latitude != 0 &&
+       //              signature.position.coordinate.longitude != 0 else {
+       //            return // Skip update if coordinates are 0,0
+       //        }
+       
+       // Update drone signatures
+       if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
+           self.droneSignatures[index] = signature
+           print("Updating existing signature")
+       } else {
+           print("Added new signature")
+           self.droneSignatures.append(signature)
+       }
+       
+       //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
+       //        guard signature.position.coordinate.latitude != 0 &&
+       //              signature.position.coordinate.longitude != 0 else {
+       //            return // Skip update if coordinates are 0,0
+       //        }
+       
+       // Update encounters storage history
+       let encounters = DroneStorageManager.shared.encounters
+       let currentMonitorStatus = self.statusViewModel.statusMessages.last
+       
+       // Save point even with no change, hovering...
+       DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+       
+       if encounters[signature.primaryId.id] != nil {
+           let existing = encounters[signature.primaryId.id]!
+           let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
+           existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
+           existing.flightPath.last?.altitude != signature.position.altitude
+           
+           if hasNewPosition {
+               print("Updated existing encounter with new position")
+           } else {
+               print("Updated existing encounter with same position (signature data captured)")
+           }
+       } else {
+           print("Added new encounter to storage")
+       }
     }
     
     public func updateAlertRing(for message: CoTMessage) {

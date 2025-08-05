@@ -51,7 +51,8 @@ final class BackgroundManager {
 
         if useBackgroundTask {
             beginDrainTask()
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            // Reduced refresh interval for better RID message capture
+            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.checkAndRefreshBackgroundTask()
             }
         }
@@ -76,7 +77,8 @@ final class BackgroundManager {
                             ZMQHandler.shared.drainOnce()
                         }
                     }
-                    Thread.sleep(forTimeInterval: 0.05)
+                    // Reduced sleep time for faster message processing
+                    Thread.sleep(forTimeInterval: 0.02)
                 }
             }
 
@@ -108,7 +110,11 @@ final class BackgroundManager {
         groupLock.lock()
         let run = running
         groupLock.unlock()
-        return run && (useBackgroundTask ? UIApplication.shared.backgroundTimeRemaining > 5 : true)
+        
+        let backgroundTimeOK = useBackgroundTask ?
+            UIApplication.shared.backgroundTimeRemaining > 10 : true
+            
+        return run && backgroundTimeOK
     }
 
     private func checkAndRefreshBackgroundTask() {

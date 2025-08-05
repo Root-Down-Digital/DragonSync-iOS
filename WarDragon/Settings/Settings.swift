@@ -252,7 +252,8 @@ class Settings: ObservableObject {
         }
     }
     @AppStorage("enableProximityWarnings") var enableProximityWarnings = true
-    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 150
+    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 50
+    @AppStorage("backgroundMessageInterval") var backgroundMessageInterval: Int = 100
     @AppStorage("useUserLocationForStatus") var useUserLocationForStatus = false {
         didSet { objectWillChange.send() }
     }
@@ -357,8 +358,12 @@ class Settings: ObservableObject {
         }
     }
     
-    var messageProcessingIntervalSeconds: Double {
-        Double(messageProcessingInterval) / 1000.0
+    var messageProcessingIntervalSeconds: TimeInterval {
+        return TimeInterval(messageProcessingInterval) / 1000.0
+    }
+    
+    var backgroundMessageIntervalSeconds: TimeInterval {
+        return TimeInterval(backgroundMessageInterval) / 1000.0
     }
     
     func updatePreferences(notifications: Bool, screenOn: Bool) {
