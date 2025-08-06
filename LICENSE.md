@@ -108,9 +108,9 @@ You represent and warrant that (i) you are not located in a country that is subj
 ### 9. INDEMNIFICATION
 
 You agree to indemnify, defend, and hold harmless the Company from all claims, damages, losses, and expenses arising from:
-- Your use of the Licensed Application for surveillance activities
+-  use of the Licensed Application for surveillance activities
 - Any violation of privacy rights or surveillance laws
-- Your failure to comply with applicable drone or aviation regulations
+-  failure to comply with applicable drone or aviation regulations
 - Any interference with aircraft or communication systems
 - Any unauthorized surveillance or tracking activities
 
@@ -130,15 +130,15 @@ The Company is solely responsible for providing any maintenance and support serv
 
 ### 12. THIRD PARTY BENEFICIARY
 
-You and the Company acknowledge and agree that Apple, and Apple's subsidiaries, are third party beneficiaries of this EULA, and that, upon your acceptance of the terms and conditions of this EULA, Apple will have the right to enforce this EULA against you as a third party beneficiary thereof.
+You and the Company acknowledge and agree that Apple, and Apple's subsidiaries, are third party beneficiaries of this EULA, and that, upon  acceptance of the terms and conditions of this EULA, Apple will have the right to enforce this EULA against you as a third party beneficiary thereof.
 
 ### 13. TERMINATION
 
-This EULA is effective until terminated. The Company may terminate your license immediately if you violate any terms. Upon termination, you must cease all use and delete all copies of the Licensed Application.
+This EULA is effective until terminated. The Company may terminate  license immediately if you violate any terms. Upon termination, you must cease all use and delete all copies of the Licensed Application.
 
 ### 14. GOVERNING LAW
 
-This EULA shall be governed by the laws of [YOUR STATE/JURISDICTION], without regard to conflict of law principles. Any disputes shall be resolved in the courts of [YOUR JURISDICTION].
+This EULA shall be governed by the laws of United States, without regard to conflict of law principles. Any disputes shall be resolved in the courts of United States.
 
 ### 15. EXPORT CONTROLS
 
@@ -152,6 +152,6 @@ If any provision of this EULA is found to be unenforceable, the remainder shall 
 
 ---
 
-**This EULA was last updated: August 08 2025**
+**This EULA was last updated: August 06 2025**
 
 
