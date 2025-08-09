@@ -301,25 +301,58 @@ class DroneStorageManager: ObservableObject {
                 proximityRssi: nil,
                 proximityRadius: nil
             )
-            encounter.flightPath.append(point)
-            print("Added regular flight point for \(droneId)")
-            didAddPoint = true
-        }
-        
-        if !didAddPoint {
-            print("No flight point added for this update for \(droneId). Message: \(message)")
-        }
-        
-        for source in message.signalSources {
-            if !source.mac.isEmpty {
-                encounter.macHistory.insert(source.mac)
+            
+            // Only add if it's different from last point to save memory and stuffs
+            if let lastPoint = targetEncounter.flightPath.last {
+                let distance = calculateDistance(
+                    from: CLLocationCoordinate2D(latitude: lastPoint.latitude, longitude: lastPoint.longitude),
+                    to: CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                )
+                let timeGap = newPoint.timestamp - lastPoint.timestamp
+                
+                // Add if moved more than 0.1 meters OR time gap > 2 seconds
+                if distance > 0.1 || timeGap > 2 {
+                    targetEncounter.flightPath.append(newPoint)
+                    didAddPoint = true
+                    print("Added flight point: (\(lat), \(lon)) - moved \(String(format: "%.1f", distance))m")
+                }
+            } else {
+                targetEncounter.flightPath.append(newPoint)
+                didAddPoint = true
+                print("Added first flight point: (\(lat), \(lon))")
             }
         }
         
-        if let mac = message.mac, !mac.isEmpty {
-            encounter.macHistory.insert(mac)
+        // Handle proximity/RSSI-only detections
+        if !didAddPoint && message.rssi != nil && message.rssi != 0 {
+            if let monitorStatus = monitorStatus {
+                let proximityPoint = FlightPathPoint(
+                    latitude: monitorStatus.gpsData.latitude,
+                    longitude: monitorStatus.gpsData.longitude,
+                    altitude: 0,
+                    timestamp: Date().timeIntervalSince1970,
+                    homeLatitude: Double(message.homeLat),
+                    homeLongitude: Double(message.homeLon),
+                    isProximityPoint: true,
+                    proximityRssi: Double(message.rssi!),
+                    proximityRadius: nil
+                )
+                targetEncounter.flightPath.append(proximityPoint)
+                print("Added proximity point with RSSI: \(message.rssi!)dBm")
+            }
         }
         
+        // Preserve MAC history
+        for source in message.signalSources {
+            if !source.mac.isEmpty {
+                targetEncounter.macHistory.insert(source.mac)
+            }
+        }
+        if let mac = message.mac, !mac.isEmpty {
+            targetEncounter.macHistory.insert(mac)
+        }
+        
+        // Preserve signature data
         if let sig = SignatureData(
             timestamp: Date().timeIntervalSince1970,
             rssi: Double(message.rssi ?? 0),
