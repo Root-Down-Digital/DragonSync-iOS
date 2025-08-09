@@ -255,94 +255,42 @@ class DroneStorageManager: ObservableObject {
     func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
-        
         let droneId = message.uid
         
-        if message.idType.contains("CAA"),
-           let mac = message.mac,
-           let existingId = encounters.first(where: { $0.value.metadata["mac"] == mac })?.key {
-            var encounter = encounters[existingId]!
-            encounter.lastSeen = Date()
-            encounter.metadata["caaRegistration"] = message.uid
-            encounters[existingId] = encounter
-            return
+        // Find existing encounter by MAC address first, then by ID
+        var targetEncounter: DroneEncounter
+        var targetId: String = droneId
+        
+        // Step 1: Check for existing encounter by MAC address (for related drones)
+        if let mac = message.mac, !mac.isEmpty {
+            if let existingPair = encounters.first(where: { $0.value.metadata["mac"] == mac }) {
+                targetId = existingPair.key
+                targetEncounter = existingPair.value
+                print("Found existing encounter by MAC: \(mac) -> \(targetId)")
+            } else {
+                targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
+            }
+        }
+        // Step 2: Check for existing encounter by CAA registration
+        else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
+            if let existingPair = encounters.first(where: { $0.value.metadata["caaRegistration"] == caaReg }) {
+                targetId = existingPair.key
+                targetEncounter = existingPair.value
+                print("Found existing encounter by CAA: \(caaReg) -> \(targetId)")
+            } else {
+                targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
+            }
+        }
+        // Step 3: Use direct ID lookup
+        else {
+            targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
         }
         
-        var encounter = encounters[droneId] ?? DroneEncounter(
-            id: droneId,
-            firstSeen: Date(),
-            lastSeen: Date(),
-            flightPath: [],
-            signatures: [],
-            metadata: [:],
-            macHistory: []
-        )
-        
-        encounter.metadata["course"] = message.trackCourse
-        encounter.lastSeen = Date()
         var didAddPoint = false
         
-        if ((lat == 0 && lon == 0) && message.rssi != nil && message.rssi != 0) {
-            var pointToAdd: FlightPathPoint? = nil
-            
-            if let monitor = monitorStatus, let rssiValue = message.rssi {
-                var calculatedRadius: Double = 0.0
-                
-                if rssiValue > 0 {
-                    if let ring = cotViewModel?.alertRings.first(where: { $0.droneId == message.uid }) {
-                        calculatedRadius = ring.radius
-                        print("Proximity: Using actual ring radius (\(calculatedRadius)m) for RSSI \(rssiValue)")
-                    } else {
-                        let signatureGenerator = DroneSignatureGenerator()
-                        calculatedRadius = signatureGenerator.calculateDistance(Double(rssiValue))
-                        print(" Proximity: Calculated radius (\(calculatedRadius)m) for RSSI \(rssiValue)")
-                    }
-                } else {
-                    print("Proximity: RSSI (\(rssiValue)) is zero or invalid, using default radius.")
-                    calculatedRadius = 100.0
-                }
-                
-                pointToAdd = FlightPathPoint(
-                    latitude: monitor.gpsData.latitude,
-                    longitude: monitor.gpsData.longitude,
-                    altitude: monitor.gpsData.altitude,
-                    timestamp: Date().timeIntervalSince1970,
-                    homeLatitude: nil,
-                    homeLongitude: nil,
-                    isProximityPoint: true,
-                    proximityRssi: Double(rssiValue),
-                    proximityRadius: calculatedRadius
-                )
-                print("Added proximity point using Monitor Status for \(droneId)")
-                didAddPoint = true
-            }
-            else if let currentRing = cotViewModel?.alertRings.first(where: { $0.droneId == droneId }) {
-                pointToAdd = FlightPathPoint(
-                    latitude: currentRing.centerCoordinate.latitude,
-                    longitude: currentRing.centerCoordinate.longitude,
-                    altitude: 0,
-                    timestamp: Date().timeIntervalSince1970,
-                    homeLatitude: nil,
-                    homeLongitude: nil,
-                    isProximityPoint: true,
-                    proximityRssi: Double(currentRing.rssi),
-                    proximityRadius: Double(currentRing.radius)
-                )
-                print("Added proximity point using CoTViewModel Ring for \(droneId)")
-                didAddPoint = true
-            }
-            
-            if let point = pointToAdd {
-                encounter.flightPath.append(point)
-                encounter.metadata["hasProximityPoints"] = "true"
-            } else {
-                print("Could not add proximity point for \(droneId) - No Monitor Status or CoT Ring found.")
-            }
-        }
-        
-        // Only add regular points if BOTH lat AND lon are non-zero
-        if !didAddPoint && lat != 0 && lon != 0 {
-            let point = FlightPathPoint(
+        // ALWAYS append flight points - never replace existing ones
+        if lat != 0 || lon != 0 {
+            let newPoint = FlightPathPoint(
                 latitude: lat,
                 longitude: lon,
                 altitude: Double(message.alt) ?? 0.0,
