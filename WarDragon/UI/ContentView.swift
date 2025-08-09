@@ -77,10 +77,11 @@ struct ContentView: View {
                         .listStyle(.inset)
                         .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
                             if !cotViewModel.parsedMessages.isEmpty {
-                                if let firstMessage = cotViewModel.parsedMessages.first {
-                                    let timeSince = Date().timeIntervalSince(firstMessage.lastUpdated)
-                                    //                                    print("DEBUG: Message \(firstMessage.uid) - Last updated: \(timeSince)s ago - Active: \(firstMessage.isActive) - Color: \(firstMessage.statusColor)")
-                                }
+                                // DEBUG CODE
+//                                if let firstMessage = cotViewModel.parsedMessages.first {
+//                                    let timeSince = Date().timeIntervalSince(firstMessage.lastUpdated)
+//                                    //print("DEBUG: Message \(firstMessage.uid) - Last updated: \(timeSince)s ago - Active: \(firstMessage.isActive) - Color: \(firstMessage.statusColor)")
+//                                }
                                 cotViewModel.objectWillChange.send()
                             }
                         }

@@ -1146,49 +1146,58 @@ class CoTViewModel: ObservableObject {
     
     
     private func updateDroneSignaturesAndEncounters(_ signature: DroneSignature, message: CoTMessage) {
-       
-       // UNCOMMENT THIS BLOCK TO DISALLOW ZERO COORDINATE DETECTIONS
-       //        guard signature.position.coordinate.latitude != 0 &&
-       //              signature.position.coordinate.longitude != 0 else {
-       //            return // Skip update if coordinates are 0,0
-       //        }
-       
-       // Update drone signatures
-       if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
-           self.droneSignatures[index] = signature
-           print("Updating existing signature")
-       } else {
-           print("Added new signature")
-           self.droneSignatures.append(signature)
-       }
-       
-       //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
-       //        guard signature.position.coordinate.latitude != 0 &&
-       //              signature.position.coordinate.longitude != 0 else {
-       //            return // Skip update if coordinates are 0,0
-       //        }
-       
-       // Update encounters storage history
-       let encounters = DroneStorageManager.shared.encounters
-       let currentMonitorStatus = self.statusViewModel.statusMessages.last
-       
-       // Save point even with no change, hovering...
-       DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
-       
-       if encounters[signature.primaryId.id] != nil {
-           let existing = encounters[signature.primaryId.id]!
-           let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
-           existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
-           existing.flightPath.last?.altitude != signature.position.altitude
-           
-           if hasNewPosition {
-               print("Updated existing encounter with new position")
-           } else {
-               print("Updated existing encounter with same position (signature data captured)")
-           }
-       } else {
-           print("Added new encounter to storage")
-       }
+        
+        // UNCOMMENT THIS BLOCK TO DISALLOW ZERO COORDINATE DETECTIONS
+        //        guard signature.position.coordinate.latitude != 0 &&
+        //              signature.position.coordinate.longitude != 0 else {
+        //            return // Skip update if coordinates are 0,0
+        //        }
+        
+        // Update drone signatures
+        if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
+            self.droneSignatures[index] = signature
+            print("Updating existing signature")
+        } else {
+            print("Added new signature")
+            self.droneSignatures.append(signature)
+        }
+        
+        //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
+        //        guard signature.position.coordinate.latitude != 0 &&
+        //              signature.position.coordinate.longitude != 0 else {
+        //            return // Skip update if coordinates are 0,0
+        //        }
+        
+        /// Update drone signatures
+        if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
+            self.droneSignatures[index] = signature
+            print("📍 Updated existing signature for \(signature.primaryId.id)")
+        } else {
+            print("📍 Added new signature for \(signature.primaryId.id)")
+            self.droneSignatures.append(signature)
+        }
+        
+        // Update encounters storage with enhanced history preservation
+        let encounters = DroneStorageManager.shared.encounters
+        let currentMonitorStatus = self.statusViewModel.statusMessages.last
+        
+        // Save with complete history preservation
+        DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+        
+        if encounters[signature.primaryId.id] != nil {
+            let existing = encounters[signature.primaryId.id]!
+            let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
+            existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
+            existing.flightPath.last?.altitude != signature.position.altitude
+            
+            if hasNewPosition {
+                print("📍 Added new position to existing encounter: \(signature.primaryId.id)")
+            } else {
+                print("📍 Updated existing encounter data: \(signature.primaryId.id)")
+            }
+        } else {
+            print("📍 Created new encounter: \(signature.primaryId.id)")
+        }
     }
     
     public func updateAlertRing(for message: CoTMessage) {

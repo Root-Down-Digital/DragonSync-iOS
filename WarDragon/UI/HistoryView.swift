@@ -249,7 +249,7 @@ struct StoredEncountersView: View {
                                 Spacer()
                                 
                                 if let mac = encounter.metadata["mac"],
-                                   !encounter.id.isEmpty {  // No 'let' needed here since these are non-optional
+                                   !encounter.id.isEmpty {
                                     let remoteId = encounter.id.replacingOccurrences(of: "drone-", with: "")
                                     FAALookupButton(mac: mac, remoteId: remoteId)
                                 }
@@ -274,10 +274,14 @@ struct StoredEncountersView: View {
                     .background(Color(UIColor.secondarySystemBackground))
                     .cornerRadius(12)
                     
-                    // Map and encounter stats sections
+                //MARK - View Sections
+                    
+                    // Map
                     mapSection
+                    
+                    // Encounters section
                     encounterStats
-
+                    
 //                  metadataSection // TODO metadata section
                     
                     if !encounter.macHistory.isEmpty && encounter.macHistory.count > 1 {
@@ -1124,26 +1128,3 @@ extension StoredEncountersView.EncounterDetailView {
     }
 
 }
-
-
-// TODO: add a nice metadata section
-//        private var metadataSection: some View {
-//            VStack(alignment: .leading, spacing: 8) {
-//                Text("METADATA")
-//                    .font(.appHeadline)
-//
-//                ForEach(Array(encounter.metadata.sorted(by: { $0.key < $1.key })), id: \.key) { key, value in
-//                    HStack {
-//                        Text(key)
-//                            .foregroundStyle(.secondary)
-//                        Spacer()
-//                        Text(value)
-//                    }
-//                    .font(.appCaption)
-//                }
-//            }
-//            .padding()
-//            .background(Color(UIColor.secondarySystemBackground))
-//            .cornerRadius(12)
-//        }
-
