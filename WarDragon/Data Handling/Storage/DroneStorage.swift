@@ -360,61 +360,108 @@ class DroneStorageManager: ObservableObject {
             height: Double(message.height ?? "0.0") ?? 0.0,
             mac: String(message.mac ?? "")
         ) {
-            encounter.signatures.append(sig)
-            if encounter.signatures.count > 500 {
-                encounter.signatures.removeFirst(100)
+            targetEncounter.signatures.append(sig)
+            if targetEncounter.signatures.count > 500 {
+                targetEncounter.signatures.removeFirst(100)
             }
         }
         
-        var updatedMetadata = encounter.metadata
+        //  metadata preservation -- TODO refactor all of history and signatures
+        var updatedMetadata = targetEncounter.metadata
         
+        // Basic metadata updates
         if let mac = message.mac {
             updatedMetadata["mac"] = mac
         }
-        
         if let caaReg = message.caaRegistration {
             updatedMetadata["caaRegistration"] = caaReg
         }
-        
         if let manufacturer = message.manufacturer {
             updatedMetadata["manufacturer"] = manufacturer
         }
-        
         updatedMetadata["idType"] = message.idType
         
+        // Preserve ALL pilot locations with timestamps
         if let pilotLat = Double(message.pilotLat), let pilotLon = Double(message.pilotLon),
            pilotLat != 0 && pilotLon != 0 {
+            
+            // Current pilot location (for immediate display)
             updatedMetadata["pilotLat"] = message.pilotLat
             updatedMetadata["pilotLon"] = message.pilotLon
+            
+            // Historical pilot locations (for complete history)
+            let timestamp = Date().timeIntervalSince1970
+            let pilotEntry = "\(timestamp):\(pilotLat),\(pilotLon)"
+            
+            if let existingHistory = updatedMetadata["pilotHistory"] {
+                updatedMetadata["pilotHistory"] = existingHistory + ";" + pilotEntry
+            } else {
+                updatedMetadata["pilotHistory"] = pilotEntry
+            }
+            
+            print("Saved pilot location: (\(pilotLat), \(pilotLon))")
         }
         
+        // Preserve ALL home/takeoff locations with timestamps
         if let homeLat = Double(message.homeLat), let homeLon = Double(message.homeLon),
            homeLat != 0 && homeLon != 0 {
+            
+            // Current home location (for immediate display)
             updatedMetadata["homeLat"] = message.homeLat
             updatedMetadata["homeLon"] = message.homeLon
             updatedMetadata["takeoffLat"] = message.homeLat
             updatedMetadata["takeoffLon"] = message.homeLon
+            
+            // Historical home locations (for complete history)
+            let timestamp = Date().timeIntervalSince1970
+            let homeEntry = "\(timestamp):\(homeLat),\(homeLon)"
+            
+            if let existingHistory = updatedMetadata["homeHistory"] {
+                updatedMetadata["homeHistory"] = existingHistory + ";" + homeEntry
+            } else {
+                updatedMetadata["homeHistory"] = homeEntry
+            }
+            
+            print("Saved home location: (\(homeLat), \(homeLon))")
         }
         
-        encounter.metadata = updatedMetadata
+        targetEncounter.metadata = updatedMetadata
         
-        if encounters[droneId] != nil {
-            let existingName = encounters[droneId]?.customName ?? ""
-            let existingTrust = encounters[droneId]?.trustStatus ?? .unknown
+        // Preserve custom name and trust status from existing encounter
+        if encounters[targetId] != nil {
+            let existingName = encounters[targetId]?.customName ?? ""
+            let existingTrust = encounters[targetId]?.trustStatus ?? .unknown
             
             if !existingName.isEmpty {
-                encounter.customName = existingName
+                targetEncounter.customName = existingName
             }
-            
             if existingTrust != .unknown {
-                encounter.trustStatus = existingTrust
+                targetEncounter.trustStatus = existingTrust
             }
         }
         
-        encounters[droneId] = encounter
+        // Update timestamps
+        targetEncounter.lastSeen = Date()
+        
+        // Save the encounter
+        encounters[targetId] = targetEncounter
         saveToStorage()
+        
+        print("✅ Saved encounter \(targetId) - \(targetEncounter.flightPath.count) total points")
     }
     
+    private func createNewEncounter(_ id: String, _ message: CoTViewModel.CoTMessage) -> DroneEncounter {
+        return DroneEncounter(
+            id: id,
+            firstSeen: Date(),
+            lastSeen: Date(),
+            flightPath: [],
+            signatures: [],
+            metadata: [:],
+            macHistory: []
+        )
+    }
+
     func markAsDoNotTrack(id: String) {
         // Generate all possible ID variants
         let baseId = id.replacingOccurrences(of: "drone-", with: "")
@@ -491,23 +538,56 @@ class DroneStorageManager: ObservableObject {
     
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
         if var encounter = encounters[droneId] {
+            // Update current location
             encounter.metadata["pilotLat"] = String(latitude)
             encounter.metadata["pilotLon"] = String(longitude)
+            
+            // Preserve in history
+            let timestamp = Date().timeIntervalSince1970
+            let pilotEntry = "\(timestamp):\(latitude),\(longitude)"
+            
+            if let existingHistory = encounter.metadata["pilotHistory"] {
+                encounter.metadata["pilotHistory"] = existingHistory + ";" + pilotEntry
+            } else {
+                encounter.metadata["pilotHistory"] = pilotEntry
+            }
+            
             encounters[droneId] = encounter
             saveToStorage()
+            print("Updated pilot location history for \(droneId)")
         }
     }
 
+    // Update home location function to preserve history
     func updateHomeLocation(droneId: String, latitude: Double, longitude: Double) {
         if var encounter = encounters[droneId] {
+            // Update current location
             encounter.metadata["homeLat"] = String(latitude)
             encounter.metadata["homeLon"] = String(longitude)
+            
+            // Preserve in history
+            let timestamp = Date().timeIntervalSince1970
+            let homeEntry = "\(timestamp):\(latitude),\(longitude)"
+            
+            if let existingHistory = encounter.metadata["homeHistory"] {
+                encounter.metadata["homeHistory"] = existingHistory + ";" + homeEntry
+            } else {
+                encounter.metadata["homeHistory"] = homeEntry
+            }
+            
             encounters[droneId] = encounter
             saveToStorage()
+            print("Updated home location history for \(droneId)")
         }
     }
 
-    
+    // Helper function for distance calculation
+    private func calculateDistance(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
+        let location1 = CLLocation(latitude: from.latitude, longitude: from.longitude)
+        let location2 = CLLocation(latitude: to.latitude, longitude: to.longitude)
+        return location1.distance(from: location2)
+    }
+
     
     func updateProximityPointsWithCorrectRadius() {
         for (id, encounter) in encounters {
