@@ -12,9 +12,7 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
 ## 1. Flash
 
-
-
-Options: Use a binary file hosted here or, you can build from source (to change the SSID name and password and more)
+**Options**: Use a binary file hosted here or, you can build from source (to change the SSID name and password and more)
 
 ### Flash Precompiled Binary
 
@@ -53,14 +51,22 @@ SSID: Dr4g0net
 PW: wardragon1234
 IP:  192.168.4.1
 ```
+![image](https://github.com/user-attachments/assets/e7304005-0524-453f-aeec-184c24fe7959)
+
 
 #### A. DragonSync App
    - Enter the ZMQ IP `192.168.4.1`
-   - Activate. Done.
+   - Activate
+     ![image](https://github.com/user-attachments/assets/9903ebef-0dd7-4a6e-a976-c855221eff52)
+     ![image](https://github.com/user-attachments/assets/6fe4d993-61e9-43bc-83eb-311b7df89342)
+
+     
 
 #### B. WebUI
    - Connect to the AP
    - Visit `192.168.4.1` in your browser
+     ![image](https://github.com/user-attachments/assets/93a034eb-4c81-456c-8457-f604307392f5)
+
 
 ## Notes
 - This project not affiliated with WarDragon, DragonOS etc.
