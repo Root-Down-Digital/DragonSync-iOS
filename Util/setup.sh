@@ -220,6 +220,139 @@ select_port() {
   done
 }
 
+flash_standalone_firmware() {
+  local os="$1"
+  
+  echo "====================================================="
+  echo "STANDALONE DragonSync AP Firmware Options"
+  echo "====================================================="
+  echo "These firmwares create a WiFi AP for DragonSync iOS/macOS"
+  echo "NO additional software installation required!"
+  echo ""
+  echo "1) DragonScanner ESP32-C3 (Xiao)"
+  echo "2) DragonScanner ESP32-S3 (Xiao)"
+  echo "3) DragonScanner ESP32-S3 (Lily T-Dongle)"
+  echo "4) Skip flashing"
+  
+  read -rp "Select firmware [1-4]: " fw_choice
+  
+  local fw_url
+  local fw_name
+  case "$fw_choice" in
+    1) 
+      fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/DragonScanner_espc3_xiao.bin"
+      fw_name="DragonScanner ESP32-C3 Xiao"
+      ;;
+    2) 
+      fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/DragonScanner_esps3_xiao.bin"
+      fw_name="DragonScanner ESP32-S3 Xiao"
+      ;;
+    3) 
+      fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/DragonScanner_esps3_lily_T_dongle.bin"
+      fw_name="DragonScanner ESP32-S3 Lily T-Dongle"
+      ;;
+    4) 
+      echo "Skipping firmware flash."
+      return 0
+      ;;
+    *) 
+      echo "Invalid choice, skipping firmware flash."
+      return 0
+      ;;
+  esac
+  
+  local binfile
+  binfile=$(basename "$fw_url")
+  echo "Downloading $fw_name firmware..."
+  if ! curl -sSL -o "$binfile" "$fw_url"; then
+    echo "Failed to download firmware file." >&2
+    rm -f "$binfile" 2>/dev/null
+    return 1
+  fi
+  
+  local port
+  port=$(select_port "$os")
+  if [[ -z "$port" ]]; then
+    echo "No port selected, skipping firmware flash." >&2
+    rm -f "$binfile"
+    return 1
+  fi
+  
+  echo ""
+  echo "Selected port: $port"
+  echo "Ready to flash $fw_name to $port"
+  read -rp "Proceed with flashing? [y/N]: " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Firmware flashing cancelled."
+    rm -f "$binfile"
+    return 0
+  fi
+  
+  echo "Flashing firmware..."
+  if ! esptool --chip auto --port "$port" --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 "$binfile"; then
+    echo "Failed to flash firmware." >&2
+    rm -f "$binfile"
+    return 1
+  fi
+  
+  echo "✔ Successfully flashed $fw_name"
+  rm -f "$binfile"
+  
+  # Print standalone usage instructions
+  print_standalone_usage
+  
+  return 0
+}
+
+print_standalone_usage() {
+  cat << 'EOF'
+
+===================================================
+✔ STANDALONE DragonSync Scanner Setup Complete!
+===================================================
+
+Your ESP32 is now a standalone WiFi Remote ID Scanner!
+
+HOW TO USE:
+-----------
+
+1. POWER ON YOUR ESP32
+   - Connect to USB power or battery pack
+   - The device will create a WiFi access point
+
+2. CONNECT TO THE WIFI ACCESS POINT
+   - SSID: Dr4g0net
+   - Password: wardragon1234
+   - IP Address: 192.168.4.1
+
+3. USE WITH DRAGONSYNC iOS/macOS APP:
+   - Open DragonSync app
+   - Enter ZMQ IP: 192.168.4.1
+   - Tap Activate
+   - Done! You'll see detected drones in the app
+
+4. ALTERNATIVE: WEB INTERFACE
+   - Connect to the WiFi AP
+   - Open browser to: http://192.168.4.1
+   - View detected drones in the web interface
+
+IMPORTANT NOTES:
+- No additional software needed on your computer
+- The ESP32 runs completely standalone
+- Range depends on your ESP32's WiFi antenna
+- Battery powered operation possible with power bank
+
+TROUBLESHOOTING:
+- If AP doesn't appear, wait 30 seconds after power on
+- Ensure you're within WiFi range of the ESP32
+- Try power cycling the ESP32 if issues persist
+
+For more info: https://github.com/Root-Down-Digital/DragonSync-iOS
+
+===================================================
+EOF
+}
+
 flash_firmware() {
   local os="$1"
   
@@ -228,17 +361,19 @@ flash_firmware() {
   echo "2) Dual-core BT/WiFi for Xiao ESP32-S3"
   echo "3) WiFi-only for Xiao ESP32-S3"
   echo "4) WiFi-only for Xiao ESP32-C3"
-  echo "5) Skip flashing"
+  echo "5) T-Halow Dongle Dual RID firmware"
+  echo "6) Skip flashing"
   
-  read -rp "Select firmware [1-5]: " fw_choice
+  read -rp "Select firmware [1-6]: " fw_choice
   
   local fw_url
   case "$fw_choice" in
     1) fw_url="https://github.com/alphafox02/T-Halow/raw/refs/heads/master/firmware/firmware_T-Halow_DragonOS_RID_Scanner_20241107.bin";;
-    2) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3dualcoreRIDfirmware.bin";;
-    3) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_s3_WiFi_RID_firmware.bin";;
-    4) fw_url="https://github.com/lukeswitz/T-Halow/raw/refs/heads/master/firmware/xiao_c3_WiFi_RID_firmware.bin";;
-    5) echo "Skipping firmware flash."; FLASHED_PORT=""; return 0;;
+    2) fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/xiao_s3dual_RID_firmware.bin";;
+    3) fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/xiao_s3_WiFi_RID_firmware.bin";;
+    4) fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/xiao_c3_WiFi_RID_firmware.bin";;
+    5) fw_url="https://github.com/Root-Down-Digital/DragonSync-iOS/raw/main/Util/FW/tHalowDongle_dual_RID_firmware.bin";;
+    6) echo "Skipping firmware flash."; FLASHED_PORT=""; return 0;;
     *) echo "Invalid choice, skipping firmware flash."; FLASHED_PORT=""; return 0;;
   esac
   
@@ -450,18 +585,6 @@ Need help? Check the README files in $DRONEID_DIR and $DRAGONSYNC_DIR
 EOF
 }
 
-show_main_menu() {
-  echo "WarDragon DroneID Setup Script"
-  echo "=============================="
-  echo "1) Install software only"
-  echo "2) Flash firmware only"
-  echo "3) Install software and flash firmware"
-  echo "4) Exit"
-  echo ""
-  read -rp "Select option [1-4]: " choice
-  echo "$choice"
-}
-
 install_software() {
   local os
   os=$(detect_os)
@@ -534,6 +657,48 @@ flash_firmware_only() {
   fi
 }
 
+flash_standalone_only() {
+  local os
+  os=$(detect_os)
+  
+  echo "====================================================="
+  echo "STANDALONE DragonSync AP Firmware Installer"
+  echo "====================================================="
+  echo "This will flash standalone firmware that works"
+  echo "WITHOUT any additional software installation!"
+  echo
+  echo "Detected OS: $os"
+  echo
+  
+  # Only install minimal dependencies needed for esptool
+  if ! command -v python3 &>/dev/null; then
+    echo "Python3 required for esptool. Installing..."
+    if [[ "$os" == "macos" ]]; then
+      if ! command -v brew &>/dev/null; then
+        echo "Homebrew required to install Python3. Installing..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      fi
+      brew install python3
+    else
+      echo "Please install python3 manually and re-run this script."
+      exit 1
+    fi
+  fi
+  
+  # Check if esptool is already available
+  if ! command -v esptool &>/dev/null && ! python3 -c "import esptool" 2>/dev/null; then
+    echo "Installing esptool..."
+    if command -v pipx &>/dev/null; then
+      pipx install esptool
+    else
+      python3 -m pip install --user esptool --break-system-packages 2>/dev/null || python3 -m pip install --user esptool
+    fi
+  else
+    echo "esptool already available."
+  fi
+  
+  flash_standalone_firmware "$os"
+}
 
 install_and_flash() {
   local os
@@ -698,16 +863,26 @@ EOF
   esac
 }
 
-
 main() {
+  echo "====================================================="
   echo "WarDragon DroneID Setup Script"
-  echo "=============================="
-  echo "1) Install software only"
-  echo "2) Flash firmware only" 
-  echo "3) Install software and flash firmware"
-  echo "4) Exit"
+  echo "====================================================="
   echo ""
-  read -rp "Select option [1-4]: " choice
+  echo "OPTIONS:"
+  echo "---------"
+  echo "1) Install software only"
+  echo "2) Flash standard firmware only (requires software)"
+  echo "3) Install software AND flash standard firmware"
+  echo ""
+  echo "STANDALONE OPTIONS (ESP32S3/C3):"
+  echo "------------------------------------------"
+  echo "4) Flash STANDALONE DragonSync AP firmware"
+  echo "   ➜ Creates WiFi AP for DragonSync iOS/macOS"
+  echo "   ➜ No additional software/hw installation required"
+  echo ""
+  echo "5) Exit"
+  echo ""
+  read -rp "Select option [1-5]: " choice
   
   case "$choice" in
     1)
@@ -719,9 +894,11 @@ main() {
     ;;
     3)
       install_and_flash
-      print_usage
     ;;
     4)
+      flash_standalone_only
+    ;;
+    5)
       echo "Exiting..."
       exit 0
     ;;

@@ -286,6 +286,7 @@ void StatusTaskCode(void *pvParameters) {
 void ScannerTaskCode(void *pvParameters) {
   Serial.println("Scanner task starting on core " + String(xPortGetCoreID()));
   
+  
   vTaskDelay(pdMS_TO_TICKS(5000));
   
   esp_wifi_set_promiscuous(true);
@@ -300,7 +301,7 @@ void ScannerTaskCode(void *pvParameters) {
       last_status = current_millis;
     }
     
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(100));  // delay
   }
 }
 
@@ -768,9 +769,14 @@ void ProcessorTaskCode(void *pvParameters) {
   Serial.println("Processor task starting on core " + String(xPortGetCoreID()));
   struct queued_packet qp;
   
+  
   for(;;) {
     if (xQueueReceive(droneDataQueue, &qp, pdMS_TO_TICKS(100)) == pdTRUE) {
-      // Now we can do heavy processing safely
+      // Validate packet before processing
+      if (qp.length < 24 || qp.length > 512) {
+        continue;
+      }
+      
       struct uav_data currentUAV;
       memset(&currentUAV, 0, sizeof(currentUAV));
       
@@ -792,8 +798,13 @@ void ProcessorTaskCode(void *pvParameters) {
         bool printed = false;
         
         while (offset < qp.length && !printed) {
+          if (offset + 2 >= qp.length) break;
+          
           int typ = qp.payload[offset];
           int len = qp.payload[offset + 1];
+          
+          if (offset + 2 + len > qp.length) break;
+          
           uint8_t *val = &qp.payload[offset + 2];
           
           if ((typ == 0xdd) && (val[0] == 0x6a) && (val[1] == 0x5c) && (val[2] == 0x35)) {
@@ -831,6 +842,7 @@ void setup() {
   Serial.println("{ \"message\": \"Starting ESP32 WiFi Remote ID Scanner with ZMQ Publisher\" }");
   
   dataMutex = xSemaphoreCreateMutex();
+  clientMutex = xSemaphoreCreateMutex();
   
   // Create queue for packet processing
   droneDataQueue = xQueueCreate(50, sizeof(struct queued_packet));
@@ -908,37 +920,49 @@ static void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
     return;
 
   wifi_promiscuous_pkt_t *packet = (wifi_promiscuous_pkt_t *)buffer;
-  
-  // Quick filter check
   uint8_t *payload = packet->payload;
+  
+  // Validate packet length
+  if (packet->rx_ctrl.sig_len < 24 || packet->rx_ctrl.sig_len > 512)
+    return;
+  
   static const uint8_t nan_dest[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
   
   bool is_drone_packet = false;
-  if (memcmp(nan_dest, &payload[4], 6) == 0) {
+  
+  // Check for NAN action frame
+  if (packet->rx_ctrl.sig_len >= 10 && memcmp(nan_dest, &payload[4], 6) == 0) {
     is_drone_packet = true;
-  } else if (payload[0] == 0x80) {
-    // Quick check for vendor specific elements
+  } 
+  // Check for beacon frame with vendor specific
+  else if (payload[0] == 0x80 && packet->rx_ctrl.sig_len > 38) {
     int offset = 36;
-    if (offset < packet->rx_ctrl.sig_len) {
-      int typ = payload[offset];
-      if (typ == 0xdd) {
-        is_drone_packet = true;
+    if (offset + 5 < packet->rx_ctrl.sig_len) {
+      uint8_t typ = payload[offset];
+      uint8_t len = payload[offset + 1];
+      
+      if (typ == 0xdd && len >= 3 && (offset + 2 + len) <= packet->rx_ctrl.sig_len) {
+        uint8_t *val = &payload[offset + 2];
+        // Check for known drone vendor OUIs
+        if ((val[0] == 0x6a && val[1] == 0x5c && val[2] == 0x35) ||  // French
+            (val[0] == 0x90 && val[1] == 0x3a && val[2] == 0xe6) ||  // DJI
+            (val[0] == 0xfa && val[1] == 0x0b && val[2] == 0xbc)) {  // Other
+          is_drone_packet = true;
+        }
       }
     }
   }
   
   if (is_drone_packet) {
-    // Queue the packet for processing
     struct queued_packet qp;
     memcpy(&qp.packet, packet, sizeof(wifi_promiscuous_pkt_t));
-    int copy_len = packet->rx_ctrl.sig_len;
-    if (copy_len > sizeof(qp.payload)) {
-      copy_len = sizeof(qp.payload);
-    }
-    memcpy(qp.payload, payload, copy_len);
     qp.length = packet->rx_ctrl.sig_len;
+    if (qp.length > sizeof(qp.payload)) {
+      qp.length = sizeof(qp.payload);
+    }
+    memcpy(qp.payload, payload, qp.length);
     
-    // Non-blocking send to queue
+    // Just send to queue without yield
     xQueueSendFromISR(droneDataQueue, &qp, NULL);
   }
 }
@@ -1108,72 +1132,79 @@ static void store_mac(struct uav_data *uav, uint8_t *payload) {
 }
 
 static String create_json_response(struct uav_data *UAV, int index) {
- unsigned long uptime_seconds = esp_timer_get_time() / 1000000UL;
+  // Pre-reserve space to avoid multiple allocations
+  String json;
+  json.reserve(2048);  // Reserve 2KB upfront
 
- char lat[16], lon[16], op_lat[16], op_lon[16];
- dtostrf(UAV->lat_d, 11, 6, lat);
- dtostrf(UAV->long_d, 11, 6, lon);
- dtostrf(UAV->base_lat_d, 11, 6, op_lat);
- dtostrf(UAV->base_long_d, 11, 6, op_lon);
+  unsigned long uptime_seconds = esp_timer_get_time() / 1000000UL;
 
- char mac_str[18];
- snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
-          UAV->mac[0], UAV->mac[1], UAV->mac[2],
-          UAV->mac[3], UAV->mac[4], UAV->mac[5]);
+  char lat[16], lon[16], op_lat[16], op_lon[16];
+  dtostrf(UAV->lat_d, 11, 6, lat);
+  dtostrf(UAV->long_d, 11, 6, lon);
+  dtostrf(UAV->base_lat_d, 11, 6, op_lat);
+  dtostrf(UAV->base_long_d, 11, 6, op_lon);
 
- String json = "{";
- json += "\"index\":" + String(index) + ",";
- json += "\"runtime\":" + String(uptime_seconds) + ",";
- json += "\"Basic ID\":{";
- json += "\"id\":\"" + String(strlen(UAV->uav_id) > 0 ? UAV->uav_id : "NONE") + "\",";
- json += "\"id_type\":\"Serial Number (ANSI/CTA-2063-A)\",";
- json += "\"ua_type\":" + String(UAV->ua_type) + ",";
- json += "\"MAC\":\"" + String(mac_str) + "\",";
- json += "\"RSSI\":" + String(UAV->rssi);
- json += "},";
- json += "\"Location/Vector Message\":{";
- json += "\"latitude\":" + String(lat) + ",";
- json += "\"longitude\":" + String(lon) + ",";
- json += "\"speed\":" + String(UAV->speed) + ",";
- json += "\"vert_speed\":" + String(UAV->speed_vertical) + ",";
- json += "\"geodetic_altitude\":" + String(UAV->altitude_msl) + ",";
- json += "\"height_agl\":" + String(UAV->height_agl) + ",";
- json += "\"status\":" + String(UAV->status) + ",";
- json += "\"direction\":" + String(UAV->heading) + ",";
- json += "\"alt_pressure\":" + String(UAV->altitude_pressure) + ",";
- json += "\"height_type\":" + String(UAV->height_type) + ",";
- json += "\"horiz_acc\":" + String(UAV->horizontal_accuracy) + ",";
- json += "\"vert_acc\":" + String(UAV->vertical_accuracy) + ",";
- json += "\"baro_acc\":" + String(UAV->baro_accuracy) + ",";
- json += "\"speed_acc\":" + String(UAV->speed_accuracy) + ",";
- json += "\"timestamp\":" + String(UAV->timestamp);
- json += "},";
- json += "\"Self-ID Message\":{";
- json += "\"text\":\"UAV " + String(mac_str) + " operational\",";
- json += "\"description_type\":" + String(UAV->desc_type) + ",";
- json += "\"description\":\"" + String(UAV->description) + "\"";
- json += "},";
- json += "\"System Message\":{";
- json += "\"latitude\":" + String(op_lat) + ",";
- json += "\"longitude\":" + String(op_lon) + ",";
- json += "\"operator_lat\":" + String(op_lat) + ",";
- json += "\"operator_lon\":" + String(op_lon) + ",";
- json += "\"area_count\":" + String(UAV->area_count) + ",";
- json += "\"area_radius\":" + String(UAV->area_radius) + ",";
- json += "\"area_ceiling\":" + String(UAV->area_ceiling) + ",";
- json += "\"area_floor\":" + String(UAV->area_floor) + ",";
- json += "\"operator_alt_geo\":" + String(UAV->operator_altitude_geo) + ",";
- json += "\"classification\":" + String(UAV->classification_type) + ",";
- json += "\"timestamp\":" + String(UAV->system_timestamp);
- json += "},";
- json += "\"Auth Message\":{";
- json += "\"type\":" + String(UAV->auth_type) + ",";
- json += "\"page\":" + String(UAV->auth_page) + ",";
- json += "\"length\":" + String(UAV->auth_length) + ",";
- json += "\"timestamp\":" + String(UAV->auth_timestamp) + ",";
- json += "\"data\":\"" + String(UAV->auth_data) + "\"";
- json += "}";
- json += "}";
+  char mac_str[18];
+  snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+            UAV->mac[0], UAV->mac[1], UAV->mac[2],
+            UAV->mac[3], UAV->mac[4], UAV->mac[5]);
 
- return json;
+  char buffer[256];
+
+  json = "{\"index\":";
+  json += String(index);
+  json += ",\"runtime\":";
+  json += String(uptime_seconds);
+  json += ",\"Basic ID\":{"; 
+  json += "\"id\":\"" + String(strlen(UAV->uav_id) > 0 ? UAV->uav_id : "NONE") + "\",";
+  json += "\"id_type\":\"Serial Number (ANSI/CTA-2063-A)\",";
+  json += "\"ua_type\":" + String(UAV->ua_type) + ",";
+  json += "\"MAC\":\"" + String(mac_str) + "\",";
+  json += "\"RSSI\":" + String(UAV->rssi);
+  json += "},";
+  json += "\"Location/Vector Message\":{";
+  json += "\"latitude\":" + String(lat) + ",";
+  json += "\"longitude\":" + String(lon) + ",";
+  json += "\"speed\":" + String(UAV->speed) + ",";
+  json += "\"vert_speed\":" + String(UAV->speed_vertical) + ",";
+  json += "\"geodetic_altitude\":" + String(UAV->altitude_msl) + ",";
+  json += "\"height_agl\":" + String(UAV->height_agl) + ",";
+  json += "\"status\":" + String(UAV->status) + ",";
+  json += "\"direction\":" + String(UAV->heading) + ",";
+  json += "\"alt_pressure\":" + String(UAV->altitude_pressure) + ",";
+  json += "\"height_type\":" + String(UAV->height_type) + ",";
+  json += "\"horiz_acc\":" + String(UAV->horizontal_accuracy) + ",";
+  json += "\"vert_acc\":" + String(UAV->vertical_accuracy) + ",";
+  json += "\"baro_acc\":" + String(UAV->baro_accuracy) + ",";
+  json += "\"speed_acc\":" + String(UAV->speed_accuracy) + ",";
+  json += "\"timestamp\":" + String(UAV->timestamp);
+  json += "},";
+  json += "\"Self-ID Message\":{";
+  json += "\"text\":\"UAV " + String(mac_str) + " operational\",";
+  json += "\"description_type\":" + String(UAV->desc_type) + ",";
+  json += "\"description\":\"" + String(UAV->description) + "\"";
+  json += "},";
+  json += "\"System Message\":{";
+  json += "\"latitude\":" + String(op_lat) + ",";
+  json += "\"longitude\":" + String(op_lon) + ",";
+  json += "\"operator_lat\":" + String(op_lat) + ",";
+  json += "\"operator_lon\":" + String(op_lon) + ",";
+  json += "\"area_count\":" + String(UAV->area_count) + ",";
+  json += "\"area_radius\":" + String(UAV->area_radius) + ",";
+  json += "\"area_ceiling\":" + String(UAV->area_ceiling) + ",";
+  json += "\"area_floor\":" + String(UAV->area_floor) + ",";
+  json += "\"operator_alt_geo\":" + String(UAV->operator_altitude_geo) + ",";
+  json += "\"classification\":" + String(UAV->classification_type) + ",";
+  json += "\"timestamp\":" + String(UAV->system_timestamp);
+  json += "},";
+  json += "\"Auth Message\":{";
+  json += "\"type\":" + String(UAV->auth_type) + ",";
+  json += "\"page\":" + String(UAV->auth_page) + ",";
+  json += "\"length\":" + String(UAV->auth_length) + ",";
+  json += "\"timestamp\":" + String(UAV->auth_timestamp) + ",";
+  json += "\"data\":\"" + String(UAV->auth_data) + "\"";
+  json += "}";
+  json += "}";
+
+  return json;
 }
