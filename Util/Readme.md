@@ -2,7 +2,6 @@
 
 _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
-
 - Made for [DragonSync iOS & macOS](https://github.com/Root-Down-Digital/DragonSync-iOS) as a portable alternative to the whole detection stack.
 
 ### Firmware for Currently Supported Boards
@@ -13,6 +12,8 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
 ## 1. Flash
 
+Options: Use a binary file hosted here or, you can build from source (to change the SSID name and password and more)
+
 ### Flash Precompiled Binary
 - Use default credentials, flash precompiled binary with `esptool.py`
 
@@ -20,30 +21,45 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
   esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
    ```
 
+### Build Source
+
+- Grab the codebase
+
+```bash
+git clone https://github.com/Root-Down-Digital/DragonSync-iOS.git
+```
+
+- Open the `DragonSync-iOS/Util/ESP32_RID_AP_FW` folder in VSCode
+- Change AP creds `main.cpp`:
+
+```
+const char* ap_ssid = "Dr4g0net";
+const char* ap_password = "wardragon1234";
+```
+
+- Upload using PlatformIO (can be ported to most any esp32 board)
+
 ## 2. Usage 
 
 **Default WiFi AP Credentials**
 
-SSID: `Dr4g0net`
-
-PW: `wardragon1234`
-
-IP:  `192.168.4.1`
+```
+SSID: Dr4g0net
+PW: wardragon1234
+IP:  192.168.4.1
+```
 
 #### A. DragonSync App
-   - Enter the ZMQ IP
+   - Enter the ZMQ IP `192.168.4.1`
    - Activate. Done.
-   
-   <img src="https://github.com/user-attachments/assets/059c5efa-5a8a-4af8-8401-c8fa00273610" width="60%" >
 
 #### B. WebUI
    - Connect to the AP
-   - Visit 192.168.4.1 in your browser
-   
-   <img src="https://github.com/user-attachments/assets/5823cf88-0d82-4b68-9610-1b4c0fb24432" width="80%" >
+   - Visit `192.168.4.1` in your browser
 
 ## Notes
-**This project not affiliated with WarDragon, DragonOS etc. Thanks to cemaxecuter for the original WiFi RID FW this is based on**
+- This project not affiliated with WarDragon, DragonOS etc.
+- Based on cemaxecuter WiFi [RID FW](https://github.com/alphafox02/T-Halow/tree/master/firmware)
 
 > [!IMPORTANT]
 > This is a work in progress, expect breaking changes and possible stability issues.
