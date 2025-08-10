@@ -119,44 +119,59 @@
 - (Optional) ANTSDR E200 - for decoding Ocusync and others
 - (Optional) GPS USB module to use host instead of on-device GPS
     
-> [!TIP]
-> **New standalone WiFi RID option for the app:**
-> - Flash an ESP32 and connect to its WiFi AP
-> - Hosts a WebUI and ZMQ publisher
-> - **No PC, no Python, just flash, connect, done.**
->  Check it out [here](https://github.com/lukeswitz/T-Halow/tree/master/firmware) or continue with a stack.
+> [!NOTE]
+> **New standalone WiFi RID [option](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util) can be flashed with the auto installer below:**
 > - _Note this is for WiFi RID only (the most prevalant)_
+> - No additional software/hw installation required
 
 ## 2. Install Software & Flash Firmware
   
   - ### Auto Installation
     
-    _**The below command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32. FOR MAC & LINUX ONLY, windows see [manual setup](#python-tools-setup-instructions):**_
+    _**The below unix command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32.**_
+
+    > _For Windows see [manual setup](#python-tools-setup-instructions)_
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^be41d0ca3cfb0727d1780d37c033a354d9a32f2f53d8e6433fc096ea9d5dfe04 ]] && chmod +x setup.sh && ./setup.sh
 ```
 
-Choose option 3:
+
 ```
+=====================================================
 WarDragon DroneID Setup Script
-==============================
+=====================================================
+
+OPTIONS:
+---------
 1) Install software only
-2) Flash firmware only
-3) Install software and flash firmware
-4) Exit
+2) Flash standard firmware only (requires software)
+3) Install software AND flash standard firmware
+
+STANDALONE OPTIONS (ESP32S3/C3):
+------------------------------------------
+4) Flash STANDALONE DragonSync AP firmware
+   ➜ Creates WiFi AP for DragonSync iOS/macOS
+   ➜ No additional software/hw installation required
+
+5) Exit
+
+Select option [1-5]: 
 ```
 
-  > [!NOTE]
-  > Placeholder commands are created for the different hardware options. **You need to add the flags**, use the examples below. An autostart option is given when using option 3.
-  
- **Choose skip flashing when prompted if using your own wireless adapters instead of esp32**
+  > [!IMPORTANT]
+  > Placeholder commands are created for the different hardware options. **You need to add the flags**, use the examples below.
+> 
+> - An autostart option is given after using option 3
+> 
+> - Choose 4 to use your esp32 as a **standalone** alternative to the the hardware and software stacks
+> - **Choose skip flashing when prompted if using your own wireless adapters instead of esp32**
     
   ---
   
   - ### Manual Installation
   
-    **0. Go to [software requirements](#software-requirements) and complete all steps**
+    **First, visit [software requirements](#software-requirements) and complete all steps**
     
     **1. Choose Firmware:**
     
