@@ -12,9 +12,14 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
 ## 1. Flash
 
+
+
 Options: Use a binary file hosted here or, you can build from source (to change the SSID name and password and more)
 
 ### Flash Precompiled Binary
+
+- An [auto-flasher](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main#2-install-software--flash-firmware) script is here also to make it even simpler, or continue below:
+
 - Use default credentials, flash precompiled binary with `esptool.py`
 
    ```
