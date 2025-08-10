@@ -133,9 +133,8 @@
     > _For Windows see [manual setup](#python-tools-setup-instructions)_
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Scripts/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^be41d0ca3cfb0727d1780d37c033a354d9a32f2f53d8e6433fc096ea9d5dfe04 ]] && chmod +x setup.sh && ./setup.sh
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^be41d0ca3cfb0727d1780d37c033a354d9a32f2f53d8e6433fc096ea9d5dfe04 ]] && chmod +x setup.sh && ./setup.sh
 ```
-
 
 ```
 =====================================================
