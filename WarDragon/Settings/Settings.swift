@@ -28,6 +28,8 @@ enum ConnectionMode: String, Codable, CaseIterable {
 class Settings: ObservableObject {
     static let shared = Settings()
     
+    
+    
     @AppStorage("connectionMode") var connectionMode: ConnectionMode = .multicast {
         didSet {
             objectWillChange.send()

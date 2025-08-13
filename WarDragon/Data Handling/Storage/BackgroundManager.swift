@@ -93,12 +93,9 @@ final class BackgroundManager {
         groupLock.unlock()
         guard wasRunning else { return }
 
-        switch Settings.shared.connectionMode {
-        case .zmq:
-            ZMQHandler.shared.disconnect()
-        case .multicast:
-            MulticastDrain.disconnect(&group, lock: groupLock)
-        }
+        // Fix for crash report: Don't access Settings.shared during stop - disconnect both safely
+        ZMQHandler.shared.disconnect()
+        MulticastDrain.disconnect(&group, lock: groupLock)
 
         bgRefreshTimer?.invalidate()
         bgRefreshTimer = nil
