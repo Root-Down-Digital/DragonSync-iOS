@@ -133,14 +133,10 @@
     > _For Windows see [manual setup](#python-tools-setup-instructions)_
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^be41d0ca3cfb0727d1780d37c033a354d9a32f2f53d8e6433fc096ea9d5dfe04 ]] && chmod +x setup.sh && ./setup.sh
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh && [[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f268d6f6b00400c8ce8d4491da08b94b7844b7aa0414e0dbdd92982a1ed024d6 ]] && chmod +x setup.sh && ./setup.sh
 ```
 
 ```
-=====================================================
-WarDragon DroneID Setup Script
-=====================================================
-
 OPTIONS:
 ---------
 1) Install software only
@@ -153,9 +149,11 @@ STANDALONE OPTIONS (ESP32S3/C3):
    ➜ Creates WiFi AP for DragonSync iOS/macOS
    ➜ No additional software/hw installation required
 
-5) Exit
+5) Flash STANDALONE Mesh-Enabled DragonSync AP firmware
+   ➜ Creates WiFi AP + Meshtastic mesh networking
+   ➜ Requires a connected Meshtastic board
 
-Select option [1-5]: 
+
 ```
 
   > [!IMPORTANT]
