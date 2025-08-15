@@ -1,3 +1,34 @@
+/* -*- tab-width: 2; mode: c; -*-
+ * 
+ * AP/Mesh/ZMQ FW Modded from:
+ * Scanner for WiFi direct remote id. 
+ * Handles both opendroneid and French formats.
+ * 
+ * Copyright (c) 2020-2021, Steve Jack.
+ *
+ * MIT licence.
+ * 
+ * Nov. '21     Added option to dump ODID frame to serial output.
+ * Oct. '21     Updated for opendroneid release 1.0.
+ * June '21     Added an option to log to an SD card.
+ * May '21      Fixed a bug that presented when handing packed ODID data from multiple sources. 
+ * April '21    Added support for EN 4709-002 WiFi beacons.
+ * March '21    Added BLE scan. Doesn't work very well.
+ * January '21  Added support for ANSI/CTA 2063 French IDs.
+ *
+ * Notes
+ * 
+ * May need a semaphore.
+ * 
+ */
+
+/*
+ * CEMAXECUTER 
+ * Oct. '24 Pulled repo together with missing wifi pieces and T-Halow v1 v2 compatiblity as well as Lilygo's USB esp32S3 dongle.
+ * LUKESWITZ 
+ * Aug. '25 Added standalone ZMQ publisher, AP, WebUI & Mesh integrations
+ */
+
 #if !defined(ARDUINO_ARCH_ESP32)
 #error "This program requires an ESP32"
 #endif

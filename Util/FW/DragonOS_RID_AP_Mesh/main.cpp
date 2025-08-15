@@ -1,38 +1,32 @@
 #if !defined(ARDUINO_ARCH_ESP32)
-#error "This program requires an ESP32"
+ #error "This program requires an ESP32"
 #endif
 
 #include <Arduino.h>
+#include <HardwareSerial.h>
 #include <esp_wifi.h>
-#include <esp_event.h>
 #include <nvs_flash.h>
+#include <esp_netif.h>
+#include <esp_event.h>
+#include <esp_timer.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <esp_timer.h>
 #include <WiFiServer.h>
 #include <WiFiClient.h>
-#include <HardwareSerial.h>
+#include <set>
+#include <string>
 #include "opendroneid.h"
 #include "odid_wifi.h"
 
-const int SERIAL1_RX_PIN = 4;
-const int SERIAL1_TX_PIN = 5;
+const int SERIAL1_RX_PIN = 7;
+const int SERIAL1_TX_PIN = 6;
 
-static ODID_UAS_Data UAS_data;
-static QueueHandle_t droneDataQueue;
-static TaskHandle_t ProcessorTask;
+ODID_UAS_Data UAS_data;
 
-struct queued_packet {
- wifi_promiscuous_pkt_t packet;
- uint8_t payload[512];
- int length;
-};
-
-struct uav_data
-{
+struct uav_data {
  uint8_t mac[6];
  uint8_t padding[1];
- int8_t rssi;  
+ int8_t rssi;
  char op_id[ODID_ID_SIZE + 1];
  char uav_id[ODID_ID_SIZE + 1];
  double lat_d;
@@ -76,37 +70,44 @@ const char* ap_password = "wardragon1234";
 
 WebServer server(80);
 WiFiServer telemetryServer(4224);
+WiFiServer statusServer(4225);
 
-TaskHandle_t ScannerTask;
-TaskHandle_t WebServerTask;
-TaskHandle_t ZMQTask;
-
+static QueueHandle_t droneDataQueue;
 static String latestDroneData = "";
 static int packetCount = 0;
 static unsigned long last_status = 0;
 static SemaphoreHandle_t dataMutex;
-
-std::vector<WiFiClient> telemetryClients;
 static SemaphoreHandle_t clientMutex;
 
-static esp_err_t scanner_event_handler(void *, system_event_t *);
-static void callback(void *, wifi_promiscuous_pkt_type_t);
-static void parse_odid(struct uav_data *, ODID_UAS_Data *);
-static void parse_french_id(struct uav_data *, uint8_t *);
-static void store_mac(struct uav_data *uav, uint8_t *payload);
-static String create_json_response(struct uav_data *UAV, int index);
-static void update_latest_data(struct uav_data *UAV, int index);
-static void publishToZMQClients(const String& data, bool isStatus);
-static String create_status_json();
-static void sendZMTPGreeting(WiFiClient& client);
-static void sendZMTPMessage(WiFiClient& client, const String& message);
-static void publishToZMTPClients(const String& data);
-static float getESP32Temperature();
-static String create_status_json();
-WiFiServer statusServer(4225);
-TaskHandle_t StatusTask;
+std::vector<WiFiClient> telemetryClients;
 
-void send_json_detection(struct uav_data *UAV) {
+void callback(void *, wifi_promiscuous_pkt_type_t);
+void parse_odid(uav_data *, ODID_UAS_Data *);
+void parse_french_id(struct uav_data *, uint8_t *);
+void store_mac(struct uav_data *uav, uint8_t *payload);
+
+TaskHandle_t ProcessorTask;
+TaskHandle_t WebServerTask;
+TaskHandle_t ZMQTask;
+TaskHandle_t StatusTask;
+TaskHandle_t ScannerTask;
+
+struct queued_packet {
+ wifi_promiscuous_pkt_t packet;
+ uint8_t payload[512];
+ int length;
+};
+
+void event_handler(void *ctx, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+}
+
+void initializeSerial() {
+ Serial.begin(115200);
+ Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
+ Serial.println("USB Serial (for JSON) and UART (Serial1) initialized.");
+}
+
+void send_json_fast(struct uav_data *UAV) {
  char mac_str[18];
  snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
           UAV->mac[0], UAV->mac[1], UAV->mac[2],
@@ -119,94 +120,45 @@ void send_json_detection(struct uav_data *UAV) {
 }
 
 void print_compact_message(struct uav_data *UAV) {
-  static unsigned long lastSendTime = 0;
-  const unsigned long sendInterval = 5000;
-  const int MAX_MESH_SIZE = 230;
-  
-  if (millis() - lastSendTime < sendInterval) return;
-  lastSendTime = millis();
-  
-  char mac_str[18];
-  snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
-           UAV->mac[0], UAV->mac[1], UAV->mac[2],
-           UAV->mac[3], UAV->mac[4], UAV->mac[5]);
-  
-  char mesh_msg[MAX_MESH_SIZE];
-  int msg_len = 0;
-  msg_len += snprintf(mesh_msg + msg_len, sizeof(mesh_msg) - msg_len,
-                      "Drone: %s RSSI:%d", mac_str, UAV->rssi);
-  if (msg_len < MAX_MESH_SIZE && UAV->lat_d != 0.0 && UAV->long_d != 0.0) {
-    msg_len += snprintf(mesh_msg + msg_len, sizeof(mesh_msg) - msg_len,
-                        " https://maps.google.com/?q=%.6f,%.6f",
-                        UAV->lat_d, UAV->long_d);
-  }
-  if (Serial1.availableForWrite() >= msg_len) {
-    Serial1.println(mesh_msg);
-  }
-  
-  delay(1000);
-  if (UAV->base_lat_d != 0.0 && UAV->base_long_d != 0.0) {
-    char pilot_msg[MAX_MESH_SIZE];
-    int pilot_len = snprintf(pilot_msg, sizeof(pilot_msg),
-                             "Pilot: https://maps.google.com/?q=%.6f,%.6f",
-                             UAV->base_lat_d, UAV->base_long_d);
-    if (Serial1.availableForWrite() >= pilot_len) {
-      Serial1.println(pilot_msg);
-    }
-  }
-}
-
-void ZMQTaskCode(void *pvParameters) {
- Serial.println("ZMTP task starting on core " + String(xPortGetCoreID()));
+ static unsigned long lastSendTime = 0;
+ const unsigned long sendInterval = 5000;
+ const int MAX_MESH_SIZE = 230;
  
- clientMutex = xSemaphoreCreateMutex();
+ if (millis() - lastSendTime < sendInterval) return;
+ lastSendTime = millis();
  
- telemetryServer.begin();
- telemetryServer.setNoDelay(true);
+ char mac_str[18];
+ snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+          UAV->mac[0], UAV->mac[1], UAV->mac[2],
+          UAV->mac[3], UAV->mac[4], UAV->mac[5]);
  
- Serial.println("ZMTP telemetry server started on port 4224");
+ char mesh_msg[MAX_MESH_SIZE];
+ int msg_len = 0;
+ msg_len += snprintf(mesh_msg + msg_len, sizeof(mesh_msg) - msg_len,
+                     "Drone: %s RSSI:%d", mac_str, UAV->rssi);
+ if (msg_len < MAX_MESH_SIZE && UAV->lat_d != 0.0 && UAV->long_d != 0.0) {
+   msg_len += snprintf(mesh_msg + msg_len, sizeof(mesh_msg) - msg_len,
+                       " https://maps.google.com/?q=%.6f,%.6f",
+                       UAV->lat_d, UAV->long_d);
+ }
+ if (Serial1.availableForWrite() >= msg_len) {
+   Serial1.println(mesh_msg);
+ }
  
- unsigned long lastStatusPublish = 0;
- 
- for(;;) {
-   WiFiClient newTelemetryClient = telemetryServer.available();
-   if (newTelemetryClient) {
-     Serial.println("New telemetry client connected");
-     newTelemetryClient.setNoDelay(true);
-     sendZMTPGreeting(newTelemetryClient);
-     if (xSemaphoreTake(clientMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-       telemetryClients.push_back(newTelemetryClient);
-       xSemaphoreGive(clientMutex);
-     }
+ delay(1000);
+ if (UAV->base_lat_d != 0.0 && UAV->base_long_d != 0.0) {
+   char pilot_msg[MAX_MESH_SIZE];
+   int pilot_len = snprintf(pilot_msg, sizeof(pilot_msg),
+                            "Pilot: https://maps.google.com/?q=%.6f,%.6f",
+                            UAV->base_lat_d, UAV->base_long_d);
+   if (Serial1.availableForWrite() >= pilot_len) {
+     Serial1.println(pilot_msg);
    }
-
-   if (xSemaphoreTake(clientMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-     for (auto it = telemetryClients.begin(); it != telemetryClients.end();) {
-       if (!it->connected()) {
-         it->stop();
-         it = telemetryClients.erase(it);
-         Serial.println("Telemetry client disconnected");
-       } else {
-         ++it;
-       }
-     }
-     xSemaphoreGive(clientMutex);
-   }
-   
-   unsigned long currentTime = millis();
-   if (currentTime - lastStatusPublish > 30000) {
-     String statusJson = create_status_json();
-     publishToZMTPClients(statusJson);
-     lastStatusPublish = currentTime;
-   }
-   
-   vTaskDelay(pdMS_TO_TICKS(50));
  }
 }
 
 static void sendZMTPGreeting(WiFiClient& client) {
  if (!client.connected()) return;
- 
  uint8_t greeting[2] = {0x01, 0x00};
  client.write(greeting, 2);
  client.flush();
@@ -258,6 +210,10 @@ static void publishToZMTPClients(const String& data) {
  }
 }
 
+static float getESP32Temperature() {
+ return temperatureRead();
+}
+
 static String create_status_json() {
  unsigned long uptime_seconds = esp_timer_get_time() / 1000000UL;
  float esp32_temp_c = getESP32Temperature();
@@ -284,6 +240,140 @@ static String create_status_json() {
  json += "}";
  
  return json;
+}
+
+static String create_json_response(struct uav_data *UAV, int index) {
+ String json;
+ json.reserve(2048);
+
+ unsigned long uptime_seconds = esp_timer_get_time() / 1000000UL;
+
+ char lat[16], lon[16], op_lat[16], op_lon[16];
+ dtostrf(UAV->lat_d, 11, 6, lat);
+ dtostrf(UAV->long_d, 11, 6, lon);
+ dtostrf(UAV->base_lat_d, 11, 6, op_lat);
+ dtostrf(UAV->base_long_d, 11, 6, op_lon);
+
+ char mac_str[18];
+ snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+           UAV->mac[0], UAV->mac[1], UAV->mac[2],
+           UAV->mac[3], UAV->mac[4], UAV->mac[5]);
+
+ json = "{\"index\":";
+ json += String(index);
+ json += ",\"runtime\":";
+ json += String(uptime_seconds);
+ json += ",\"Basic ID\":{"; 
+ json += "\"id\":\"" + String(strlen(UAV->uav_id) > 0 ? UAV->uav_id : "NONE") + "\",";
+ json += "\"id_type\":\"Serial Number (ANSI/CTA-2063-A)\",";
+ json += "\"ua_type\":" + String(UAV->ua_type) + ",";
+ json += "\"MAC\":\"" + String(mac_str) + "\",";
+ json += "\"RSSI\":" + String(UAV->rssi);
+ json += "},";
+ json += "\"Location/Vector Message\":{";
+ json += "\"latitude\":" + String(lat) + ",";
+ json += "\"longitude\":" + String(lon) + ",";
+ json += "\"speed\":" + String(UAV->speed) + ",";
+ json += "\"vert_speed\":" + String(UAV->speed_vertical) + ",";
+ json += "\"geodetic_altitude\":" + String(UAV->altitude_msl) + ",";
+ json += "\"height_agl\":" + String(UAV->height_agl) + ",";
+ json += "\"status\":" + String(UAV->status) + ",";
+ json += "\"direction\":" + String(UAV->heading) + ",";
+ json += "\"alt_pressure\":" + String(UAV->altitude_pressure) + ",";
+ json += "\"height_type\":" + String(UAV->height_type) + ",";
+ json += "\"horiz_acc\":" + String(UAV->horizontal_accuracy) + ",";
+ json += "\"vert_acc\":" + String(UAV->vertical_accuracy) + ",";
+ json += "\"baro_acc\":" + String(UAV->baro_accuracy) + ",";
+ json += "\"speed_acc\":" + String(UAV->speed_accuracy) + ",";
+ json += "\"timestamp\":" + String(UAV->timestamp);
+ json += "},";
+ json += "\"Self-ID Message\":{";
+ json += "\"text\":\"UAV " + String(mac_str) + " operational\",";
+ json += "\"description_type\":" + String(UAV->desc_type) + ",";
+ json += "\"description\":\"" + String(UAV->description) + "\"";
+ json += "},";
+ json += "\"System Message\":{";
+ json += "\"latitude\":" + String(op_lat) + ",";
+ json += "\"longitude\":" + String(op_lon) + ",";
+ json += "\"operator_lat\":" + String(op_lat) + ",";
+ json += "\"operator_lon\":" + String(op_lon) + ",";
+ json += "\"area_count\":" + String(UAV->area_count) + ",";
+ json += "\"area_radius\":" + String(UAV->area_radius) + ",";
+ json += "\"area_ceiling\":" + String(UAV->area_ceiling) + ",";
+ json += "\"area_floor\":" + String(UAV->area_floor) + ",";
+ json += "\"operator_alt_geo\":" + String(UAV->operator_altitude_geo) + ",";
+ json += "\"classification\":" + String(UAV->classification_type) + ",";
+ json += "\"timestamp\":" + String(UAV->system_timestamp);
+ json += "},";
+ json += "\"Auth Message\":{";
+ json += "\"type\":" + String(UAV->auth_type) + ",";
+ json += "\"page\":" + String(UAV->auth_page) + ",";
+ json += "\"length\":" + String(UAV->auth_length) + ",";
+ json += "\"timestamp\":" + String(UAV->auth_timestamp) + ",";
+ json += "\"data\":\"" + String(UAV->auth_data) + "\"";
+ json += "}";
+ json += "}";
+
+ return json;
+}
+
+static void update_latest_data(struct uav_data *UAV, int index) {
+ String jsonData = create_json_response(UAV, index);
+ 
+ if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+   latestDroneData = jsonData;
+   xSemaphoreGive(dataMutex);
+ }
+ 
+ publishToZMTPClients(jsonData);
+}
+
+void ZMQTaskCode(void *pvParameters) {
+ Serial.println("ZMTP task starting on core " + String(xPortGetCoreID()));
+ 
+ clientMutex = xSemaphoreCreateMutex();
+ 
+ telemetryServer.begin();
+ telemetryServer.setNoDelay(true);
+ 
+ Serial.println("ZMTP telemetry server started on port 4224");
+ 
+ unsigned long lastStatusPublish = 0;
+ 
+ for(;;) {
+   WiFiClient newTelemetryClient = telemetryServer.available();
+   if (newTelemetryClient) {
+     Serial.println("New telemetry client connected");
+     newTelemetryClient.setNoDelay(true);
+     sendZMTPGreeting(newTelemetryClient);
+     if (xSemaphoreTake(clientMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+       telemetryClients.push_back(newTelemetryClient);
+       xSemaphoreGive(clientMutex);
+     }
+   }
+
+   if (xSemaphoreTake(clientMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+     for (auto it = telemetryClients.begin(); it != telemetryClients.end();) {
+       if (!it->connected()) {
+         it->stop();
+         it = telemetryClients.erase(it);
+         Serial.println("Telemetry client disconnected");
+       } else {
+         ++it;
+       }
+     }
+     xSemaphoreGive(clientMutex);
+   }
+   
+   unsigned long currentTime = millis();
+   if (currentTime - lastStatusPublish > 30000) {
+     String statusJson = create_status_json();
+     publishToZMTPClients(statusJson);
+     lastStatusPublish = currentTime;
+   }
+   
+   vTaskDelay(pdMS_TO_TICKS(50));
+ }
 }
 
 void StatusTaskCode(void *pvParameters) {
@@ -658,7 +748,7 @@ String html = R"rawliteral(
                </div>
            </div>
            
-           <div class="panel">
+<div class="panel">
                <h2>System Info</h2>
                <div class="stat">
                    <div class="stat-label">Uptime:</div>
@@ -757,7 +847,7 @@ String html = R"rawliteral(
    server.send(200, "text/html", html);
  });
 
-server.on("/data", [](){
+ server.on("/data", [](){
  String response = "{";
  response += "\"packets\":" + String(packetCount) + ",";
  response += "\"uptime\":" + String(esp_timer_get_time() / 1000000UL) + ",";
@@ -804,101 +894,93 @@ server.on("/data", [](){
  }
 }
 
-void send_json_fast(struct uav_data *UAV) {
-  char mac_str[18];
-  snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
-           UAV->mac[0], UAV->mac[1], UAV->mac[2],
-           UAV->mac[3], UAV->mac[4], UAV->mac[5]);
-  char json_msg[256];
-  snprintf(json_msg, sizeof(json_msg),
-    "{\"mac\":\"%s\", \"rssi\":%d, \"drone_lat\":%.6f, \"drone_long\":%.6f, \"drone_altitude\":%d, \"pilot_lat\":%.6f, \"pilot_long\":%.6f, \"basic_id\":\"%s\"}",
-    mac_str, UAV->rssi, UAV->lat_d, UAV->long_d, UAV->altitude_msl, UAV->base_lat_d, UAV->base_long_d, UAV->uav_id);
-  Serial.println(json_msg);
-}
-
-
 void ProcessorTaskCode(void *pvParameters) {
-  Serial.println("Processor task starting on core " + String(xPortGetCoreID()));
-  struct queued_packet qp;
-  
-  Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
-  Serial.println("UART (Serial1) initialized for mesh forwarding.");
-  
-  for(;;) {
-    if (xQueueReceive(droneDataQueue, &qp, pdMS_TO_TICKS(100)) == pdTRUE) {
-      if (qp.length < 24 || qp.length > 512) {
-        continue;
-      }
-      
-      struct uav_data currentUAV;
-      memset(&currentUAV, 0, sizeof(currentUAV));
-      
-      store_mac(&currentUAV, qp.payload);
-      currentUAV.rssi = qp.packet.rx_ctrl.rssi;
-      
-      static const uint8_t nan_dest[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
-      
-      if (memcmp(nan_dest, &qp.payload[4], 6) == 0) {
-        if (odid_wifi_receive_message_pack_nan_action_frame(&UAS_data, 
-            (char *)currentUAV.op_id, qp.payload, qp.length) == 0) {
-          parse_odid(&currentUAV, &UAS_data);
-          packetCount++;
-          print_compact_message(&currentUAV);
-          send_json_detection(&currentUAV);
-          update_latest_data(&currentUAV, packetCount);
-        }
-      }
-      else if (qp.payload[0] == 0x80) {
-        int offset = 36;
-        bool printed = false;
-        
-        while (offset < qp.length && !printed) {
-          if (offset + 2 >= qp.length) break;
-          
-          int typ = qp.payload[offset];
-          int len = qp.payload[offset + 1];
-          
-          if (offset + 2 + len > qp.length) break;
-          
-          uint8_t *val = &qp.payload[offset + 2];
-          
-          if ((typ == 0xdd) && (val[0] == 0x6a) && (val[1] == 0x5c) && (val[2] == 0x35)) {
-            parse_french_id(&currentUAV, &qp.payload[offset]);
-            packetCount++;
-            print_compact_message(&currentUAV);
-            send_json_detection(&currentUAV);
-            update_latest_data(&currentUAV, packetCount);
-            printed = true;
-          }
-          else if ((typ == 0xdd) &&
-                   (((val[0] == 0x90 && val[1] == 0x3a && val[2] == 0xe6)) ||
-                    ((val[0] == 0xfa && val[1] == 0x0b && val[2] == 0xbc)))) {
-            int j = offset + 7;
-            if (j < qp.length) {
-              memset(&UAS_data, 0, sizeof(UAS_data));
-              odid_message_process_pack(&UAS_data, &qp.payload[j], qp.length - j);
-              parse_odid(&currentUAV, &UAS_data);
-              packetCount++;
-              print_compact_message(&currentUAV);
-              send_json_detection(&currentUAV);
-              update_latest_data(&currentUAV, packetCount);
-              printed = true;
-            }
-          }
-          
-          offset += len + 2;
-        }
-      }
-    }
-    
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
+ Serial.println("Processor task starting on core " + String(xPortGetCoreID()));
+ struct queued_packet qp;
+ 
+ for(;;) {
+   if (xQueueReceive(droneDataQueue, &qp, pdMS_TO_TICKS(100)) == pdTRUE) {
+     if (qp.length < 24 || qp.length > 512) {
+       continue;
+     }
+     
+     struct uav_data currentUAV;
+     memset(&currentUAV, 0, sizeof(currentUAV));
+     
+     store_mac(&currentUAV, qp.payload);
+     currentUAV.rssi = qp.packet.rx_ctrl.rssi;
+     
+     static const uint8_t nan_dest[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
+     
+     if (memcmp(nan_dest, &qp.payload[4], 6) == 0) {
+       if (odid_wifi_receive_message_pack_nan_action_frame(&UAS_data, 
+           (char *)currentUAV.op_id, qp.payload, qp.length) == 0) {
+         parse_odid(&currentUAV, &UAS_data);
+         packetCount++;
+         print_compact_message(&currentUAV);
+         send_json_fast(&currentUAV);
+         update_latest_data(&currentUAV, packetCount);
+       }
+     }
+     else if (qp.payload[0] == 0x80) {
+       int offset = 36;
+       bool printed = false;
+       
+       while (offset < qp.length && !printed) {
+         if (offset + 2 >= qp.length) break;
+         
+         int typ = qp.payload[offset];
+         int len = qp.payload[offset + 1];
+         
+         if (offset + 2 + len > qp.length) break;
+         
+         uint8_t *val = &qp.payload[offset + 2];
+         
+         if ((typ == 0xdd) && (val[0] == 0x6a) && (val[1] == 0x5c) && (val[2] == 0x35)) {
+           parse_french_id(&currentUAV, &qp.payload[offset]);
+           packetCount++;
+           print_compact_message(&currentUAV);
+           send_json_fast(&currentUAV);
+           update_latest_data(&currentUAV, packetCount);
+           printed = true;
+         }
+         else if ((typ == 0xdd) &&
+                  (((val[0] == 0x90 && val[1] == 0x3a && val[2] == 0xe6)) ||
+                   ((val[0] == 0xfa && val[1] == 0x0b && val[2] == 0xbc)))) {
+           int j = offset + 7;
+           if (j < qp.length) {
+             memset(&UAS_data, 0, sizeof(UAS_data));
+             odid_message_process_pack(&UAS_data, &qp.payload[j], qp.length - j);
+             parse_odid(&currentUAV, &UAS_data);
+             packetCount++;
+             print_compact_message(&currentUAV);
+             send_json_fast(&currentUAV);
+             update_latest_data(&currentUAV, packetCount);
+             printed = true;
+           }
+         }
+         
+         offset += len + 2;
+       }
+     }
+   }
+   
+   vTaskDelay(pdMS_TO_TICKS(1));
+ }
 }
 
 void setup() {
- Serial.begin(115200);
- delay(200);
- Serial.println("{ \"message\": \"Starting ESP32 WiFi Remote ID Scanner with ZMQ Publisher\" }");
+ setCpuFrequencyMhz(160);
+ nvs_flash_init();
+ esp_netif_init();
+ initializeSerial();
+ esp_event_loop_create_default();
+ esp_event_handler_instance_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL);
+ wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+ esp_wifi_init(&cfg);
+ esp_wifi_set_storage(WIFI_STORAGE_RAM);
+ esp_wifi_set_mode(WIFI_MODE_NULL);
+ esp_wifi_start();
  
  dataMutex = xSemaphoreCreateMutex();
  clientMutex = xSemaphoreCreateMutex();
@@ -969,288 +1051,194 @@ void setup() {
 }
 
 void loop() {
- vTaskDelay(pdMS_TO_TICKS(1000));
  delay(10);
-}
-
-static void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
- if (type != WIFI_PKT_MGMT)
-   return;
-
- wifi_promiscuous_pkt_t *packet = (wifi_promiscuous_pkt_t *)buffer;
- uint8_t *payload = packet->payload;
- 
- if (packet->rx_ctrl.sig_len < 24 || packet->rx_ctrl.sig_len > 512)
-   return;
- 
- static const uint8_t nan_dest[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
- 
- bool is_drone_packet = false;
- 
- if (packet->rx_ctrl.sig_len >= 10 && memcmp(nan_dest, &payload[4], 6) == 0) {
-   is_drone_packet = true;
- } 
- else if (payload[0] == 0x80 && packet->rx_ctrl.sig_len > 38) {
-   int offset = 36;
-   if (offset + 5 < packet->rx_ctrl.sig_len) {
-     uint8_t typ = payload[offset];
-     uint8_t len = payload[offset + 1];
-     
-     if (typ == 0xdd && len >= 3 && (offset + 2 + len) <= packet->rx_ctrl.sig_len) {
-       uint8_t *val = &payload[offset + 2];
-       if ((val[0] == 0x6a && val[1] == 0x5c && val[2] == 0x35) ||
-           (val[0] == 0x90 && val[1] == 0x3a && val[2] == 0xe6) ||
-           (val[0] == 0xfa && val[1] == 0x0b && val[2] == 0xbc)) {
-         is_drone_packet = true;
-       }
-     }
-   }
- }
- 
- if (is_drone_packet) {
-   struct queued_packet qp;
-   memcpy(&qp.packet, packet, sizeof(wifi_promiscuous_pkt_t));
-   qp.length = packet->rx_ctrl.sig_len;
-   if (qp.length > sizeof(qp.payload)) {
-     qp.length = sizeof(qp.payload);
-   }
-   memcpy(qp.payload, payload, qp.length);
-   
-   xQueueSendFromISR(droneDataQueue, &qp, NULL);
+ unsigned long current_millis = millis();
+ if ((current_millis - last_status) > 60000UL) {
+   Serial.println("{\"heartbeat\":\"Device is active and running.\"}");
+   last_status = current_millis;
  }
 }
 
-static float getESP32Temperature() {
- return temperatureRead();
+void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
+  if (type != WIFI_PKT_MGMT) return;
+  
+  wifi_promiscuous_pkt_t *packet = (wifi_promiscuous_pkt_t *)buffer;
+  uint8_t *payload = packet->payload;
+  int length = packet->rx_ctrl.sig_len;
+  
+  if (length < 24 || length > 512) return;
+  
+  bool is_drone_packet = false;
+  static const uint8_t nan_dest[6] = {0x51, 0x6f, 0x9a, 0x01, 0x00, 0x00};
+  
+  if (length >= 10 && memcmp(nan_dest, &payload[4], 6) == 0) {
+    is_drone_packet = true;
+  } 
+  else if (payload[0] == 0x80 && length > 38) {
+    int offset = 36;
+    if (offset + 5 < length) {
+      uint8_t typ = payload[offset];
+      uint8_t len = payload[offset + 1];
+      
+      if (typ == 0xdd && len >= 3 && (offset + 2 + len) <= length) {
+        uint8_t *val = &payload[offset + 2];
+        if ((val[0] == 0x6a && val[1] == 0x5c && val[2] == 0x35) ||
+            (val[0] == 0x90 && val[1] == 0x3a && val[2] == 0xe6) ||
+            (val[0] == 0xfa && val[1] == 0x0b && val[2] == 0xbc)) {
+          is_drone_packet = true;
+        }
+      }
+    }
+  }
+  
+  if (is_drone_packet) {
+    struct queued_packet qp;
+    memcpy(&qp.packet, packet, sizeof(wifi_promiscuous_pkt_t));
+    qp.length = length;
+    if (qp.length > sizeof(qp.payload)) {
+      qp.length = sizeof(qp.payload);
+    }
+    memcpy(qp.payload, payload, qp.length);
+    
+    xQueueSendFromISR(droneDataQueue, &qp, NULL);
+  }
 }
 
-static void update_latest_data(struct uav_data *UAV, int index) {
- String jsonData = create_json_response(UAV, index);
- 
- if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-   latestDroneData = jsonData;
-   xSemaphoreGive(dataMutex);
- }
- 
- publishToZMTPClients(jsonData);
+void parse_odid(uav_data *UAV, ODID_UAS_Data *UAS_data2) {
+  memset(UAV->op_id, 0, sizeof(UAV->op_id));
+  memset(UAV->uav_id, 0, sizeof(UAV->uav_id));
+  memset(UAV->description, 0, sizeof(UAV->description));
+  memset(UAV->auth_data, 0, sizeof(UAV->auth_data));
+  
+  if (UAS_data2->BasicIDValid[0]) {
+    strncpy(UAV->uav_id, (char *)UAS_data2->BasicID[0].UASID, ODID_ID_SIZE);
+  }
+  if (UAS_data2->LocationValid) {
+    UAV->lat_d = UAS_data2->Location.Latitude;
+    UAV->long_d = UAS_data2->Location.Longitude;
+    UAV->altitude_msl = (int)UAS_data2->Location.AltitudeGeo;
+    UAV->height_agl = (int)UAS_data2->Location.Height;
+    UAV->speed = (int)UAS_data2->Location.SpeedHorizontal;
+    UAV->heading = (int)UAS_data2->Location.Direction;
+    UAV->speed_vertical = (int)UAS_data2->Location.SpeedVertical;
+    UAV->altitude_pressure = (int)UAS_data2->Location.AltitudeBaro;
+    UAV->height_type = UAS_data2->Location.HeightType;
+    UAV->horizontal_accuracy = UAS_data2->Location.HorizAccuracy;
+    UAV->vertical_accuracy = UAS_data2->Location.VertAccuracy;
+    UAV->baro_accuracy = UAS_data2->Location.BaroAccuracy;
+    UAV->speed_accuracy = UAS_data2->Location.SpeedAccuracy;
+    UAV->timestamp = (int)UAS_data2->Location.TimeStamp;
+    UAV->status = UAS_data2->Location.Status;
+  }
+  if (UAS_data2->SystemValid) {
+    UAV->base_lat_d = UAS_data2->System.OperatorLatitude;
+    UAV->base_long_d = UAS_data2->System.OperatorLongitude;
+    UAV->operator_location_type = UAS_data2->System.OperatorLocationType;
+    UAV->classification_type = UAS_data2->System.ClassificationType;
+    UAV->area_count = UAS_data2->System.AreaCount;
+    UAV->area_radius = UAS_data2->System.AreaRadius;
+    UAV->area_ceiling = UAS_data2->System.AreaCeiling;
+    UAV->area_floor = UAS_data2->System.AreaFloor;
+    UAV->operator_altitude_geo = UAS_data2->System.OperatorAltitudeGeo;
+    UAV->system_timestamp = UAS_data2->System.Timestamp;
+  }
+  if (UAS_data2->AuthValid[0]) {
+    UAV->auth_type = UAS_data2->Auth[0].AuthType;
+    UAV->auth_page = UAS_data2->Auth[0].DataPage;
+    UAV->auth_length = UAS_data2->Auth[0].Length;
+    UAV->auth_timestamp = UAS_data2->Auth[0].Timestamp;
+    memcpy(UAV->auth_data, UAS_data2->Auth[0].AuthData, sizeof(UAV->auth_data) - 1);
+  }
+  if (UAS_data2->SelfIDValid) {
+    UAV->desc_type = UAS_data2->SelfID.DescType;
+    strncpy(UAV->description, UAS_data2->SelfID.Desc, ODID_STR_SIZE);
+  }
+  if (UAS_data2->OperatorIDValid) {
+    UAV->operator_id_type = UAS_data2->OperatorID.OperatorIdType;
+    strncpy(UAV->op_id, (char *)UAS_data2->OperatorID.OperatorId, ODID_ID_SIZE);
+  }
+  UAV->ua_type = UAS_data2->BasicID[0].UAType;
 }
 
-static void parse_odid(struct uav_data *UAV, ODID_UAS_Data *UAS_data2) {
- memset(UAV->op_id, 0, sizeof(UAV->op_id));
- memset(UAV->uav_id, 0, sizeof(UAV->uav_id));
- memset(UAV->description, 0, sizeof(UAV->description));
- memset(UAV->auth_data, 0, sizeof(UAV->auth_data));
+void parse_french_id(struct uav_data *UAV, uint8_t *payload) {
+  union {
+    uint32_t u32;
+    int32_t i32;
+  } uav_lat, uav_long, base_lat, base_long;
+  
+  union {
+    uint16_t u16;
+    int16_t i16;
+  } alt, height;
 
- if (UAS_data2->BasicIDValid[0]) {
-   strncpy(UAV->uav_id, (char *)UAS_data2->BasicID[0].UASID, ODID_ID_SIZE);
- }
+  int j = 9;
+  int frame_length = payload[1];
 
- if (UAS_data2->LocationValid) {
-   UAV->lat_d = UAS_data2->Location.Latitude;
-   UAV->long_d = UAS_data2->Location.Longitude;
-   UAV->altitude_msl = (int)UAS_data2->Location.AltitudeGeo;
-   UAV->height_agl = (int)UAS_data2->Location.Height;
-   UAV->speed = (int)UAS_data2->Location.SpeedHorizontal;
-   UAV->heading = (int)UAS_data2->Location.Direction;
-   UAV->speed_vertical = (int)UAS_data2->Location.SpeedVertical;
-   UAV->altitude_pressure = (int)UAS_data2->Location.AltitudeBaro;
-   UAV->height_type = UAS_data2->Location.HeightType;
-   UAV->horizontal_accuracy = UAS_data2->Location.HorizAccuracy;
-   UAV->vertical_accuracy = UAS_data2->Location.VertAccuracy;
-   UAV->baro_accuracy = UAS_data2->Location.BaroAccuracy;
-   UAV->speed_accuracy = UAS_data2->Location.SpeedAccuracy;
-   UAV->timestamp = (int)UAS_data2->Location.TimeStamp;
-   UAV->status = UAS_data2->Location.Status;
- }
+  while (j < frame_length) {
+    uint8_t t = payload[j];
+    uint8_t l = payload[j + 1];
+    uint8_t *v = &payload[j + 2];
 
- if (UAS_data2->SystemValid) {
-   UAV->base_lat_d = UAS_data2->System.OperatorLatitude;
-   UAV->base_long_d = UAS_data2->System.OperatorLongitude;
-   UAV->operator_location_type = UAS_data2->System.OperatorLocationType;
-   UAV->classification_type = UAS_data2->System.ClassificationType;
-   UAV->area_count = UAS_data2->System.AreaCount;
-   UAV->area_radius = UAS_data2->System.AreaRadius;
-   UAV->area_ceiling = UAS_data2->System.AreaCeiling;
-   UAV->area_floor = UAS_data2->System.AreaFloor;
-   UAV->operator_altitude_geo = UAS_data2->System.OperatorAltitudeGeo;
-   UAV->system_timestamp = UAS_data2->System.Timestamp;
- }
+    switch (t) {
+    case 2:
+      for (int i = 0; (i < (l - 6)) && (i < ODID_ID_SIZE); ++i) {
+        UAV->op_id[i] = (char)v[i + 6];
+      }
+      break;
+    case 3:
+      for (int i = 0; (i < l) && (i < ODID_ID_SIZE); ++i) {
+        UAV->uav_id[i] = (char)v[i];
+      }
+      break;
+    case 4:
+      for (int i = 0; i < 4; ++i) {
+        uav_lat.u32 <<= 8;
+        uav_lat.u32 |= v[i];
+      }
+      break;
+    case 5:
+      for (int i = 0; i < 4; ++i) {
+        uav_long.u32 <<= 8;
+        uav_long.u32 |= v[i];
+      }
+      break;
+    case 6:
+      alt.u16 = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
+      break;
+    case 7:
+      height.u16 = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
+      break;
+    case 8:
+      for (int i = 0; i < 4; ++i) {
+        base_lat.u32 <<= 8;
+        base_lat.u32 |= v[i];
+      }
+      break;
+    case 9:
+      for (int i = 0; i < 4; ++i) {
+        base_long.u32 <<= 8;
+        base_long.u32 |= v[i];
+      }
+      break;
+    case 10:
+      UAV->speed = v[0];
+      break;
+    case 11:
+      UAV->heading = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
+      break;
+    default:
+      break;
+    }
 
- if (UAS_data2->AuthValid[0]) {
-   UAV->auth_type = UAS_data2->Auth[0].AuthType;
-   UAV->auth_page = UAS_data2->Auth[0].DataPage;
-   UAV->auth_length = UAS_data2->Auth[0].Length;
-   UAV->auth_timestamp = UAS_data2->Auth[0].Timestamp;
-   memcpy(UAV->auth_data, UAS_data2->Auth[0].AuthData, sizeof(UAV->auth_data) - 1);
- }
+    j += l + 2;
+  }
 
- if (UAS_data2->SelfIDValid) {
-   UAV->desc_type = UAS_data2->SelfID.DescType;
-   strncpy(UAV->description, UAS_data2->SelfID.Desc, ODID_STR_SIZE);
- }
-
- if (UAS_data2->OperatorIDValid) {
-   UAV->operator_id_type = UAS_data2->OperatorID.OperatorIdType;
-   strncpy(UAV->op_id, (char *)UAS_data2->OperatorID.OperatorId, ODID_ID_SIZE);
- }
-
- UAV->ua_type = UAS_data2->BasicID[0].UAType;
+ UAV->base_lat_d = 1.0e-5 * (double)base_lat.i32;
+ UAV->base_long_d = 1.0e-5 * (double)base_long.i32;
+ UAV->altitude_msl = alt.i16;
+ UAV->height_agl = height.i16;
 }
 
-static void parse_french_id(struct uav_data *UAV, uint8_t *payload) {
- union {
-   uint32_t u32;
-   int32_t i32;
- } uav_lat, uav_long, base_lat, base_long;
- 
- union {
-   uint16_t u16;
-   int16_t i16;
- } alt, height;
-
- int j = 9;
- int frame_length = payload[1];
-
- while (j < frame_length) {
-   uint8_t t = payload[j];
-   uint8_t l = payload[j + 1];
-   uint8_t *v = &payload[j + 2];
-
-   switch (t) {
-   case 2:
-     for (int i = 0; (i < (l - 6)) && (i < ODID_ID_SIZE); ++i) {
-       UAV->op_id[i] = (char)v[i + 6];
-     }
-     break;
-   case 3:
-     for (int i = 0; (i < l) && (i < ODID_ID_SIZE); ++i) {
-       UAV->uav_id[i] = (char)v[i];
-     }
-     break;
-   case 4:
-     for (int i = 0; i < 4; ++i) {
-       uav_lat.u32 <<= 8;
-       uav_lat.u32 |= v[i];
-     }
-     break;
-   case 5:
-     for (int i = 0; i < 4; ++i) {
-       uav_long.u32 <<= 8;
-       uav_long.u32 |= v[i];
-     }
-     break;
-   case 6:
-     alt.u16 = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
-     break;
-   case 7:
-     height.u16 = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
-     break;
-   case 8:
-     for (int i = 0; i < 4; ++i) {
-       base_lat.u32 <<= 8;
-       base_lat.u32 |= v[i];
-     }
-     break;
-   case 9:
-     for (int i = 0; i < 4; ++i) {
-       base_long.u32 <<= 8;
-       base_long.u32 |= v[i];
-     }
-     break;
-   case 10:
-     UAV->speed = v[0];
-     break;
-   case 11:
-     UAV->heading = (((uint16_t)v[0]) << 8) | (uint16_t)v[1];
-     break;
-   default:
-     break;
-   }
-
-   j += l + 2;
- }
-
-UAV->base_lat_d = 1.0e-5 * (double)base_lat.i32;
-UAV->base_long_d = 1.0e-5 * (double)base_long.i32;
-UAV->altitude_msl = alt.i16;
-UAV->height_agl = height.i16;
-}
-
-static void store_mac(struct uav_data *uav, uint8_t *payload) {
-memcpy(uav->mac, &payload[10], 6);
-}
-
-static String create_json_response(struct uav_data *UAV, int index) {
- String json;
- json.reserve(2048);
-
- unsigned long uptime_seconds = esp_timer_get_time() / 1000000UL;
-
- char lat[16], lon[16], op_lat[16], op_lon[16];
- dtostrf(UAV->lat_d, 11, 6, lat);
- dtostrf(UAV->long_d, 11, 6, lon);
- dtostrf(UAV->base_lat_d, 11, 6, op_lat);
- dtostrf(UAV->base_long_d, 11, 6, op_lon);
-
- char mac_str[18];
- snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
-           UAV->mac[0], UAV->mac[1], UAV->mac[2],
-           UAV->mac[3], UAV->mac[4], UAV->mac[5]);
-
- json = "{\"index\":";
- json += String(index);
- json += ",\"runtime\":";
- json += String(uptime_seconds);
- json += ",\"Basic ID\":{"; 
- json += "\"id\":\"" + String(strlen(UAV->uav_id) > 0 ? UAV->uav_id : "NONE") + "\",";
- json += "\"id_type\":\"Serial Number (ANSI/CTA-2063-A)\",";
- json += "\"ua_type\":" + String(UAV->ua_type) + ",";
- json += "\"MAC\":\"" + String(mac_str) + "\",";
- json += "\"RSSI\":" + String(UAV->rssi);
- json += "},";
- json += "\"Location/Vector Message\":{";
- json += "\"latitude\":" + String(lat) + ",";
- json += "\"longitude\":" + String(lon) + ",";
- json += "\"speed\":" + String(UAV->speed) + ",";
- json += "\"vert_speed\":" + String(UAV->speed_vertical) + ",";
- json += "\"geodetic_altitude\":" + String(UAV->altitude_msl) + ",";
- json += "\"height_agl\":" + String(UAV->height_agl) + ",";
- json += "\"status\":" + String(UAV->status) + ",";
- json += "\"direction\":" + String(UAV->heading) + ",";
- json += "\"alt_pressure\":" + String(UAV->altitude_pressure) + ",";
- json += "\"height_type\":" + String(UAV->height_type) + ",";
- json += "\"horiz_acc\":" + String(UAV->horizontal_accuracy) + ",";
- json += "\"vert_acc\":" + String(UAV->vertical_accuracy) + ",";
- json += "\"baro_acc\":" + String(UAV->baro_accuracy) + ",";
- json += "\"speed_acc\":" + String(UAV->speed_accuracy) + ",";
- json += "\"timestamp\":" + String(UAV->timestamp);
- json += "},";
- json += "\"Self-ID Message\":{";
- json += "\"text\":\"UAV " + String(mac_str) + " operational\",";
- json += "\"description_type\":" + String(UAV->desc_type) + ",";
- json += "\"description\":\"" + String(UAV->description) + "\"";
- json += "},";
- json += "\"System Message\":{";
- json += "\"latitude\":" + String(op_lat) + ",";
- json += "\"longitude\":" + String(op_lon) + ",";
- json += "\"operator_lat\":" + String(op_lat) + ",";
- json += "\"operator_lon\":" + String(op_lon) + ",";
- json += "\"area_count\":" + String(UAV->area_count) + ",";
- json += "\"area_radius\":" + String(UAV->area_radius) + ",";
- json += "\"area_ceiling\":" + String(UAV->area_ceiling) + ",";
- json += "\"area_floor\":" + String(UAV->area_floor) + ",";
- json += "\"operator_alt_geo\":" + String(UAV->operator_altitude_geo) + ",";
- json += "\"classification\":" + String(UAV->classification_type) + ",";
- json += "\"timestamp\":" + String(UAV->system_timestamp);
- json += "},";
- json += "\"Auth Message\":{";
- json += "\"type\":" + String(UAV->auth_type) + ",";
- json += "\"page\":" + String(UAV->auth_page) + ",";
- json += "\"length\":" + String(UAV->auth_length) + ",";
- json += "\"timestamp\":" + String(UAV->auth_timestamp) + ",";
- json += "\"data\":\"" + String(UAV->auth_data) + "\"";
- json += "}";
- json += "}";
-
- return json;
+void store_mac(struct uav_data *uav, uint8_t *payload) {
+ memcpy(uav->mac, &payload[10], 6);
 }
