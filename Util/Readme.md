@@ -6,9 +6,11 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
 ### Firmware for Currently Supported Boards
    
-- `DragonScanner_espc3_xiao.bin`   
-- `DragonScanner_esps3_xiao.bin`
-- `DragonScanner_esps3_lily_T_dongle`
+- `AP/Mesh espc3_xiao`   
+- `AP/Mesh esps3_xiao`
+- `AP esps3_lily_T_dongle`
+
+  _(More options in the `FW` folder)_
 
 ## 1. Flash
 
@@ -18,7 +20,7 @@ _**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
 
 - An [auto-flasher](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main#2-install-software--flash-firmware) script is here also to make it even simpler, or continue below:
 
-- Use default credentials, flash precompiled binary with `esptool.py`
+- Use default credentials, flash precompiled binary with `esptool.py`:
 
    ```
   esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
@@ -68,10 +70,25 @@ IP:  192.168.4.1
 
       <img src="https://github.com/user-attachments/assets/93a034eb-4c81-456c-8457-f604307392f5" width="60%" />
 
+#### C. Mesh
+
+1. `CONNECT TO MESHTASTIC`:
+  - Install Meshtastic app on your phone or use the webUI
+  - Connect to your device via Bluetooth or serial
+
+2. `CONFIGURE SERIAL MODULE`:
+  - Module Settings → Serial Config
+  - Set the following settings:
+      - Enabled: ON 
+      - Mode: TEXTMSG
+      - RX GPIO: 19
+      - TX GPIO: 20  
+      - Baud Rate: 115200
+      - Timeout: 5000ms
 
 ## Notes
 - This project not affiliated with WarDragon, DragonOS etc.
-- Based on cemaxecuter WiFi [RID FW](https://github.com/alphafox02/T-Halow/tree/master/firmware
+- Based on cemaxecuter WiFi [RID FW](https://github.com/alphafox02/T-Halow/tree/master/firmware)
 
 > [!IMPORTANT]
 > This is a work in progress, expect breaking changes and possible stability issues.
