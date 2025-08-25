@@ -700,6 +700,7 @@ class CoTViewModel: ObservableObject {
         
         // Parse XML and create appropriate message
         let parser = CoTMessageParser()
+        parser.originalRawString = message // Store raw message for display
         let xmlParser = XMLParser(data: xmlData)
         xmlParser.delegate = parser
         
