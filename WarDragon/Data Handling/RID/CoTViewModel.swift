@@ -63,6 +63,7 @@ class CoTViewModel: ObservableObject {
             case bluetooth
             case wifi
             case sdr
+            case fpv
             case unknown
         }
         
@@ -200,6 +201,52 @@ class CoTViewModel: ObservableObject {
         var index: String?
         var runtime: String?
         
+        // FPV Detection Properties
+        var isFPVDetection: Bool {
+            return uid.hasPrefix("fpv-") && idType.contains("FPV")
+        }
+
+        var fpvDisplayName: String {
+            if let frequency = fpvFrequency {
+                return "FPV \(frequency)MHz"
+            }
+            return "FPV Signal"
+        }
+
+        var fpvSignalStrengthFormatted: String {
+            if let rssi = fpvRSSI {
+                return String(format: "%.1f dBm", rssi)
+            }
+            return "Unknown"
+        }
+
+        var fpvFrequencyFormatted: String {
+            if let frequency = fpvFrequency {
+                return "\(frequency) MHz"
+            }
+            return "Unknown"
+        }
+
+        // FPV detection RSSI
+        var statusColor: Color {
+            if isFPVDetection {
+                guard let rssi = fpvRSSI else { return .gray }
+                if rssi > 1500 { return .green }
+                if rssi > 1490 { return .yellow }
+                return .red
+            }
+            
+            // Drone RSSI colors
+            let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdated)
+            if timeSinceLastUpdate < 10 {
+                return rssi != nil && rssi! > -60 ? .green : rssi != nil && rssi! > -80 ? .yellow : .red
+            } else if timeSinceLastUpdate < 30 {
+                return .yellow
+            } else {
+                return .gray
+            }
+        }
+        
         //CoT Message Tracks
         var trackCourse: String?
         var trackSpeed: String?
@@ -218,6 +265,14 @@ class CoTViewModel: ObservableObject {
             return nil
         }
         
+        // FPV vars
+        var fpvTimestamp: String?
+        var fpvSource: String?
+        var fpvFrequency: Int?
+        var fpvBandwidth: String?
+        var fpvRSSI: Double?
+        
+        // Helper
         public var headingDeg: Double {
             // First try to get heading from track data
             if let rawTrack = trackSpeed,
@@ -265,16 +320,7 @@ class CoTViewModel: ObservableObject {
             return Date() > staleDate
         }
         
-        var statusColor: Color {
-            let timeSince = Date().timeIntervalSince(lastUpdated)
-            if timeSince <= 30 {
-                return .green  // Recently active (within 30s)
-            } else if timeSince <= 300 {
-                return .yellow // Warning state (30s - 5min)
-            } else {
-                return .red    // Stale (over 5min)
-            }
-        }
+ 
         
         var statusDescription: String {
             // Using times from CoT 4.0 Spec, Section 2.2.2.2
@@ -385,7 +431,12 @@ class CoTViewModel: ObservableObject {
             lhs.op_status == rhs.op_status &&
             lhs.height_type == rhs.height_type &&
             lhs.direction == rhs.direction &&
-            lhs.geodetic_altitude == rhs.geodetic_altitude
+            lhs.geodetic_altitude == rhs.geodetic_altitude &&
+            lhs.fpvRSSI == rhs.fpvRSSI &&
+            lhs.fpvSource == rhs.fpvSource &&
+            lhs.fpvBandwidth == rhs.fpvBandwidth &&
+            lhs.fpvFrequency == rhs.fpvFrequency &&
+            lhs.fpvTimestamp == rhs.fpvTimestamp
         }
         
         var coordinate: CLLocationCoordinate2D? {
@@ -422,7 +473,11 @@ class CoTViewModel: ObservableObject {
                 "op_status": self.op_status ?? "",
                 "ew_dir_segment": self.ew_dir_segment ?? "",
                 "direction": self.direction ?? "",
-                "geodetic_altitude": self.geodetic_altitude ?? 0.0
+                "geodetic_altitude": self.geodetic_altitude ?? 0.0,
+                "fpvTimestamp": self.fpvTimestamp ?? Date().timeIntervalSince1970,
+                "detection_source": self.fpvSource ?? "",
+                "bandwidth": self.fpvBandwidth ?? 0.0,
+                "signal_strength": self.fpvRSSI ?? 0.0
             ]
             
             // Include optional fields if they exist
@@ -670,9 +725,273 @@ class CoTViewModel: ObservableObject {
         return false
     }
     
+    // MARK: - FPV Message Processing
+    private func processFPVMessage(_ data: Data?) {
+        guard let data = data,
+              let fpvmessage = String(data: data, encoding: .utf8) else { return }
+        
+        print("DEBUG: FPV message data: \(fpvmessage)")
+        
+        do {
+            // Try to parse as JSON array first (FPV Detection format)
+            if fpvmessage.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
+                if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    for messageObj in jsonArray {
+                        if let fpvDetection = messageObj["FPV Detection"] as? [String: Any] {
+                            let fpvMessage = createFPVDetectionMessage(fpvDetection)
+                            DispatchQueue.main.async {
+                                self.updateMessage(fpvMessage)
+                                // Send FPV webhook notification
+                                if Settings.shared.webhooksEnabled {
+                                    self.sendFPVWebhookNotification(for: fpvMessage)
+                                }
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+            
+            // Try to parse as single JSON object (AUX_ADV_IND format)
+            if let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if jsonObject["FPV Detection"] != nil {
+                    // Handle single FPV Detection object
+                    if let fpvDetection = jsonObject["FPV Detection"] as? [String: Any] {
+                        let fpvMessage = createFPVDetectionMessage(fpvDetection)
+                        DispatchQueue.main.async {
+                            self.updateMessage(fpvMessage)
+                            if Settings.shared.webhooksEnabled {
+                                self.sendFPVWebhookNotification(for: fpvMessage)
+                            }
+                        }
+                    }
+                } else if jsonObject["AUX_ADV_IND"] != nil {
+                    // Handle AUX_ADV_IND update message
+                    let fpvMessage = createAuxAdvIndMessage(jsonObject)
+                    DispatchQueue.main.async {
+                        self.updateFPVMessage(fpvMessage)
+                    }
+                }
+            }
+        } catch {
+            print("DEBUG: Failed to parse FPV JSON: \(error)")
+        }
+    }
+
+    private func createFPVDetectionMessage(_ fpvData: [String: Any]) -> CoTMessage {
+        let timestamp = fpvData["timestamp"] as? String ?? ""
+        let manufacturer = fpvData["manufacturer"] as? String ?? ""
+        let deviceType = fpvData["device_type"] as? String ?? ""
+        let frequency = fpvData["frequency"] as? Int ?? 0
+        let bandwidth = fpvData["bandwidth"] as? String ?? ""
+        let signalStrength = fpvData["signal_strength"] as? Double ?? 0.0
+        let detectionSource = fpvData["detection_source"] as? String ?? ""
+        
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        // Create the CoTMessage with FPV data
+        var message = CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R", // FPV detection type
+            lat: "0.0", // FPV doesn't have location
+            lon: "0.0",
+            homeLat: "0.0",
+            homeLon: "0.0",
+            speed: "0.0",
+            vspeed: "0.0",
+            alt: "0.0",
+            pilotLat: "0.0",
+            pilotLon: "0.0",
+            description: "FPV Detection: \(deviceType)",
+            selfIDText: "FPV \(frequency)MHz \(bandwidth)",
+            uaType: .helicopter, // Default for FPV
+            idType: "FPV Detection",
+            rawMessage: fpvData
+        )
+        
+        // Populate FPV-specific variables
+        message.fpvTimestamp = timestamp
+        message.fpvSource = detectionSource
+        message.fpvFrequency = frequency
+        message.fpvBandwidth = bandwidth
+        message.fpvRSSI = signalStrength
+        message.manufacturer = manufacturer
+        message.rssi = Int(signalStrength)
+        
+        // Set additional metadata
+        message.time = formatCurrentTimeForCoT()
+        message.start = message.time
+        message.stale = formatStaleTimeForCoT()
+        
+        // Add signal source for FPV
+        if let source = SignalSource(mac: detectionSource, rssi: Int(signalStrength), type: .sdr, timestamp: Date()) {
+            message.signalSources = [source]
+        }
+        
+        return message
+    }
+
+    private func createAuxAdvIndMessage(_ jsonObject: [String: Any]) -> CoTMessage {
+        guard let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
+              let aext = jsonObject["aext"] as? [String: Any] else {
+            // Return a default message if parsing fails
+            return CoTMessage(
+                uid: "fpv-unknown",
+                type: "a-f-A-M-F-R",
+                lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+                speed: "0.0", vspeed: "0.0", alt: "0.0",
+                pilotLat: "0.0", pilotLon: "0.0",
+                description: "Invalid FPV Update",
+                selfIDText: "", uaType: .helicopter, idType: "FPV Update",
+                rawMessage: jsonObject
+            )
+        }
+        
+        let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
+        let timestamp = auxAdvInd["time"] as? String ?? ""
+        let aa = auxAdvInd["aa"] as? Int ?? 0
+        let advA = aext["AdvA"] as? String ?? ""
+        let frequency = jsonObject["frequency"] as? Int ?? 0
+        
+        let detectionSource = advA.replacingOccurrences(of: " random", with: "")
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        // Create the CoTMessage with AUX_ADV_IND data
+        var message = CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R", // FPV update type
+            lat: "0.0", // FPV doesn't have location
+            lon: "0.0",
+            homeLat: "0.0",
+            homeLon: "0.0",
+            speed: "0.0",
+            vspeed: "0.0",
+            alt: "0.0",
+            pilotLat: "0.0",
+            pilotLon: "0.0",
+            description: "FPV Update: \(detectionSource)",
+            selfIDText: "FPV \(frequency)MHz Update",
+            uaType: .helicopter,
+            idType: "FPV Update",
+            rawMessage: jsonObject
+        )
+        
+        // Populate FPV-specific variables
+        message.fpvTimestamp = timestamp
+        message.fpvSource = detectionSource
+        message.fpvFrequency = frequency
+        message.fpvBandwidth = "" // Not provided in AUX_ADV_IND
+        message.fpvRSSI = rssi
+        message.rssi = Int(rssi)
+        
+        // Set BT/WiFi transmission fields from the AUX_ADV_IND message
+        message.aa = aa
+        message.adv_mac = advA
+        
+        // Set additional metadata
+        message.time = formatCurrentTimeForCoT()
+        message.start = message.time
+        message.stale = formatStaleTimeForCoT()
+        message.how = "m-g"
+        message.ce = "35.0"
+        message.le = "999999"
+        message.hae = "0.0"
+        
+        // Add signal source for FPV update
+        if let source = SignalSource(mac: detectionSource, rssi: Int(rssi), type: .sdr, timestamp: Date()) {
+            message.signalSources = [source]
+        }
+        
+        return message
+    }
+
+    private func updateFPVMessage(_ updatedMessage: CoTMessage) {
+        // Find existing FPV message and update it
+        if let existingIndex = self.parsedMessages.firstIndex(where: { $0.uid == updatedMessage.uid }) {
+            var existingMessage = self.parsedMessages[existingIndex]
+            
+            // Update FPV-specific fields
+            existingMessage.fpvRSSI = updatedMessage.fpvRSSI
+            existingMessage.rssi = updatedMessage.rssi
+            existingMessage.fpvTimestamp = updatedMessage.fpvTimestamp
+            existingMessage.lastUpdated = Date()
+            
+            // Update signal sources
+            if let newSource = updatedMessage.signalSources.first {
+                existingMessage.signalSources = [newSource]
+            }
+            
+            self.parsedMessages[existingIndex] = existingMessage
+            self.objectWillChange.send()
+        }
+    }
+
+    private func formatCurrentTimeForCoT() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: Date())
+    }
+
+    private func formatStaleTimeForCoT() -> String {
+        let staleTime = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: staleTime)
+    }
+
+    // MARK: - FPV Webhook Integration
+    private func sendFPVWebhookNotification(for message: CoTMessage) {
+        let event: WebhookEvent = .fpvSignal
+        
+        // Build data payload
+        var data: [String: Any] = [
+            "uid": message.uid,
+            "timestamp": message.fpvTimestamp ?? Date().timeIntervalSince1970
+        ]
+        
+        if let frequency = message.fpvFrequency {
+            data["frequency"] = frequency
+        }
+        
+        if let rssi = message.fpvRSSI {
+            data["signal_strength"] = rssi
+        }
+        
+        if let bandwidth = message.fpvBandwidth {
+            data["bandwidth"] = bandwidth
+        }
+        
+        // Build metadata
+        var metadata: [String: String] = [:]
+        
+        if let source = message.fpvSource {
+            metadata["detection_source"] = source
+        }
+        
+        if let manufacturer = message.manufacturer {
+            metadata["manufacturer"] = manufacturer
+        }
+        
+        metadata["detection_type"] = "FPV"
+        metadata["id_type"] = message.idType
+        
+        // Send webhook
+        WebhookManager.shared.sendWebhook(event: event, data: data, metadata: metadata)
+    }
+    
     private func processIncomingMessage(_ data: Data) {
         guard let message = String(data: data, encoding: .utf8) else { return }
         
+        print("DEBUG: incoming message: \(message)")
+        
+        if message.trimmingCharacters(in: .whitespacesAndNewlines).contains("frequency") {
+            print("DEBUG: FPV message detected")
+            let fpvJSON = message.data(using: .utf8)
+            processFPVMessage(fpvJSON)
+        }
+
         // Incoming Message (JSON/XML) - Determine type and convert if needed
         let xmlData: Data
         if message.trimmingCharacters(in: .whitespacesAndNewlines).starts(with: "{") {
@@ -1087,12 +1406,30 @@ class CoTViewModel: ObservableObject {
             return mac.range(of: "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", options: .regularExpression) != nil
         }
         
+        // Early return for FPV to prevent SDR processing
+        if message.fpvSource != nil {
+            let newSourceType = SignalSource.SignalType.fpv
+            
+            // Create FPV source
+            guard let newSource = SignalSource(
+                mac: "", // FPV typically doesn't have MAC
+                rssi: rssi ?? 0,
+                type: newSourceType,
+                timestamp: Date()
+            ) else { return newSourceType }
+            
+            // Update message with only FPV source
+            updatedMessage.signalSources = [newSource]
+            return newSourceType
+        }
+        
         var checkedMac = mac ?? ""
         if !isValidMAC(checkedMac) {
             checkedMac = ""
         }
         
         let newSourceType: SignalSource.SignalType
+        
         if !isValidMAC(checkedMac) {
             newSourceType = .sdr
         } else if message.index != nil && message.index != "" && message.index != "0" ||
@@ -1127,9 +1464,9 @@ class CoTViewModel: ObservableObject {
         // Only add the new source if it's valid
         sourcesByType[newSourceType] = newSource
         
-        // Sort by precedence: WiFi > BT > SDR
+        // Sort by precedence: WiFi > BT > SDR > FPV
         updatedMessage.signalSources = Array(sourcesByType.values).sorted { s1, s2 in
-            let typeOrder: [SignalSource.SignalType] = [.wifi, .bluetooth, .sdr]
+            let typeOrder: [SignalSource.SignalType] = [.wifi, .bluetooth, .sdr, .fpv]
             if let index1 = typeOrder.firstIndex(of: s1.type),
                let index2 = typeOrder.firstIndex(of: s2.type) {
                 return index1 < index2
@@ -1137,7 +1474,7 @@ class CoTViewModel: ObservableObject {
             return false
         }
         
-        //        print("DEBUG: Signal sources after filtering by type: \(updatedMessage.signalSources.count)")
+        print("DEBUG: Signal sources after filtering by type: \(updatedMessage.signalSources.count)")
         for source in updatedMessage.signalSources {
             print("  - \(source.type): \(source.mac) @ \(source.rssi)dBm")
         }

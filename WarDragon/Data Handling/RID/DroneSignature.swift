@@ -307,6 +307,7 @@ public struct DroneSignature: Hashable {
             case ble = "BT4/5 DroneID"
             case wifi = "WiFi DroneID"
             case esp32 = "ESP32 DroneID"
+            case fpv = "FPV Camera"
             case unknown = "Unknown"
         }
         
@@ -321,6 +322,7 @@ public struct DroneSignature: Hashable {
             case bt45 = "BT4/5 DroneID"
             case wifi = "WiFi DroneID"
             case esp32 = "ESP32 DroneID"
+            case fpv = "FPV Camera"
         }
         
         public init(transmissionType: TransmissionType,

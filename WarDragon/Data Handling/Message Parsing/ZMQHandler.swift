@@ -48,6 +48,7 @@ class ZMQHandler: ObservableObject {
         case wifi
         case bluetooth
         case sdr
+        case fpv
     }
     
     private let manufacturerMapping: [Int: String] = [
@@ -345,7 +346,7 @@ class ZMQHandler: ObservableObject {
     }
     
     //MARK: - Message Parsing & Conversion
-    // TODO: Implement these
+
     var status = ""
     var direction = 0.0
     var alt_pressure = 0.0
@@ -360,7 +361,9 @@ class ZMQHandler: ObservableObject {
         print("Raw Message: ", jsonString)
         
         // Determine format from raw string and runtime/index presence
-        if jsonString.contains("\"index\":") &&
+        if jsonString.contains("fpv") {
+            messageFormat = .fpv
+        } else if jsonString.contains("\"index\":") &&
             jsonString.contains("\"runtime\":") &&
             (jsonString.range(of: "\"index\":\\s*([1-9]\\d*)", options: .regularExpression) != nil) &&
             (jsonString.range(of: "\"runtime\":\\s*([1-9]\\d*)", options: .regularExpression) != nil) {

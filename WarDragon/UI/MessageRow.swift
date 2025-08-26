@@ -327,6 +327,9 @@ struct MessageRow: View {
         case .sdr:
             iconName = "dot.radiowaves.left.and.right"
             iconColor = .purple
+        case .fpv:
+            iconName = "antenna.radiowaves.left.and.right"
+            iconColor = .orange
         default:
             iconName = "questionmark.circle"
             iconColor = .gray

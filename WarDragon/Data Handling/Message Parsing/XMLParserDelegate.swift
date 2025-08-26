@@ -774,6 +774,82 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         }
     }
     
+    //MARK: - FPV 
+    
+    private func processFPVDetection(_ fpvData: [String: Any]) -> CoTViewModel.CoTMessage? {
+        let timestamp = fpvData["timestamp"] as? String ?? ""
+        let manufacturer = fpvData["manufacturer"] as? String ?? ""
+        let deviceType = fpvData["device_type"] as? String ?? ""
+        let frequency = fpvData["frequency"] as? Int ?? 0
+        let bandwidth = fpvData["bandwidth"] as? String ?? ""
+        let signalStrength = fpvData["signal_strength"] as? Double ?? 0.0
+        let detectionSource = fpvData["detection_source"] as? String ?? ""
+        
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        let message = CoTViewModel.CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R",
+            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            speed: "0.0", vspeed: "0.0", alt: "0.0",
+            pilotLat: "0.0", pilotLon: "0.0",
+            description: "FPV Detection: \(deviceType)",
+            selfIDText: "FPV \(frequency)MHz \(bandwidth)",
+            uaType: .helicopter, idType: "FPV Detection",
+            rawMessage: fpvData
+        )
+        
+        cotMessage = message
+        
+        // Set FPV fields
+        cotMessage?.fpvTimestamp = timestamp
+        cotMessage?.fpvSource = detectionSource
+        cotMessage?.fpvFrequency = frequency
+        cotMessage?.fpvBandwidth = bandwidth
+        cotMessage?.fpvRSSI = signalStrength
+        cotMessage?.manufacturer = manufacturer
+        
+        return cotMessage
+    }
+
+    private func processAuxAdvInd(_ jsonObject: [String: Any]) -> CoTViewModel.CoTMessage? {
+        guard let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
+              let aext = jsonObject["aext"] as? [String: Any] else {
+            return nil
+        }
+        
+        let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
+        let timestamp = auxAdvInd["time"] as? String ?? ""
+        let advA = aext["AdvA"] as? String ?? ""
+        let frequency = jsonObject["frequency"] as? Int ?? 0
+        
+        let detectionSource = advA.replacingOccurrences(of: " random", with: "")
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        let message = CoTViewModel.CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R",
+            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            speed: "0.0", vspeed: "0.0", alt: "0.0",
+            pilotLat: "0.0", pilotLon: "0.0",
+            description: "FPV Update: \(detectionSource)",
+            selfIDText: "FPV \(frequency)MHz Update",
+            uaType: .helicopter, idType: "FPV Update",
+            rawMessage: jsonObject
+        )
+        
+        cotMessage = message
+        
+        // Set FPV fields
+        cotMessage?.fpvTimestamp = timestamp
+        cotMessage?.fpvSource = detectionSource
+        cotMessage?.fpvFrequency = frequency
+        cotMessage?.fpvRSSI = rssi
+        cotMessage?.aa = auxAdvInd["aa"] as? Int
+        
+        return cotMessage
+    }
+    
     // MARK: - Parsing helpers
     
     private func parseRemarks(_ remarks: String) {
