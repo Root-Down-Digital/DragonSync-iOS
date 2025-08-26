@@ -257,6 +257,7 @@ class DroneStorageManager: ObservableObject {
         let lon = Double(message.lon) ?? 0
         let droneId = message.uid
         
+        
         // Find existing encounter by MAC address first, then by ID
         var targetEncounter: DroneEncounter
         var targetId: String = droneId
@@ -339,6 +340,32 @@ class DroneStorageManager: ObservableObject {
                 )
                 targetEncounter.flightPath.append(proximityPoint)
                 print("Added proximity point with RSSI: \(message.rssi!)dBm")
+            }
+        }
+        
+        // For FPV/encrypted signals with no coordinates, create ring at monitor location
+        if lat == 0 && lon == 0 && message.rssi != nil && message.rssi != 0 {
+            if let monitorStatus = monitorStatus {
+                let monitorLat = monitorStatus.gpsData.latitude
+                let monitorLon = monitorStatus.gpsData.longitude
+                
+                if monitorLat != 0 || monitorLon != 0 {
+                    let distance = DroneSignatureGenerator().calculateDistance(Double(message.rssi!))
+                    let ringPoint = FlightPathPoint(
+                        latitude: monitorLat,
+                        longitude: monitorLon,
+                        altitude: 0,
+                        timestamp: Date().timeIntervalSince1970,
+                        homeLatitude: nil,
+                        homeLongitude: nil,
+                        isProximityPoint: true,
+                        proximityRssi: Double(message.rssi!),
+                        proximityRadius: distance
+                    )
+                    targetEncounter.flightPath.append(ringPoint)
+                    targetEncounter.metadata["hasProximityPoints"] = "true"
+                    didAddPoint = true
+                }
             }
         }
         

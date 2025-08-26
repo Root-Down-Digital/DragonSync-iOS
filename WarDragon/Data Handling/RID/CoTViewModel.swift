@@ -23,6 +23,7 @@ class CoTViewModel: ObservableObject {
     private var backgroundMessageBuffer: [Data] = []
     private let backgroundBufferLock = NSLock()
     private let signatureGenerator = DroneSignatureGenerator()
+    private let statusViewModel: StatusViewModel
     private var spectrumViewModel: SpectrumData.SpectrumViewModel?
     private var zmqHandler: ZMQHandler?
     private let backgroundManager = BackgroundManager.shared
@@ -33,7 +34,6 @@ class CoTViewModel: ObservableObject {
     private let cotPortMC = UInt16(Settings.shared.multicastPort)
     private let statusPortZMQ = UInt16(Settings.shared.zmqStatusPort)
     private let listenerQueue = DispatchQueue(label: "CoTListenerQueue")
-    private var statusViewModel = StatusViewModel()
     public var isListeningCot = false
     public var macIdHistory: [String: Set<String>] = [:]
     public var macProcessing: [String: Bool] = [:]
@@ -46,12 +46,12 @@ class CoTViewModel: ObservableObject {
     }
     
     struct AlertRing: Identifiable {
-        let id = UUID()
-        let centerCoordinate: CLLocationCoordinate2D
-        let radius: Double
-        let droneId: String
-        let rssi: Int
-    }
+            let id = UUID()
+            let droneId: String
+            let centerCoordinate: CLLocationCoordinate2D
+            let radius: Double
+            let rssi: Int
+        }
     
     struct SignalSource: Hashable {
         let mac: String
@@ -697,11 +697,14 @@ class CoTViewModel: ObservableObject {
     
     private func isDeviceBlocked(_ message: CoTMessage) -> Bool {
         let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
+        let fpvID = message.uid.hasPrefix("fpv-") ? message.uid : "fpv-\(message.uid)"
         
         // Check both the original UID and the formatted drone ID
         let possibleIds = [
             message.uid,
             droneId,
+            fpvID,
+            message.uid.replacingOccurrences(of: "fpv-", with: ""),
             message.uid.replacingOccurrences(of: "drone-", with: "")
         ]
         
@@ -713,11 +716,17 @@ class CoTViewModel: ObservableObject {
                 return true
             }
             
-            // Also check the "drone-" prefixed version
+            // Also check the "drone-" and fpv- prefixed version
             let droneFormatId = id.hasPrefix("drone-") ? id : "drone-\(id)"
             if let encounter = DroneStorageManager.shared.encounters[droneFormatId],
                encounter.metadata["doNotTrack"] == "true" {
                 print("⛔️ BLOCKED message with drone ID \(droneFormatId) - marked as do not track")
+                return true
+            }
+            let fpvFormatId = id.hasPrefix("fpv-") ? id : "fpv-\(id)"
+            if let encounter = DroneStorageManager.shared.encounters[fpvID],
+               encounter.metadata["doNotTrack"] == "true" {
+                print("⛔️ BLOCKED message with drone ID \(fpvFormatId) - marked as do not track")
                 return true
             }
         }
@@ -733,18 +742,33 @@ class CoTViewModel: ObservableObject {
         print("DEBUG: FPV message data: \(fpvmessage)")
         
         do {
-            // Try to parse as JSON array first (FPV Detection format)
+            // Try to parse as JSON array first (FPV Detection format or BT/WiFi arrays)
             if fpvmessage.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
                 if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                     for messageObj in jsonArray {
+                        // Handle FPV Detection in array
                         if let fpvDetection = messageObj["FPV Detection"] as? [String: Any] {
                             let fpvMessage = createFPVDetectionMessage(fpvDetection)
                             DispatchQueue.main.async {
                                 self.updateMessage(fpvMessage)
-                                // Send FPV webhook notification
                                 if Settings.shared.webhooksEnabled {
                                     self.sendFPVWebhookNotification(for: fpvMessage)
                                 }
+                            }
+                        }
+                        // Handle AUX_ADV_IND from BT/WiFi array
+                        else if messageObj["AUX_ADV_IND"] != nil {
+                            let fpvMessage = createAuxAdvIndMessage(messageObj)
+                            DispatchQueue.main.async {
+                                self.updateFPVMessage(fpvMessage)
+                            }
+                        }
+                        // Handle direct frequency field (from ZMQ decoded messages)
+                        else if messageObj["frequency"] != nil &&
+                               (messageObj["rssi"] != nil || messageObj["AUX_ADV_IND"] != nil) {
+                            let fpvMessage = createAuxAdvIndMessage(messageObj)
+                            DispatchQueue.main.async {
+                                self.updateFPVMessage(fpvMessage)
                             }
                         }
                     }
@@ -752,21 +776,30 @@ class CoTViewModel: ObservableObject {
                 }
             }
             
-            // Try to parse as single JSON object (AUX_ADV_IND format)
+            // Try to parse as single JSON object
             if let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if jsonObject["FPV Detection"] != nil {
-                    // Handle single FPV Detection object
-                    if let fpvDetection = jsonObject["FPV Detection"] as? [String: Any] {
-                        let fpvMessage = createFPVDetectionMessage(fpvDetection)
-                        DispatchQueue.main.async {
-                            self.updateMessage(fpvMessage)
-                            if Settings.shared.webhooksEnabled {
-                                self.sendFPVWebhookNotification(for: fpvMessage)
-                            }
+                // Handle single FPV Detection object
+                if let fpvDetection = jsonObject["FPV Detection"] as? [String: Any] {
+                    let fpvMessage = createFPVDetectionMessage(fpvDetection)
+                    DispatchQueue.main.async {
+                        self.updateMessage(fpvMessage)
+                        if Settings.shared.webhooksEnabled {
+                            self.sendFPVWebhookNotification(for: fpvMessage)
                         }
                     }
-                } else if jsonObject["AUX_ADV_IND"] != nil {
-                    // Handle AUX_ADV_IND update message
+                }
+                // Handle AUX_ADV_IND update message (from BT/WiFi)
+                else if jsonObject["AUX_ADV_IND"] != nil {
+                    let fpvMessage = createAuxAdvIndMessage(jsonObject)
+                    DispatchQueue.main.async {
+                        self.updateFPVMessage(fpvMessage)
+                    }
+                }
+                // Handle direct frequency-based messages (from ZMQ decoded BT/WiFi)
+                else if jsonObject["frequency"] != nil &&
+                       (jsonObject["rssi"] != nil ||
+                        jsonObject["signal_strength"] != nil ||
+                        jsonObject["AUX_ADV_IND"] != nil) {
                     let fpvMessage = createAuxAdvIndMessage(jsonObject)
                     DispatchQueue.main.async {
                         self.updateFPVMessage(fpvMessage)
@@ -824,7 +857,7 @@ class CoTViewModel: ObservableObject {
         message.stale = formatStaleTimeForCoT()
         
         // Add signal source for FPV
-        if let source = SignalSource(mac: detectionSource, rssi: Int(signalStrength), type: .sdr, timestamp: Date()) {
+        if let source = SignalSource(mac: detectionSource, rssi: Int(signalStrength), type: .fpv, timestamp: Date()) {
             message.signalSources = [source]
         }
         
@@ -852,8 +885,7 @@ class CoTViewModel: ObservableObject {
         let aa = auxAdvInd["aa"] as? Int ?? 0
         let advA = aext["AdvA"] as? String ?? ""
         let frequency = jsonObject["frequency"] as? Int ?? 0
-        
-        let detectionSource = advA.replacingOccurrences(of: " random", with: "")
+        let detectionSource = advA
         let fpvId = "fpv-\(detectionSource)-\(frequency)"
         
         // Create the CoTMessage with AUX_ADV_IND data
@@ -898,7 +930,7 @@ class CoTViewModel: ObservableObject {
         message.hae = "0.0"
         
         // Add signal source for FPV update
-        if let source = SignalSource(mac: detectionSource, rssi: Int(rssi), type: .sdr, timestamp: Date()) {
+        if let source = SignalSource(mac: detectionSource, rssi: Int(rssi), type: .fpv, timestamp: Date()) {
             message.signalSources = [source]
         }
         
@@ -906,24 +938,47 @@ class CoTViewModel: ObservableObject {
     }
 
     private func updateFPVMessage(_ updatedMessage: CoTMessage) {
-        // Find existing FPV message and update it
-        if let existingIndex = self.parsedMessages.firstIndex(where: { $0.uid == updatedMessage.uid }) {
-            var existingMessage = self.parsedMessages[existingIndex]
-            
-            // Update FPV-specific fields
-            existingMessage.fpvRSSI = updatedMessage.fpvRSSI
-            existingMessage.rssi = updatedMessage.rssi
-            existingMessage.fpvTimestamp = updatedMessage.fpvTimestamp
-            existingMessage.lastUpdated = Date()
-            
-            // Update signal sources
-            if let newSource = updatedMessage.signalSources.first {
-                existingMessage.signalSources = [newSource]
+        // Find existing FPV message and update it - need to check both formats
+        let possibleUIDs = [
+            updatedMessage.uid,
+            "drone-\(updatedMessage.uid)"
+        ]
+        
+        var existingIndex: Int?
+        for uid in possibleUIDs {
+            if let index = self.parsedMessages.firstIndex(where: { $0.uid == uid }) {
+                existingIndex = index
+                break
             }
-            
-            self.parsedMessages[existingIndex] = existingMessage
-            self.objectWillChange.send()
         }
+        
+        guard let index = existingIndex else {
+            print("DEBUG: No existing FPV message found for UIDs: \(possibleUIDs)")
+            return
+        }
+        
+        print("DEBUG: Updating FPV message at index \(index): \(self.parsedMessages[index].uid)")
+        
+        var existingMessage = self.parsedMessages[index]
+        
+        // Update FPV-specific fields
+        existingMessage.fpvRSSI = updatedMessage.fpvRSSI
+        existingMessage.rssi = updatedMessage.rssi
+        existingMessage.fpvTimestamp = updatedMessage.fpvTimestamp
+        existingMessage.lastUpdated = Date()
+        
+        // Update signal sources
+        if let newSource = updatedMessage.signalSources.first {
+            existingMessage.signalSources = [newSource]
+        }
+        
+        // Update BT/WiFi fields
+        existingMessage.aa = updatedMessage.aa
+        existingMessage.adv_mac = updatedMessage.adv_mac
+        
+        self.parsedMessages[index] = existingMessage
+        self.updateAlertRing(for: existingMessage)
+        self.objectWillChange.send()
     }
 
     private func formatCurrentTimeForCoT() -> String {
@@ -986,11 +1041,15 @@ class CoTViewModel: ObservableObject {
         
         print("DEBUG: incoming message: \(message)")
         
-        if message.trimmingCharacters(in: .whitespacesAndNewlines).contains("frequency") {
+        if message.trimmingCharacters(in: .whitespacesAndNewlines).contains("frequency") ||
+           message.contains("FPV Detection") ||
+           message.contains("AUX_ADV_IND") {
             print("DEBUG: FPV message detected")
             let fpvJSON = message.data(using: .utf8)
             processFPVMessage(fpvJSON)
+            return
         }
+
 
         // Incoming Message (JSON/XML) - Determine type and convert if needed
         let xmlData: Data
@@ -1219,8 +1278,40 @@ class CoTViewModel: ObservableObject {
             return
         }
         
-        // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
-        let extractedId = extractNumericId(from: message.uid)
+        // Special handling for FPV messages - don't convert to drone- format
+            if message.isFPVDetection {
+                DispatchQueue.main.async {
+                    // Check if this is a new FPV detection
+                    if let existingIndex = self.parsedMessages.firstIndex(where: { $0.uid == message.uid }) {
+                        var existingMessage = self.parsedMessages[existingIndex]
+                        
+                        // Update FPV fields
+                        existingMessage.fpvRSSI = message.fpvRSSI
+                        existingMessage.rssi = message.rssi
+                        existingMessage.fpvTimestamp = message.fpvTimestamp
+                        existingMessage.lastUpdated = Date()
+                        existingMessage.signalSources = message.signalSources
+                        
+                        self.parsedMessages[existingIndex] = existingMessage
+                        self.updateAlertRing(for: existingMessage)
+                    } else {
+                        // New FPV detection
+                        var fpvMessage = message
+                        fpvMessage.lastUpdated = Date()
+                        self.parsedMessages.append(fpvMessage)
+                        self.updateAlertRing(for: fpvMessage)
+                        self.sendNotification(for: fpvMessage)
+                    }
+                    
+                    // Save to storage
+                    let currentMonitorStatus = self.statusViewModel.statusMessages.last
+                    DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+                }
+                return
+            }
+            
+            // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
+            let extractedId = extractNumericId(from: message.uid)
         
         // Check if this is a pilot or home message that should be associated with a drone
         if message.uid.hasPrefix("pilot-") {
@@ -1397,7 +1488,6 @@ class CoTViewModel: ObservableObject {
         }
     }
     
-    
     func determineSignalType(message: CoTMessage, mac: String?, rssi: Int?, updatedMessage: inout CoTMessage) -> SignalSource.SignalType {
         print("DEBUG: Index and runtime : \(String(describing: message.index)) and \(String(describing: message.runtime))")
         print("CurrentmessageFormat: \(currentMessageFormat)")
@@ -1407,18 +1497,19 @@ class CoTViewModel: ObservableObject {
         }
         
         // Early return for FPV to prevent SDR processing
-        if message.fpvSource != nil {
+        if message.isFPVDetection || message.fpvSource != nil {
             let newSourceType = SignalSource.SignalType.fpv
             
-            // Create FPV source
+            // Create FPV source with detection source as identifier
+            let fpvIdentifier = message.fpvSource ?? "fpv-signal"
             guard let newSource = SignalSource(
-                mac: "", // FPV typically doesn't have MAC
-                rssi: rssi ?? 0,
+                mac: fpvIdentifier,
+                rssi: rssi ?? Int(message.fpvRSSI ?? 0.0),
                 type: newSourceType,
                 timestamp: Date()
             ) else { return newSourceType }
             
-            // Update message with only FPV source
+            // Update message with FPV source
             updatedMessage.signalSources = [newSource]
             return newSourceType
         }
@@ -1566,22 +1657,30 @@ class CoTViewModel: ObservableObject {
             
             // Create alert ring with valid monitor location
             if let location = monitorLocation {
-                let signatureGenerator = DroneSignatureGenerator()
-                let distance = signatureGenerator.calculateDistance(Double(message.rssi!))
+                let distance: Double
+                let rssiValue = message.rssi!
+                
+                // Handle different RSSI scales for FPV vs regular drones
+                if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                    distance = calculateFPVDistance(fpvRSSI)
+                } else {
+                    let signatureGenerator = DroneSignatureGenerator()
+                    distance = signatureGenerator.calculateDistance(Double(rssiValue))
+                }
                 
                 if let index = alertRings.firstIndex(where: { $0.droneId == message.uid }) {
                     alertRings[index] = AlertRing(
+                        droneId: message.uid,
                         centerCoordinate: location,
                         radius: distance,
-                        droneId: message.uid,
-                        rssi: message.rssi!
+                        rssi: rssiValue
                     )
                 } else {
                     alertRings.append(AlertRing(
+                        droneId: message.uid,
                         centerCoordinate: location,
                         radius: distance,
-                        droneId: message.uid,
-                        rssi: message.rssi!
+                        rssi: rssiValue
                     ))
                 }
             }
@@ -1590,31 +1689,32 @@ class CoTViewModel: ObservableObject {
             alertRings.removeAll(where: { $0.droneId == message.uid })
         }
     }
-    
-    // Helper function to calculate distance using the MDN RSSI scale
-    private func calculateMDNDistance(_ rssi: Double) -> Double {
-        let minRssi = 1200.0 // Threshold for weakest signals
-        let maxRssi = 2800.0 // Threshold for strongest signals
+
+    // Helper function to calculate FPV distance based on signal strength
+    private func calculateFPVDistance(_ rssi: Double) -> Double {
+        // FPV signals use different scale (typically 1000-3500 range)
+        let minRssi = 1000.0
+        let maxRssi = 3500.0
         
         if rssi < minRssi {
-            return 1500.0 // Maximum range when signal is too weak
+            return 2000.0 // Maximum range when signal is too weak
         }
         
+        if rssi > maxRssi {
+            return 50.0 // Minimum range when signal is very strong
+        }
+        
+        // Normalize and calculate distance
         let normalizedRssi = (rssi - minRssi) / (maxRssi - minRssi)
         let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
         
-        // Use an exponential curve to map RSSI to distance
-        // Strong signal (closer to maxRssi) results in shorter distance
-        // Weak signal (closer to minRssi) results in longer distance
-        let distance = 1500.0 * exp(-5.0 * clampedNormalizedRssi)
+        // Use exponential curve for distance calculation
+        let distance = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
         
-        // Ensure distance stays within the expected range
-        return min(max(distance, 0.0), 1500.0)
+        return max(min(distance, 2000.0), 50.0)
     }
     
-    
-    
-    
+
     // Helper function to update alert rings for consolidated messages
     private func updateAlertRingForConsolidated(consolidated: CoTMessage, originalMessages: [CoTMessage]) {
         // Remove all existing alert rings for the original messages
@@ -1634,15 +1734,15 @@ class CoTViewModel: ObservableObject {
             let distance: Double
             
             if rssiValue > 1000 {
-                distance = calculateMDNDistance(rssiValue)
+                distance = calculateFPVDistance(rssiValue)
             } else {
                 distance = DroneSignatureGenerator().calculateDistance(rssiValue)
             }
             
             let newRing = AlertRing(
+                droneId: consolidated.uid,
                 centerCoordinate: monitorLocation,
                 radius: distance,
-                droneId: consolidated.uid,
                 rssi: consolidated.rssi ?? 0
             )
             
@@ -1812,7 +1912,7 @@ class CoTViewModel: ObservableObject {
         let content = UNMutableNotificationContent()
         print("Attempting to send notification for drone: \(message.uid)")
         content.title = "Drone Detected"
-        content.body = "From: \(message.uid)\nMAC: \(message.mac ?? "")"
+        content.body = "ID: \(message.id)\nRSSI: \(message.rssi ?? 0)dBm"
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         
         UNUserNotificationCenter.current().add(request) { error in

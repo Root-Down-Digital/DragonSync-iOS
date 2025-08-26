@@ -250,6 +250,23 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     }
     
     private func processSingleJSON(_ json: [String: Any]) {
+        // Check for FPV Detection in single object format
+        if let fpvDetection = json["FPV Detection"] as? [String: Any] {
+            if let fpvMessage = processFPVDetection(fpvDetection) {
+                cotMessage = fpvMessage
+                return
+            }
+        }
+        
+        // Check for AUX_ADV_IND (FPV update) format
+        if json["AUX_ADV_IND"] != nil {
+            if let auxMessage = processAuxAdvInd(json) {
+                cotMessage = auxMessage
+                return
+            }
+        }
+        
+        // Handle ESP32 format
         if let message = parseESP32Message(json) {
             cotMessage = message
         }
@@ -261,7 +278,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         
         if let basicId = jsonData["Basic ID"] as? [String: Any] {
             let id = basicId["id"] as? String ?? UUID().uuidString
-            // Fix: Always use the original ID for the drone identifier
+            // Always use the original ID for the drone identifier
             let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
             let idType = basicId["id_type"] as? String ?? ""
             var caaReg: String?

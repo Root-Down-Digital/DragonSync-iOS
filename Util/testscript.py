@@ -145,12 +145,12 @@ class DroneMessageGenerator:
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         
-        frequency = random.choice([5547, 5645, 5740, 5880])
-        bandwidth = f"{random.choice([20, 40])}MHz"
-        rssi = random.randint(1490, 1515)
+        frequency = 5645
+        bandwidth = "20 MHz"
+        rssi = random.randint(1250, 3500)
         
-        source_inst = f"{random.randint(1, 5):02d}"
-        source_node = f"{random.randint(1000, 9999)}"
+        source_inst = "01"
+        source_node = "6914"
         detection_source = f"{source_inst}-{source_node}"
         
         if not hasattr(self, 'current_fpv_detection'):
@@ -172,8 +172,6 @@ class DroneMessageGenerator:
             {
                 "FPV Detection": {
                     "timestamp": timestamp,
-                    "manufacturer": source_inst,
-                    "device_type": f"FPV{frequency:.1f}MHz",
                     "frequency": frequency,
                     "bandwidth": bandwidth,
                     "signal_strength": rssi,
@@ -203,9 +201,9 @@ class DroneMessageGenerator:
                 "time": timestamp
             }, 
             "aext": {
-                "AdvA": f"{detection_source} random"
+                "AdvA": f"{detection_source}"
             },
-            "frequency": 5475
+            "frequency": 5645
         }
         
         return json.dumps(update_message)
