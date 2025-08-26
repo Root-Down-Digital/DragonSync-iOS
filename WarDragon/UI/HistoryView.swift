@@ -439,9 +439,52 @@ struct StoredEncountersView: View {
                 Group {
                     if !alertRings.isEmpty {
                         ForEach(alertRings) { ring in
+                            let isFPV = encounter.id.hasPrefix("fpv-")
+                            
                             MapCircle(center: ring.centerCoordinate, radius: ring.radius)
-                                .foregroundStyle(.red.opacity(0.2))
-                                .stroke(.red, lineWidth: 2)
+                                .foregroundStyle(isFPV ? .orange.opacity(0.1) : .red.opacity(0.2))
+                                .stroke(isFPV ? .orange : .red, lineWidth: 2)
+                            
+                            if isFPV {
+                                // FPV specific annotation
+                                Annotation("FPV Signal", coordinate: ring.centerCoordinate) {
+                                    VStack {
+                                        Text("FPV Detection")
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                        Text("\(Int(ring.radius))m radius")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text("Signal: \(ring.rssi)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(6)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(6)
+                                }
+                                
+                                // Monitor location marker for FPV
+                                Annotation("Monitor", coordinate: ring.centerCoordinate) {
+                                    Image(systemName: "dot.radiowaves.left.and.right")
+                                        .foregroundColor(.blue)
+                                        .font(.title2)
+                                        .background(Circle().fill(.white))
+                                }
+                            } else {
+                                // Regular drone annotation
+                                Annotation("Detection Range", coordinate: ring.centerCoordinate) {
+                                    VStack {
+                                        Text("RSSI: \(ring.rssi)dBm")
+                                            .font(.caption)
+                                        Text("\(Int(ring.radius))m")
+                                            .font(.caption2)
+                                    }
+                                    .padding(4)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(4)
+                                }
+                            }
                         }
                     }
                 }
