@@ -350,24 +350,88 @@ class DroneStorageManager: ObservableObject {
                 let monitorLon = monitorStatus.gpsData.longitude
                 
                 if monitorLat != 0 || monitorLon != 0 {
-                    let distance = DroneSignatureGenerator().calculateDistance(Double(message.rssi!))
-                    let ringPoint = FlightPathPoint(
-                        latitude: monitorLat,
-                        longitude: monitorLon,
-                        altitude: 0,
-                        timestamp: Date().timeIntervalSince1970,
-                        homeLatitude: nil,
-                        homeLongitude: nil,
-                        isProximityPoint: true,
-                        proximityRssi: Double(message.rssi!),
-                        proximityRadius: distance
-                    )
-                    targetEncounter.flightPath.append(ringPoint)
-                    targetEncounter.metadata["hasProximityPoints"] = "true"
-                    didAddPoint = true
+                    let distance: Double
+                    
+                    // Use appropriate distance calculation for FPV
+                    if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                        // FPV distance calculation
+                        let minRssi = 1000.0
+                        let maxRssi = 3500.0
+                        
+                        if fpvRSSI < minRssi {
+                            distance = 2000.0
+                        } else if fpvRSSI > maxRssi {
+                            distance = 50.0
+                        } else {
+                            let normalizedRssi = (fpvRSSI - minRssi) / (maxRssi - minRssi)
+                            let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
+                            distance = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
+                        }
+                    } else {
+                        distance = DroneSignatureGenerator().calculateDistance(Double(message.rssi!))
+                    }
+                    
+                    // Only add if we don't already have a proximity point for this encounter
+                    let hasExistingProximityPoint = targetEncounter.flightPath.contains { point in
+                        point.isProximityPoint &&
+                        abs(point.latitude - monitorLat) < 0.0001 &&
+                        abs(point.longitude - monitorLon) < 0.0001
+                    }
+                    
+                    if !hasExistingProximityPoint {
+                        let ringPoint = FlightPathPoint(
+                            latitude: monitorLat,
+                            longitude: monitorLon,
+                            altitude: 0,
+                            timestamp: Date().timeIntervalSince1970,
+                            homeLatitude: nil,
+                            homeLongitude: nil,
+                            isProximityPoint: true,
+                            proximityRssi: Double(message.rssi!),
+                            proximityRadius: distance
+                        )
+                        targetEncounter.flightPath.append(ringPoint)
+                        targetEncounter.metadata["hasProximityPoints"] = "true"
+                        
+                        // Add FPV-specific metadata
+                        if message.isFPVDetection {
+                            targetEncounter.metadata["isFPVDetection"] = "true"
+                            if let frequency = message.fpvFrequency {
+                                targetEncounter.metadata["fpvFrequency"] = "\(frequency)"
+                            }
+                            if let source = message.fpvSource {
+                                targetEncounter.metadata["fpvSource"] = source
+                            }
+                        }
+                        
+                        didAddPoint = true
+                        print("Added proximity ring point with RSSI: \(message.rssi!)dBm, radius: \(Int(distance))m")
+                    } else {
+                        // Update existing proximity point with new RSSI/radius if different
+                        if let index = targetEncounter.flightPath.firstIndex(where: { point in
+                            point.isProximityPoint &&
+                            abs(point.latitude - monitorLat) < 0.0001 &&
+                            abs(point.longitude - monitorLon) < 0.0001
+                        }) {
+                            var updatedPoint = targetEncounter.flightPath[index]
+                            updatedPoint = FlightPathPoint(
+                                latitude: updatedPoint.latitude,
+                                longitude: updatedPoint.longitude,
+                                altitude: updatedPoint.altitude,
+                                timestamp: Date().timeIntervalSince1970,
+                                homeLatitude: updatedPoint.homeLatitude,
+                                homeLongitude: updatedPoint.homeLongitude,
+                                isProximityPoint: true,
+                                proximityRssi: Double(message.rssi!),
+                                proximityRadius: distance
+                            )
+                            targetEncounter.flightPath[index] = updatedPoint
+                            print("Updated proximity ring point with RSSI: \(message.rssi!)dBm, radius: \(Int(distance))m")
+                        }
+                    }
                 }
             }
-        }
+        } 
         
         // Preserve MAC history
         for source in message.signalSources {

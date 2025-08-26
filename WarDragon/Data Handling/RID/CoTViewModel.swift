@@ -545,6 +545,8 @@ class CoTViewModel: ObservableObject {
             name: Notification.Name("RefreshNetworkConnections"),
             object: nil
         )
+        
+        restoreAlertRingsFromStorage()
     }
     
     
@@ -976,6 +978,11 @@ class CoTViewModel: ObservableObject {
         existingMessage.aa = updatedMessage.aa
         existingMessage.adv_mac = updatedMessage.adv_mac
         
+        // Send webhook for FPV updates if enabled
+        if Settings.shared.webhooksEnabled {
+            self.sendFPVWebhookNotification(for: existingMessage)
+        }
+        
         self.parsedMessages[index] = existingMessage
         self.updateAlertRing(for: existingMessage)
         self.objectWillChange.send()
@@ -994,6 +1001,32 @@ class CoTViewModel: ObservableObject {
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
         formatter.timeZone = TimeZone(identifier: "UTC")
         return formatter.string(from: staleTime)
+    }
+    
+    // Make RSSI rings for history encounters in storage
+    func restoreAlertRingsFromStorage() {
+        // Clear existing alert rings
+        alertRings.removeAll()
+        
+        // Restore alert rings for FPV and encrypted signals from storage
+        for (droneId, encounter) in DroneStorageManager.shared.encounters {
+            // Look for proximity points that represent alert rings
+            if let proximityPoint = encounter.flightPath.first(where: { $0.isProximityPoint && $0.proximityRadius != nil }) {
+                
+                let ring = AlertRing(
+                    droneId: droneId,
+                    centerCoordinate: CLLocationCoordinate2D(
+                        latitude: proximityPoint.latitude,
+                        longitude: proximityPoint.longitude
+                    ),
+                    radius: proximityPoint.proximityRadius!,
+                    rssi: Int(proximityPoint.proximityRssi ?? 0)
+                )
+                
+                alertRings.append(ring)
+                print("Restored alert ring for \(droneId): radius \(Int(proximityPoint.proximityRadius!))m")
+            }
+        }
     }
 
     // MARK: - FPV Webhook Integration
