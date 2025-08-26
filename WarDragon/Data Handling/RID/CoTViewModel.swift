@@ -1005,13 +1005,18 @@ class CoTViewModel: ObservableObject {
     
     // Make RSSI rings for history encounters in storage
     func restoreAlertRingsFromStorage() {
+        print("Restoring alert rings from storage...")
+        
         // Clear existing alert rings
         alertRings.removeAll()
         
         // Restore alert rings for FPV and encrypted signals from storage
         for (droneId, encounter) in DroneStorageManager.shared.encounters {
+            // Only process encounters that have proximity points
+            guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
+            
             // Look for proximity points that represent alert rings
-            if let proximityPoint = encounter.flightPath.first(where: { $0.isProximityPoint && $0.proximityRadius != nil }) {
+            if let proximityPoint = encounter.flightPath.first(where: { $0.isProximityPoint && $0.proximityRadius != nil && $0.proximityRadius! > 0 }) {
                 
                 let ring = AlertRing(
                     droneId: droneId,
@@ -1027,6 +1032,8 @@ class CoTViewModel: ObservableObject {
                 print("Restored alert ring for \(droneId): radius \(Int(proximityPoint.proximityRadius!))m")
             }
         }
+        
+        print("Restored \(alertRings.count) alert rings from storage")
     }
 
     // MARK: - FPV Webhook Integration
