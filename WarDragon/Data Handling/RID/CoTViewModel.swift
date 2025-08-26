@@ -215,7 +215,7 @@ class CoTViewModel: ObservableObject {
 
         var fpvSignalStrengthFormatted: String {
             if let rssi = fpvRSSI {
-                return String(format: "%.1f dBm", rssi)
+                return String(format: "%.0f", rssi)
             }
             return "Unknown"
         }
@@ -1658,14 +1658,19 @@ class CoTViewModel: ObservableObject {
             // Create alert ring with valid monitor location
             if let location = monitorLocation {
                 let distance: Double
-                let rssiValue = message.rssi!
+                let rssiValue = Double(message.rssi!)
                 
                 // Handle different RSSI scales for FPV vs regular drones
                 if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                    // FPV uses higher signal values (1000-3500 range) from raw RX5808 SPI RSSI pin
                     distance = calculateFPVDistance(fpvRSSI)
+                } else if rssiValue > 1000 {
+                    // MDN-style values
+                    distance = calculateFPVDistance(rssiValue)
                 } else {
+                    // Standard dBm values
                     let signatureGenerator = DroneSignatureGenerator()
-                    distance = signatureGenerator.calculateDistance(Double(rssiValue))
+                    distance = signatureGenerator.calculateDistance(rssiValue)
                 }
                 
                 if let index = alertRings.firstIndex(where: { $0.droneId == message.uid }) {
@@ -1673,14 +1678,14 @@ class CoTViewModel: ObservableObject {
                         droneId: message.uid,
                         centerCoordinate: location,
                         radius: distance,
-                        rssi: rssiValue
+                        rssi: message.rssi!
                     )
                 } else {
                     alertRings.append(AlertRing(
                         droneId: message.uid,
                         centerCoordinate: location,
                         radius: distance,
-                        rssi: rssiValue
+                        rssi: message.rssi!
                     ))
                 }
             }
