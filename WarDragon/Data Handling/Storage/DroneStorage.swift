@@ -339,6 +339,7 @@ class DroneStorageManager: ObservableObject {
                     proximityRadius: nil
                 )
                 targetEncounter.flightPath.append(proximityPoint)
+                targetEncounter.metadata["hasProximityPoints"] = "true"
                 print("Added proximity point with RSSI: \(message.rssi!)dBm")
             }
         }

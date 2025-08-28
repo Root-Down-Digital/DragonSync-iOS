@@ -227,12 +227,11 @@ class CoTViewModel: ObservableObject {
             return "Unknown"
         }
 
-        // FPV detection RSSI
         var statusColor: Color {
             if isFPVDetection {
                 guard let rssi = fpvRSSI else { return .gray }
-                if rssi > 1500 { return .green }
-                if rssi > 1490 { return .yellow }
+                if rssi > 1000 { return .green }    // Lower threshold for FPV
+                if rssi > 800 { return .yellow }    // Much lower threshold
                 return .red
             }
             
@@ -685,7 +684,13 @@ class CoTViewModel: ObservableObject {
             zmqTelemetryPort: UInt16(Settings.shared.zmqTelemetryPort),
             zmqStatusPort: UInt16(Settings.shared.zmqStatusPort),
             onTelemetry: { [weak self] message in
-                if let data = message.data(using: .utf8) {
+                // MARK: Check if this is raw FPV JSON
+                if message.contains("AUX_ADV_IND") || message.contains("FPV Detection") {
+                    print("FPV JSON received from ZMQ")
+                    if let data = message.data(using: .utf8) {
+                        self?.processFPVMessage(data)
+                    }
+                } else if let data = message.data(using: .utf8) {
                     self?.processIncomingMessage(data)
                 }
             },
@@ -714,7 +719,7 @@ class CoTViewModel: ObservableObject {
         for id in possibleIds {
             if let encounter = DroneStorageManager.shared.encounters[id],
                encounter.metadata["doNotTrack"] == "true" {
-                print("⛔️ BLOCKED message with ID \(id) - marked as do not track")
+                print("BLOCKED message with ID \(id) - marked as do not track")
                 return true
             }
             
@@ -722,13 +727,13 @@ class CoTViewModel: ObservableObject {
             let droneFormatId = id.hasPrefix("drone-") ? id : "drone-\(id)"
             if let encounter = DroneStorageManager.shared.encounters[droneFormatId],
                encounter.metadata["doNotTrack"] == "true" {
-                print("⛔️ BLOCKED message with drone ID \(droneFormatId) - marked as do not track")
+                print("BLOCKED message with drone ID \(droneFormatId) - marked as do not track")
                 return true
             }
             let fpvFormatId = id.hasPrefix("fpv-") ? id : "fpv-\(id)"
             if let encounter = DroneStorageManager.shared.encounters[fpvID],
                encounter.metadata["doNotTrack"] == "true" {
-                print("⛔️ BLOCKED message with drone ID \(fpvFormatId) - marked as do not track")
+                print(" BLOCKED message with drone ID \(fpvFormatId) - marked as do not track")
                 return true
             }
         }
@@ -969,6 +974,7 @@ class CoTViewModel: ObservableObject {
         existingMessage.fpvTimestamp = updatedMessage.fpvTimestamp
         existingMessage.lastUpdated = Date()
         
+        
         // Update signal sources
         if let newSource = updatedMessage.signalSources.first {
             existingMessage.signalSources = [newSource]
@@ -1015,8 +1021,40 @@ class CoTViewModel: ObservableObject {
             // Only process encounters that have proximity points
             guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
             
-            // Look for proximity points that represent alert rings
-            if let proximityPoint = encounter.flightPath.first(where: { $0.isProximityPoint && $0.proximityRadius != nil && $0.proximityRadius! > 0 }) {
+            // Look for ALL proximity points that have RSSI data (not just first one with radius)
+            for proximityPoint in encounter.flightPath.filter({ $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0 }) {
+                
+                var radius: Double
+                
+                // Use stored radius if available, otherwise calculate from RSSI
+                if let storedRadius = proximityPoint.proximityRadius, storedRadius > 0 {
+                    radius = storedRadius
+                } else {
+                    // Calculate radius from RSSI based on detection type
+                    let rssi = proximityPoint.proximityRssi!
+                    
+                    if encounter.metadata["isFPVDetection"] == "true" {
+                        // FPV distance calculation
+                        let minRssi = 1000.0
+                        let maxRssi = 3500.0
+                        
+                        if rssi < minRssi {
+                            radius = 2000.0
+                        } else if rssi > maxRssi {
+                            radius = 50.0
+                        } else {
+                            let normalizedRssi = (rssi - minRssi) / (maxRssi - minRssi)
+                            let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
+                            radius = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
+                        }
+                    } else {
+                        // Standard drone RSSI calculation
+                        radius = DroneSignatureGenerator().calculateDistance(rssi)
+                    }
+                    
+                    // Ensure minimum radius
+                    radius = max(radius, 50.0)
+                }
                 
                 let ring = AlertRing(
                     droneId: droneId,
@@ -1024,12 +1062,12 @@ class CoTViewModel: ObservableObject {
                         latitude: proximityPoint.latitude,
                         longitude: proximityPoint.longitude
                     ),
-                    radius: proximityPoint.proximityRadius!,
-                    rssi: Int(proximityPoint.proximityRssi ?? 0)
+                    radius: radius,
+                    rssi: Int(proximityPoint.proximityRssi!)
                 )
                 
                 alertRings.append(ring)
-                print("Restored alert ring for \(droneId): radius \(Int(proximityPoint.proximityRadius!))m")
+                print("Restored alert ring for \(droneId): radius \(Int(radius))m, RSSI: \(Int(proximityPoint.proximityRssi!))dBm")
             }
         }
         
@@ -1081,17 +1119,14 @@ class CoTViewModel: ObservableObject {
         
         print("DEBUG: incoming message: \(message)")
         
-        if message.trimmingCharacters(in: .whitespacesAndNewlines).contains("frequency") ||
-           message.contains("FPV Detection") ||
-           message.contains("AUX_ADV_IND") {
-            print("DEBUG: FPV message detected")
-            let fpvJSON = message.data(using: .utf8)
-            processFPVMessage(fpvJSON)
+        // MARK: Check for FPV messages FIRST - they should never go through XML conversion
+        if message.contains("AUX_ADV_IND") || message.contains("FPV Detection") {
+            print("DEBUG: FPV message detected, routing directly to FPV processor")
+            processFPVMessage(data)
             return
         }
 
-
-        // Incoming Message (JSON/XML) - Determine type and convert if needed
+        // Incoming Message (JSON/XML) - Determine type and convert if needed gi
         let xmlData: Data
         if message.trimmingCharacters(in: .whitespacesAndNewlines).starts(with: "{") {
             // Handle JSON input

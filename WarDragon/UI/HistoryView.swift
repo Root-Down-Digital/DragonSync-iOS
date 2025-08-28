@@ -398,15 +398,17 @@ struct StoredEncountersView: View {
                             MapCircle(center: point.coordinate, radius: radius)
                                 .foregroundStyle(.yellow.opacity(0.1))
                                 .stroke(.yellow, lineWidth: 2)
-
-                            Annotation("Detection \(idx)", coordinate: point.coordinate) {
-                                VStack {
-                                    Text("RSSI: \(Int(rssi))dBm").font(.caption)
-                                    Text("\(Int(radius))m").font(.caption)
+                            
+                            if radius != 0 {
+                                Annotation("Detection #\(idx)", coordinate: point.coordinate) {
+                                    VStack {
+                                        Text("RSSI: \(Int(rssi))dBm").font(.caption)
+//                                        Text("\(Int(radius))m").font(.caption)
+                                    }
+                                    .padding(4)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(4)
                                 }
-                                .padding(4)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(4)
                             }
                         }
                     }

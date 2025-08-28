@@ -59,6 +59,11 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     private var runtime: String?
     var originalRawString: String?
     
+    private var fpvFrequency: String?
+    private var fpvSource: String?
+    private var fpvBandwidth: String?
+    private var fpvRSSI: Int?
+    
     private var trackAttributes: [String: String] = [:]
     private var track_course: String?
     private var track_speed: String?
@@ -1178,7 +1183,25 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 }
             } else if trimmed.hasPrefix("Self-ID:") {
                 description = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
-            }
+            } else if trimmed.hasPrefix("FPV Update") || trimmed.hasPrefix("FPV Detection") {
+                   // Extract RSSI from FPV format
+                   if let rssiMatch = trimmed.range(of: "RSSI: ([-]?\\d+(?:\\.\\d+)?)dBm", options: .regularExpression) {
+                       let rssiStr = trimmed[rssiMatch].replacingOccurrences(of: "RSSI: ", with: "").replacingOccurrences(of: "dBm", with: "")
+                       rssi = Int(Double(rssiStr) ?? 0)
+                   }
+                   
+                   // Extract frequency
+                   if let freqMatch = trimmed.range(of: "Frequency: (\\d+(?:\\.\\d+)?)", options: .regularExpression) {
+                       let freqStr = trimmed[freqMatch].replacingOccurrences(of: "Frequency: ", with: "").replacingOccurrences(of: " MHz", with: "")
+                       fpvFrequency = freqStr
+                   }
+                   
+                   // Extract source
+                   if let sourceMatch = trimmed.range(of: "Source: ([^,]+)", options: .regularExpression) {
+                       let sourceStr = trimmed[sourceMatch].replacingOccurrences(of: "Source: ", with: "")
+                       fpvSource = sourceStr
+                   }
+               }
         }
         
         if manufacturer == "Unknown", let mac = mac {

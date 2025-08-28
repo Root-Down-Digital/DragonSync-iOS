@@ -298,7 +298,13 @@ class ZMQHandler: ObservableObject {
                                     self.isSubscriptionActive = true
                                     
                                     if socket === self.telemetrySocket {
-                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
+                                        // MARK: Check for FPV messages and pass them directly
+                                        if jsonString.contains("AUX_ADV_IND") || jsonString.contains("FPV Detection") {
+                                            print("FPV message detected in ZMQ telemetry")
+                                            DispatchQueue.main.async {
+                                                onTelemetry(jsonString)
+                                            }
+                                        } else if let xmlMessage = self.convertTelemetryToXML(jsonString) {
                                             DispatchQueue.main.async {
                                                 onTelemetry(xmlMessage)
                                             }
@@ -324,7 +330,6 @@ class ZMQHandler: ObservableObject {
                            error.description != "Operation would block" &&
                            self.shouldContinueRunning {
                             print("ZMQ Polling Error: \(error)")
-                            
                             if self.shouldContinueRunning && self.isConnected {
                                 DispatchQueue.main.async {
                                     self.reconnect()
@@ -359,6 +364,28 @@ class ZMQHandler: ObservableObject {
     func convertTelemetryToXML(_ jsonString: String) -> String? {
         guard let data = jsonString.data(using: .utf8) else { return nil }
         print("Raw Message: ", jsonString)
+        
+        // MARK: Check for FPV update messages
+        if jsonString.contains("AUX_ADV_IND") && jsonString.contains("aext") {
+            // This is an FPV update message - convert to XML for processing
+            do {
+                if let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
+                   let aext = jsonObject["aext"] as? [String: Any],
+                   let advA = aext["AdvA"] as? String {
+                    
+                    let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
+                    let source = advA.replacingOccurrences(of: " random", with: "")
+                    
+                    // Extract frequency if present
+                    let frequency = jsonObject["frequency"] as? Double ?? 5785.0
+                    
+                    return createFPVUpdateCoTMessage(source, rssi: rssi, frequency: frequency)
+                }
+            } catch {
+                print("Error parsing FPV update: \(error)")
+            }
+        }
         
         // Determine format from raw string and runtime/index presence
         if jsonString.contains("fpv") {
@@ -556,6 +583,26 @@ class ZMQHandler: ObservableObject {
             </detail>
         </event>
         """
+    }
+    
+    func createFPVUpdateCoTMessage(_ source: String, rssi: Double, frequency: Double) -> String {
+        let fpvId = "fpv-\(Int(frequency))"
+        
+        let now = ISO8601DateFormatter().string(from: Date())
+        let stale = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
+        
+        return """
+            <event version="2.0" uid="\(fpvId)" type="a-u-A-M-H-R-F" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
+                <point lat="0.0" lon="0.0" hae="0" ce="9999999" le="999999"/>
+                <detail>
+                    <remarks>FPV Update, RSSI: \(Int(rssi))dBm, Frequency: \(frequency) MHz, Source: \(source)</remarks>
+                    <contact endpoint="" phone="" callsign="FPV \(Int(frequency))MHz"/>
+                    <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
+                    <color argb="-1"/>
+                    <usericon iconsetpath="34ae1613-9645-4222-a9d2-e5f243dea2865/Military/UAV_quad.png"/>
+                </detail>
+            </event>
+            """
     }
     
     // ZMQ BG socket check
