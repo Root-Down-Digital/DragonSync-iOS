@@ -590,22 +590,10 @@ class DroneStorageManager: ObservableObject {
                 encounter.metadata["doNotTrack"] = "true"
                 encounters[possibleId] = encounter
             } else {
-                // Create a new encounter record to mark as blocked
-                let newEncounter = DroneEncounter(
-                    id: possibleId,
-                    firstSeen: Date(),
-                    lastSeen: Date(),
-                    flightPath: [],
-                    signatures: [],
-                    metadata: ["doNotTrack": "true", "type": "drone"],
-                    macHistory: []
-                )
-                encounters[possibleId] = newEncounter
+                print("No encounter with that ID to untrack: \(possibleIds)")
             }
         }
-        
-        saveToStorage()
-        print("🚫 Marked as do not track: \(possibleIds)")
+        print("Marked as do not track: \(possibleIds)")
     }
     
     //MARK: - Storage Functions/CRUD
