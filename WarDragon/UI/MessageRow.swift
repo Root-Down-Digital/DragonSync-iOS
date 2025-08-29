@@ -141,6 +141,17 @@ struct MessageRow: View {
     // MARK: - Helper Methods
     
     private func rssiColor(_ rssi: Double) -> Color {
+        // FPV RX5808 RSSI Pin
+        if rssi >= 1000 {
+            switch rssi {
+            case 1000..<2000: return .red    // Weak signal
+            case 2000..<2800: return .yellow // Medium signal
+            case 2800...3500: return .green  // Strong signal
+            default: return .gray
+            }
+        }
+        
+        // Handle standard drone dBm
         switch rssi {
         case ..<(-75): return .red
         case -75..<(-50): return .yellow

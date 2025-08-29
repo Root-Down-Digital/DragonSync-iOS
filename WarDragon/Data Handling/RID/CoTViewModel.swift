@@ -231,22 +231,23 @@ class CoTViewModel: ObservableObject {
             let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdated)
             // FPV Staleout
             if isFPVDetection {
-                if timeSinceLastUpdate < 10 {
+                if timeSinceLastUpdate < 30 {
                     guard let rssi = fpvRSSI else { return .gray }
-                    if rssi > 2000 { return .green }    // Lower threshold for FPV
-                    if rssi > 100 { return .yellow }    // Much lower threshold
+                    if rssi > 2000 { return .green }
+                    if rssi > 100 { return .yellow }
                     return .red
                 }
-                else if timeSinceLastUpdate < 30 {
+                else if timeSinceLastUpdate < 120 {
                     return .yellow
                 } else {
                     return .gray
                 }
             }
+            
             // Drone Staleout
-            else if timeSinceLastUpdate < 10 {
+            else if timeSinceLastUpdate < 30 {
                 return rssi != nil && rssi! > -60 ? .green : rssi != nil && rssi! > -80 ? .yellow : .red
-            } else if timeSinceLastUpdate < 30 {
+            } else if timeSinceLastUpdate < 120 {
                 return .yellow
             } else {
                 return .gray
