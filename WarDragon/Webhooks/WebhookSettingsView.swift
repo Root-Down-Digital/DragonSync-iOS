@@ -75,9 +75,9 @@ struct WebhookSettingsView: View {
                     
                     // Individual event toggles
                     eventToggleRow(for: .droneDetected, title: "Drone Detection", description: "New drone detected", icon: "airplane.circle.fill", color: .blue)
-                    // TODO merge FPV branch and SDR scripts..
-//                    eventToggleRow(for: .fpvSignal, title: "FPV Signal", description: "FPV video signal detected", icon: "tv.fill", color: .purple)
-//                    
+
+                    eventToggleRow(for: .fpvSignal, title: "FPV Signal", description: "FPV video signal detected", icon: "tv.fill", color: .purple)
+                    
                     eventToggleRow(for: .proximityWarning, title: "Proximity Warning", description: "Drone approaching threshold", icon: "exclamationmark.triangle.fill", color: .orange)
                     
                     eventToggleRow(for: .systemAlert, title: "System Alert", description: "General system warnings", icon: "exclamationmark.circle.fill", color: .red)

@@ -257,6 +257,7 @@ class DroneStorageManager: ObservableObject {
         let lon = Double(message.lon) ?? 0
         let droneId = message.uid
         
+        
         // Find existing encounter by MAC address first, then by ID
         var targetEncounter: DroneEncounter
         var targetId: String = droneId
@@ -337,10 +338,121 @@ class DroneStorageManager: ObservableObject {
                     proximityRssi: Double(message.rssi!),
                     proximityRadius: nil
                 )
-                targetEncounter.flightPath.append(proximityPoint)
-                print("Added proximity point with RSSI: \(message.rssi!)dBm")
+                
+                // RSSI optimization - keep latest + strongest + weakest only
+                let existingProximityPoints = targetEncounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
+                
+                if existingProximityPoints.count < 3 {
+                    targetEncounter.flightPath.append(proximityPoint)
+                    targetEncounter.metadata["hasProximityPoints"] = "true"
+                    print("Added proximity point with RSSI: \(message.rssi!)dBm")
+                } else {
+                    // Find oldest non-extreme point to replace with latest
+                    let currentRssi = Double(message.rssi!)
+                    let rssiValues = existingProximityPoints.compactMap { $0.proximityRssi }
+                    let minRssi = rssiValues.min() ?? currentRssi
+                    let maxRssi = rssiValues.max() ?? currentRssi
+                    
+                    if let replaceIndex = targetEncounter.flightPath.firstIndex(where: { point in
+                        point.isProximityPoint && point.proximityRssi != nil &&
+                        point.proximityRssi != minRssi && point.proximityRssi != maxRssi
+                    }) {
+                        targetEncounter.flightPath[replaceIndex] = proximityPoint
+                        print("Replaced proximity point with latest RSSI: \(message.rssi!)dBm")
+                    }
+                }
             }
         }
+        
+        // For FPV/encrypted signals with no coordinates, create ring at monitor location
+        if lat == 0 && lon == 0 && message.rssi != nil && message.rssi != 0 {
+            if let monitorStatus = monitorStatus {
+                let monitorLat = monitorStatus.gpsData.latitude
+                let monitorLon = monitorStatus.gpsData.longitude
+                
+                if monitorLat != 0 || monitorLon != 0 {
+                    let distance: Double
+                    
+                    // Use appropriate distance calculation for FPV
+                    if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                        // FPV distance calculation
+                        let minRssi = 1000.0
+                        let maxRssi = 3500.0
+                        
+                        if fpvRSSI < minRssi {
+                            distance = 2000.0
+                        } else if fpvRSSI > maxRssi {
+                            distance = 50.0
+                        } else {
+                            let normalizedRssi = (fpvRSSI - minRssi) / (maxRssi - minRssi)
+                            let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
+                            distance = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
+                        }
+                    } else {
+                        distance = DroneSignatureGenerator().calculateDistance(Double(message.rssi!))
+                    }
+                    
+                    // Only add if we don't already have a proximity point for this encounter
+                    let hasExistingProximityPoint = targetEncounter.flightPath.contains { point in
+                        point.isProximityPoint &&
+                        abs(point.latitude - monitorLat) < 0.0001 &&
+                        abs(point.longitude - monitorLon) < 0.0001
+                    }
+                    
+                    if !hasExistingProximityPoint {
+                        let ringPoint = FlightPathPoint(
+                            latitude: monitorLat,
+                            longitude: monitorLon,
+                            altitude: 0,
+                            timestamp: Date().timeIntervalSince1970,
+                            homeLatitude: nil,
+                            homeLongitude: nil,
+                            isProximityPoint: true,
+                            proximityRssi: Double(message.rssi!),
+                            proximityRadius: distance
+                        )
+                        targetEncounter.flightPath.append(ringPoint)
+                        targetEncounter.metadata["hasProximityPoints"] = "true"
+                        
+                        // Add FPV-specific metadata
+                        if message.isFPVDetection {
+                            targetEncounter.metadata["isFPVDetection"] = "true"
+                            if let frequency = message.fpvFrequency {
+                                targetEncounter.metadata["fpvFrequency"] = "\(frequency)"
+                            }
+                            if let source = message.fpvSource {
+                                targetEncounter.metadata["fpvSource"] = source
+                            }
+                        }
+                        
+                        didAddPoint = true
+                        print("Added proximity ring point with RSSI: \(message.rssi!)dBm, radius: \(Int(distance))m")
+                    } else {
+                        // Update existing proximity point with new RSSI/radius if different
+                        if let index = targetEncounter.flightPath.firstIndex(where: { point in
+                            point.isProximityPoint &&
+                            abs(point.latitude - monitorLat) < 0.0001 &&
+                            abs(point.longitude - monitorLon) < 0.0001
+                        }) {
+                            var updatedPoint = targetEncounter.flightPath[index]
+                            updatedPoint = FlightPathPoint(
+                                latitude: updatedPoint.latitude,
+                                longitude: updatedPoint.longitude,
+                                altitude: updatedPoint.altitude,
+                                timestamp: Date().timeIntervalSince1970,
+                                homeLatitude: updatedPoint.homeLatitude,
+                                homeLongitude: updatedPoint.homeLongitude,
+                                isProximityPoint: true,
+                                proximityRssi: Double(message.rssi!),
+                                proximityRadius: distance
+                            )
+                            targetEncounter.flightPath[index] = updatedPoint
+                            print("Updated proximity ring point with RSSI: \(message.rssi!)dBm, radius: \(Int(distance))m")
+                        }
+                    }
+                }
+            }
+        } 
         
         // Preserve MAC history
         for source in message.signalSources {
@@ -478,22 +590,10 @@ class DroneStorageManager: ObservableObject {
                 encounter.metadata["doNotTrack"] = "true"
                 encounters[possibleId] = encounter
             } else {
-                // Create a new encounter record to mark as blocked
-                let newEncounter = DroneEncounter(
-                    id: possibleId,
-                    firstSeen: Date(),
-                    lastSeen: Date(),
-                    flightPath: [],
-                    signatures: [],
-                    metadata: ["doNotTrack": "true", "type": "drone"],
-                    macHistory: []
-                )
-                encounters[possibleId] = newEncounter
+                print("No encounter with that ID to untrack: \(possibleIds)")
             }
         }
-        
-        saveToStorage()
-        print("🚫 Marked as do not track: \(possibleIds)")
+        print("Marked as do not track: \(possibleIds)")
     }
     
     //MARK: - Storage Functions/CRUD
@@ -523,9 +623,9 @@ class DroneStorageManager: ObservableObject {
     func saveToStorage() {
         if let data = try? JSONEncoder().encode(encounters) {
             UserDefaults.standard.set(data, forKey: "DroneEncounters")
-            print("✅ Saved \(encounters.count) encounters to storage")
+            print(" \(encounters.count) encounters in storage")
         } else {
-            print("❌ Failed to encode encounters")
+            print("Failed to encode encounters")
         }
     }
     

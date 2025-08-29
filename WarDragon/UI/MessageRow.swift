@@ -24,6 +24,48 @@ struct MessageRow: View {
         var id: Int { hashValue }
     }
     
+    //MARK - FPV
+    private var displayRSSI: String {
+        if message.isFPVDetection {
+            return message.fpvSignalStrengthFormatted
+        } else if let rssi = getRSSI() {
+            if rssi > 1000 {
+                // MDN-style values
+                return String(format: "%.0f", rssi)
+            } else {
+                // Standard dBm values
+                return String(format: "%.0f dBm", rssi)
+            }
+        }
+        return "Unknown"
+    }
+
+    private var displayName: String {
+        if message.isFPVDetection {
+            return message.fpvDisplayName
+        }
+        return message.description.isEmpty ? "Unnamed Drone" : message.description
+    }
+
+    private var displayDetails: String {
+        if message.isFPVDetection {
+            return message.fpvFrequencyFormatted
+        }
+        
+        // Regular drone details
+        var details: [String] = []
+        
+        if let mac = getMAC() {
+            details.append(mac)
+        }
+        
+        if message.speed != "0.0" && !message.speed.isEmpty {
+            details.append("\(message.speed) m/s")
+        }
+        
+        return details.joined(separator: " • ")
+    }
+    
     // MARK: - Helper Properties
     
     private var signature: DroneSignature? {
@@ -71,7 +113,7 @@ struct MessageRow: View {
         // Force immediate UI update
         cotViewModel.objectWillChange.send()
         
-        print("🛑 Stopped tracking drone with IDs: \(idsToRemove)")
+        print("Stopped tracking drone with IDs: \(idsToRemove)")
     }
     
     private func deleteDroneFromStorage() {
@@ -327,6 +369,9 @@ struct MessageRow: View {
         case .sdr:
             iconName = "dot.radiowaves.left.and.right"
             iconColor = .purple
+        case .fpv:
+            iconName = "antenna.radiowaves.left.and.right"
+            iconColor = .orange
         default:
             iconName = "questionmark.circle"
             iconColor = .gray
@@ -391,60 +436,146 @@ struct MessageRow: View {
     
     @ViewBuilder
     private func mapSectionView() -> some View {
-        // Fetch stored flight path coordinates for this drone
-        let flightCoords = DroneStorageManager.shared
-            .encounters[message.uid]?.flightPath
-            .map { $0.coordinate } ?? []
-        Map {
-            // Existing drone marker
-            if let coordinate = message.coordinate {
-                Annotation(message.uid, coordinate: coordinate) {
-                    Image(systemName: "airplane")
-                        .resizable()
-                        .frame(width: 20, height: 20)
-                        .rotationEffect(.degrees(message.headingDeg - 90)) // for tru north use -90
-                        .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
-                        .foregroundStyle(.blue)
+        if message.isFPVDetection {
+            // FPV shows RSSI ring at monitor location
+            if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
+                Map {
+                    // Show RSSI ring centered at monitor location
+                    MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                        .foregroundStyle(.orange.opacity(0.1))
+                        .stroke(.orange, lineWidth: 2)
+                    
+                    // Monitor position marker
+                    Annotation("Monitor", coordinate: ring.centerCoordinate) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .foregroundColor(.blue)
+                            .font(.title2)
+                            .background(Circle().fill(.white))
+                    }
+                    
+                    // FPV signal annotation
+                    Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: ring.centerCoordinate) {
+                        VStack {
+                            Text("FPV Signal")
+                                .font(.caption)
+                            Text("\(Int(ring.radius))m radius")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(6)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(6)
+                    }
+                }
+                .frame(height: 150)
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.orange, lineWidth: 1)
+                )
+            } else {
+                // No ring yet - show placeholder
+                VStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundColor(.orange)
+                            .font(.title2)
+                        
+                        VStack(alignment: .leading) {
+                            Text(message.fpvDisplayName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("No location data")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.orange.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                }
+                .frame(height: 80)
+            }
+        } else {
+            // Regular drone map (existing code)
+            let flightCoords = DroneStorageManager.shared
+                .encounters[message.uid]?.flightPath
+                .map { $0.coordinate } ?? []
+            Map {
+                // Existing drone marker
+                if let coordinate = message.coordinate {
+                    Annotation(message.uid, coordinate: coordinate) {
+                        Image(systemName: "airplane")
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                            .rotationEffect(.degrees(message.headingDeg - 90))
+                            .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                            .foregroundStyle(.blue)
+                    }
+                }
+                if flightCoords.count > 1 {
+                    MapPolyline(coordinates: flightCoords)
+                        .stroke(.purple, lineWidth: 2)
                 }
             }
-            if flightCoords.count > 1 {
-                MapPolyline(coordinates: flightCoords)
-                    .stroke(.purple, lineWidth: 2)
-            }
+            .frame(height: 150)
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.gray, lineWidth: 1)
+            )
         }
-        .frame(height: 150)
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.gray, lineWidth: 1)
-        )
     }
     
     @ViewBuilder
     private func detailsView() -> some View {
         Group {
-            if message.lat != "0.0" {
-                Text("Position: \(message.lat), \(message.lon)")
+            if message.isFPVDetection {
+                // FPV specific details
+                if let frequency = message.fpvFrequency {
+                    Text("Frequency: \(frequency) MHz")
+                }
+                if let bandwidth = message.fpvBandwidth, !bandwidth.isEmpty {
+                    Text("Bandwidth: \(bandwidth)")
+                }
+                if let source = message.fpvSource {
+                    Text("Source: \(source)")
+                }
+                if let fpvRSSI = message.fpvRSSI {
+                    Text("Signal Strength: \(String(format: "%.1f", fpvRSSI))")
+                }
+            } else {
+                // Regular drone details (existing code)
+                if message.lat != "0.0" {
+                    Text("Position: \(message.lat), \(message.lon)")
+                }
+                if message.alt != "0.0" {
+                    Text("Altitude: \(message.alt)m")
+                }
+                if message.speed != "0.0" {
+                    Text("Speed: \(message.speed)m/s")
+                }
+                if message.pilotLat != "0.0" {
+                    Text("Pilot Location: \(message.pilotLat), \(message.pilotLon)")
+                }
+                if let mac = message.mac, !mac.isEmpty {
+                    Text("MAC: \(mac)")
+                }
+                if message.operator_id != "" {
+                    Text("Operator ID: \(message.operator_id ?? "")")
+                }
+                if let manufacturer = message.manufacturer, manufacturer != "Unknown" {
+                    Text("Manufacturer: \(manufacturer)")
+                }
             }
-            if message.alt != "0.0" {
-                Text("Altitude: \(message.alt)m")
-            }
-            if message.speed != "0.0" {
-                Text("Speed: \(message.speed)m/s")
-            }
-            if message.pilotLat != "0.0" {
-                Text("Pilot Location: \(message.pilotLat), \(message.pilotLon)")
-            }
-            if let mac = message.mac, !mac.isEmpty {
-                Text("MAC: \(mac)")
-            }
-            if message.operator_id != "" {
-                Text("Operator ID: \(message.operator_id ?? "")")
-            }
-            if let manufacturer = message.manufacturer, manufacturer != "Unknown" {
-                Text("Manufacturer: \(manufacturer)")
-            }
-            
         }
         .font(.appCaption)
         .foregroundColor(.primary)

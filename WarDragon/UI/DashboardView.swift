@@ -104,10 +104,6 @@ struct SystemStatusCard: View {
         .cornerRadius(12)
     }
     
-    private var statusColor: Color {
-        statusViewModel.statusColor
-    }
-    
     private var cpuColor: Color {
         let usage = statusViewModel.statusMessages.last?.systemStats.cpuUsage ?? 0
         switch usage {
@@ -149,6 +145,10 @@ struct DronesOverviewCard: View {
         return Set(cotViewModel.parsedMessages.compactMap { $0.mac }).count
     }
     
+    private var fpvCount: Int {
+        cotViewModel.parsedMessages.filter { $0.isFPVDetection }.count
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -182,6 +182,13 @@ struct DronesOverviewCard: View {
                     value: "\(nearbyCount)",
                     icon: "location.fill",
                     color: .green
+                )
+                
+                StatBox(
+                    title: "FPV",
+                    value: "\(fpvCount)",
+                    icon: "antenna.radiowaves.left.and.right",
+                    color: .orange
                 )
                 
                 let randomizingCount = cotViewModel.parsedMessages.filter { msg in
@@ -253,10 +260,10 @@ struct DronesOverviewCard: View {
         }.compactMap { $0.mac })
         return uniqueNearbyMacs.count
     }
-    
-    private var recentDrones: [CoTViewModel.CoTMessage] {
-        Array(cotViewModel.parsedMessages.prefix(3))
-    }
+        
+        private var recentDrones: [CoTViewModel.CoTMessage] {
+            Array(cotViewModel.parsedMessages.prefix(3))
+        }
 }
 
 struct SDRStatusCard: View {

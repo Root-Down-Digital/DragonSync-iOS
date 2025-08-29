@@ -59,6 +59,11 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     private var runtime: String?
     var originalRawString: String?
     
+    private var fpvFrequency: String?
+    private var fpvSource: String?
+    private var fpvBandwidth: String?
+    private var fpvRSSI: Int?
+    
     private var trackAttributes: [String: String] = [:]
     private var track_course: String?
     private var track_speed: String?
@@ -250,6 +255,23 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     }
     
     private func processSingleJSON(_ json: [String: Any]) {
+        // Check for FPV Detection in single object format
+        if let fpvDetection = json["FPV Detection"] as? [String: Any] {
+            if let fpvMessage = processFPVDetection(fpvDetection) {
+                cotMessage = fpvMessage
+                return
+            }
+        }
+        
+        // Check for AUX_ADV_IND (FPV update) format
+        if json["AUX_ADV_IND"] != nil {
+            if let auxMessage = processAuxAdvInd(json) {
+                cotMessage = auxMessage
+                return
+            }
+        }
+        
+        // Handle ESP32 format
         if let message = parseESP32Message(json) {
             cotMessage = message
         }
@@ -261,7 +283,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         
         if let basicId = jsonData["Basic ID"] as? [String: Any] {
             let id = basicId["id"] as? String ?? UUID().uuidString
-            // Fix: Always use the original ID for the drone identifier
+            // Always use the original ID for the drone identifier
             let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
             let idType = basicId["id_type"] as? String ?? ""
             var caaReg: String?
@@ -774,6 +796,82 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         }
     }
     
+    //MARK: - FPV 
+    
+    private func processFPVDetection(_ fpvData: [String: Any]) -> CoTViewModel.CoTMessage? {
+        let timestamp = fpvData["timestamp"] as? String ?? ""
+        let manufacturer = fpvData["manufacturer"] as? String ?? ""
+        let deviceType = fpvData["device_type"] as? String ?? ""
+        let frequency = fpvData["frequency"] as? Int ?? 0
+        let bandwidth = fpvData["bandwidth"] as? String ?? ""
+        let signalStrength = fpvData["signal_strength"] as? Double ?? 0.0
+        let detectionSource = fpvData["detection_source"] as? String ?? ""
+        
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        let message = CoTViewModel.CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R",
+            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            speed: "0.0", vspeed: "0.0", alt: "0.0",
+            pilotLat: "0.0", pilotLon: "0.0",
+            description: "FPV Detection: \(deviceType)",
+            selfIDText: "FPV \(frequency)MHz \(bandwidth)",
+            uaType: .helicopter, idType: "FPV Detection",
+            rawMessage: fpvData
+        )
+        
+        cotMessage = message
+        
+        // Set FPV fields
+        cotMessage?.fpvTimestamp = timestamp
+        cotMessage?.fpvSource = detectionSource
+        cotMessage?.fpvFrequency = frequency
+        cotMessage?.fpvBandwidth = bandwidth
+        cotMessage?.fpvRSSI = signalStrength
+        cotMessage?.manufacturer = manufacturer
+        
+        return cotMessage
+    }
+
+    private func processAuxAdvInd(_ jsonObject: [String: Any]) -> CoTViewModel.CoTMessage? {
+        guard let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
+              let aext = jsonObject["aext"] as? [String: Any] else {
+            return nil
+        }
+        
+        let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
+        let timestamp = auxAdvInd["time"] as? String ?? ""
+        let advA = aext["AdvA"] as? String ?? ""
+        let frequency = jsonObject["frequency"] as? Int ?? 0
+        
+        let detectionSource = advA.replacingOccurrences(of: " random", with: "")
+        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        
+        let message = CoTViewModel.CoTMessage(
+            uid: fpvId,
+            type: "a-f-A-M-F-R",
+            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            speed: "0.0", vspeed: "0.0", alt: "0.0",
+            pilotLat: "0.0", pilotLon: "0.0",
+            description: "FPV Update: \(detectionSource)",
+            selfIDText: "FPV \(frequency)MHz Update",
+            uaType: .helicopter, idType: "FPV Update",
+            rawMessage: jsonObject
+        )
+        
+        cotMessage = message
+        
+        // Set FPV fields
+        cotMessage?.fpvTimestamp = timestamp
+        cotMessage?.fpvSource = detectionSource
+        cotMessage?.fpvFrequency = frequency
+        cotMessage?.fpvRSSI = rssi
+        cotMessage?.aa = auxAdvInd["aa"] as? Int
+        
+        return cotMessage
+    }
+    
     // MARK: - Parsing helpers
     
     private func parseRemarks(_ remarks: String) {
@@ -1085,7 +1183,25 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 }
             } else if trimmed.hasPrefix("Self-ID:") {
                 description = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
-            }
+            } else if trimmed.hasPrefix("FPV Update") || trimmed.hasPrefix("FPV Detection") {
+                   // Extract RSSI from FPV format
+                   if let rssiMatch = trimmed.range(of: "RSSI: ([-]?\\d+(?:\\.\\d+)?)dBm", options: .regularExpression) {
+                       let rssiStr = trimmed[rssiMatch].replacingOccurrences(of: "RSSI: ", with: "").replacingOccurrences(of: "dBm", with: "")
+                       rssi = Int(Double(rssiStr) ?? 0)
+                   }
+                   
+                   // Extract frequency
+                   if let freqMatch = trimmed.range(of: "Frequency: (\\d+(?:\\.\\d+)?)", options: .regularExpression) {
+                       let freqStr = trimmed[freqMatch].replacingOccurrences(of: "Frequency: ", with: "").replacingOccurrences(of: " MHz", with: "")
+                       fpvFrequency = freqStr
+                   }
+                   
+                   // Extract source
+                   if let sourceMatch = trimmed.range(of: "Source: ([^,]+)", options: .regularExpression) {
+                       let sourceStr = trimmed[sourceMatch].replacingOccurrences(of: "Source: ", with: "")
+                       fpvSource = sourceStr
+                   }
+               }
         }
         
         if manufacturer == "Unknown", let mac = mac {

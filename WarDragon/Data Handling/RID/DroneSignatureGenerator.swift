@@ -710,7 +710,7 @@ public final class DroneSignatureGenerator {
     
     public func extractTransmissionInfo(_ message: [String: Any]) -> DroneSignature.TransmissionInfo {
         let type: DroneSignature.TransmissionInfo.TransmissionType
-        let messageType: DroneSignature.TransmissionInfo.MessageType
+        var messageType: DroneSignature.TransmissionInfo.MessageType = .bt45
         var metadata: [String: Any]? = nil
         var channel: Int? = nil
         var advMode: String? = nil
@@ -775,7 +775,9 @@ public final class DroneSignatureGenerator {
         } else if message["Basic ID"] != nil {
             type = .esp32 // or BT
             messageType = .esp32
-        } else {
+        } else if message["frequency"] != nil {
+            type = .fpv
+        }else {
             type = .unknown
             messageType = .bt45
         }
@@ -837,6 +839,8 @@ public final class DroneSignatureGenerator {
             messageType = .wifi
         } else if message["Basic ID"] != nil {
             messageType = .esp32
+        } else if message["frequency"] != nil {
+            messageType = .fpv
         }
         
         var intervals = [TimeInterval]()
