@@ -205,39 +205,46 @@ class CoTViewModel: ObservableObject {
         var isFPVDetection: Bool {
             return uid.hasPrefix("fpv-") && idType.contains("FPV")
         }
-
+        
         var fpvDisplayName: String {
             if let frequency = fpvFrequency {
                 return "FPV \(frequency)MHz"
             }
             return "FPV Signal"
         }
-
+        
         var fpvSignalStrengthFormatted: String {
             if let rssi = fpvRSSI {
                 return String(format: "%.0f", rssi)
             }
             return "Unknown"
         }
-
+        
         var fpvFrequencyFormatted: String {
             if let frequency = fpvFrequency {
                 return "\(frequency) MHz"
             }
             return "Unknown"
         }
-
+        
         var statusColor: Color {
-            if isFPVDetection {
-                guard let rssi = fpvRSSI else { return .gray }
-                if rssi > 1000 { return .green }    // Lower threshold for FPV
-                if rssi > 800 { return .yellow }    // Much lower threshold
-                return .red
-            }
-            
-            // Drone RSSI colors
             let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdated)
-            if timeSinceLastUpdate < 10 {
+            // FPV Staleout
+            if isFPVDetection {
+                if timeSinceLastUpdate < 10 {
+                    guard let rssi = fpvRSSI else { return .gray }
+                    if rssi > 2000 { return .green }    // Lower threshold for FPV
+                    if rssi > 100 { return .yellow }    // Much lower threshold
+                    return .red
+                }
+                else if timeSinceLastUpdate < 30 {
+                    return .yellow
+                } else {
+                    return .gray
+                }
+            }
+            // Drone Staleout
+            else if timeSinceLastUpdate < 10 {
                 return rssi != nil && rssi! > -60 ? .green : rssi != nil && rssi! > -80 ? .yellow : .red
             } else if timeSinceLastUpdate < 30 {
                 return .yellow
@@ -245,9 +252,9 @@ class CoTViewModel: ObservableObject {
                 return .gray
             }
         }
-        
-        //CoT Message Tracks
-        var trackCourse: String?
+    
+    //CoT Message Tracks
+    var trackCourse: String?
         var trackSpeed: String?
         
         var hasTrackInfo: Bool {
@@ -318,8 +325,6 @@ class CoTViewModel: ObservableObject {
             guard let staleDate = formatter.date(from: staleTime) else { return true }
             return Date() > staleDate
         }
-        
- 
         
         var statusDescription: String {
             // Using times from CoT 4.0 Spec, Section 2.2.2.2
@@ -1013,8 +1018,13 @@ class CoTViewModel: ObservableObject {
     func restoreAlertRingsFromStorage() {
         print("Restoring alert rings from storage...")
         
+        var restoredCount: Int = 0
+        
         // Clear existing alert rings
         alertRings.removeAll()
+        
+        // Dictionary to keep track of how many rings we've added per drone ID
+        var ringsPerDrone: [String: Int] = [:]
         
         // Restore alert rings for FPV and encrypted signals from storage
         for (droneId, encounter) in DroneStorageManager.shared.encounters {
@@ -1066,8 +1076,13 @@ class CoTViewModel: ObservableObject {
                     rssi: Int(proximityPoint.proximityRssi!)
                 )
                 
-                alertRings.append(ring)
-                print("Restored alert ring for \(droneId): radius \(Int(radius))m, RSSI: \(Int(proximityPoint.proximityRssi!))dBm")
+                // Check if we haven't exceeded the limit for this drone (1-2 rings)
+                let currentCountForDrone = ringsPerDrone[droneId] ?? 0
+                if currentCountForDrone < 2 && alertRings.count < 10 {
+                    alertRings.append(ring)
+                    ringsPerDrone[droneId] = currentCountForDrone + 1
+                    print("Restored alert ring for \(droneId): radius \(Int(radius))m, RSSI: \(Int(proximityPoint.proximityRssi!))dBm")
+                }
             }
         }
         

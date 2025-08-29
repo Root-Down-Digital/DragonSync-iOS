@@ -338,9 +338,29 @@ class DroneStorageManager: ObservableObject {
                     proximityRssi: Double(message.rssi!),
                     proximityRadius: nil
                 )
-                targetEncounter.flightPath.append(proximityPoint)
-                targetEncounter.metadata["hasProximityPoints"] = "true"
-                print("Added proximity point with RSSI: \(message.rssi!)dBm")
+                
+                // RSSI optimization - keep latest + strongest + weakest only
+                let existingProximityPoints = targetEncounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
+                
+                if existingProximityPoints.count < 3 {
+                    targetEncounter.flightPath.append(proximityPoint)
+                    targetEncounter.metadata["hasProximityPoints"] = "true"
+                    print("Added proximity point with RSSI: \(message.rssi!)dBm")
+                } else {
+                    // Find oldest non-extreme point to replace with latest
+                    let currentRssi = Double(message.rssi!)
+                    let rssiValues = existingProximityPoints.compactMap { $0.proximityRssi }
+                    let minRssi = rssiValues.min() ?? currentRssi
+                    let maxRssi = rssiValues.max() ?? currentRssi
+                    
+                    if let replaceIndex = targetEncounter.flightPath.firstIndex(where: { point in
+                        point.isProximityPoint && point.proximityRssi != nil &&
+                        point.proximityRssi != minRssi && point.proximityRssi != maxRssi
+                    }) {
+                        targetEncounter.flightPath[replaceIndex] = proximityPoint
+                        print("Replaced proximity point with latest RSSI: \(message.rssi!)dBm")
+                    }
+                }
             }
         }
         
@@ -615,9 +635,9 @@ class DroneStorageManager: ObservableObject {
     func saveToStorage() {
         if let data = try? JSONEncoder().encode(encounters) {
             UserDefaults.standard.set(data, forKey: "DroneEncounters")
-            print("✅ Saved \(encounters.count) encounters to storage")
+            print(" \(encounters.count) encounters in storage")
         } else {
-            print("❌ Failed to encode encounters")
+            print("Failed to encode encounters")
         }
     }
     
