@@ -211,8 +211,8 @@ struct StoredEncountersView: View {
         }
         
         private func ensureDronePrefix(_ id: String) -> String {
-                return id.hasPrefix("drone-") ? id : "drone-\(id)"
-            }
+            return id.hasPrefix("drone-") ? id : "drone-\(id)"
+        }
     }
     
     struct EncounterDetailView: View {
@@ -274,7 +274,7 @@ struct StoredEncountersView: View {
                     .background(Color(UIColor.secondarySystemBackground))
                     .cornerRadius(12)
                     
-                //MARK - View Sections
+                    //MARK - View Sections
                     
                     // Map
                     mapSection
@@ -282,7 +282,7 @@ struct StoredEncountersView: View {
                     // Encounters section
                     encounterStats
                     
-//                  metadataSection // TODO metadata section
+                    //                  metadataSection // TODO metadata section
                     
                     if !encounter.macHistory.isEmpty && encounter.macHistory.count > 1 {
                         macSection
@@ -348,20 +348,20 @@ struct StoredEncountersView: View {
                 Text("Are you sure you want to delete this encounter? This action cannot be undone.")
             }
         }
-
+        
         private var mapSection: some View {
             // Precompute and sanitize it all for Map builder
             let validFlightPoints = encounter.flightPath.filter { $0.latitude != 0 || $0.longitude != 0 }
             let regularPoints = validFlightPoints.filter { !$0.isProximityPoint }
             let proximityPointsWithRssi = encounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
-
+            
             let pilotItems = buildPilotItems()
             let homeItems = buildHomeItems()
             let alertRings = cotViewModel.alertRings.filter { ring in
                 ring.droneId == encounter.id ||
                 ring.droneId.hasPrefix("\(encounter.id)-")
             }
-
+            
             // Group top-level children to keep Map builder tuple arity small
             return Map(position: $mapCameraPosition) {
                 // Flight polyline + start/end
@@ -370,7 +370,7 @@ struct StoredEncountersView: View {
                         MapPolyline(coordinates: regularPoints.map { $0.coordinate })
                             .stroke(.blue, lineWidth: 3)
                     }
-
+                    
                     if let start = regularPoints.first {
                         Annotation("First Detection", coordinate: start.coordinate) {
                             Image(systemName: "1.circle.fill")
@@ -378,7 +378,7 @@ struct StoredEncountersView: View {
                                 .background(Circle().fill(.white))
                         }
                     }
-
+                    
                     if regularPoints.count > 1, let end = regularPoints.last {
                         Annotation("Latest Detection", coordinate: end.coordinate) {
                             Image(systemName: "location.fill")
@@ -389,7 +389,7 @@ struct StoredEncountersView: View {
                     
                     drawTimeBasedSegments(regularPoints)
                 }
-
+                
                 // Proximity circles + annotations grouped together
                 Group {
                     if !proximityPointsWithRssi.isEmpty {
@@ -397,7 +397,7 @@ struct StoredEncountersView: View {
                             let point = proximityPointsWithRssi[idx]
                             let rssi = point.proximityRssi! // safe: filtered above
                             let radius = DroneSignatureGenerator().calculateDistance(rssi)
-
+                            
                             MapCircle(center: point.coordinate, radius: radius)
                                 .foregroundStyle(.yellow.opacity(0.1))
                                 .stroke(.yellow, lineWidth: 2)
@@ -406,7 +406,7 @@ struct StoredEncountersView: View {
                                 Annotation("Detection #\(idx)", coordinate: point.coordinate) {
                                     VStack {
                                         Text("RSSI: \(Int(rssi))dBm").font(.caption)
-//                                        Text("\(Int(radius))m").font(.caption)
+                                        //                                        Text("\(Int(radius))m").font(.caption)
                                     }
                                     .padding(4)
                                     .background(.ultraThinMaterial)
@@ -416,7 +416,7 @@ struct StoredEncountersView: View {
                         }
                     }
                 }
-
+                
                 Group {
                     if !pilotItems.isEmpty {
                         ForEach(pilotItems) { item in
@@ -428,7 +428,7 @@ struct StoredEncountersView: View {
                         }
                     }
                 }
-
+                
                 Group {
                     if !homeItems.isEmpty {
                         ForEach(homeItems) { item in
@@ -440,7 +440,7 @@ struct StoredEncountersView: View {
                         }
                     }
                 }
-
+                
                 Group {
                     if !alertRings.isEmpty {
                         ForEach(alertRings) { ring in
@@ -498,7 +498,7 @@ struct StoredEncountersView: View {
             .frame(height: 300)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-
+        
         private struct MapPointItem: Identifiable {
             let id = UUID()
             let title: String
@@ -506,10 +506,10 @@ struct StoredEncountersView: View {
             let systemImageName: String
             let tintColor: Color
         }
-
+        
         private func buildPilotItems() -> [MapPointItem] {
             var items: [MapPointItem] = []
-
+            
             if let pilotLatStr = encounter.metadata["pilotLat"],
                let pilotLonStr = encounter.metadata["pilotLon"],
                let lat = Double(pilotLatStr), let lon = Double(pilotLonStr),
@@ -521,7 +521,7 @@ struct StoredEncountersView: View {
                     tintColor: .blue
                 ))
             }
-
+            
             if let pilotHistory = encounter.metadata["pilotHistory"] {
                 let entries = pilotHistory.components(separatedBy: ";")
                 for (idx, entry) in entries.enumerated() {
@@ -540,13 +540,13 @@ struct StoredEncountersView: View {
                     ))
                 }
             }
-
+            
             return items
         }
-
+        
         private func buildHomeItems() -> [MapPointItem] {
             var items: [MapPointItem] = []
-
+            
             if let latStr = encounter.metadata["homeLat"],
                let lonStr = encounter.metadata["homeLon"],
                let lat = Double(latStr), let lon = Double(lonStr),
@@ -558,7 +558,7 @@ struct StoredEncountersView: View {
                     tintColor: .green
                 ))
             }
-
+            
             if let homeHistory = encounter.metadata["homeHistory"] {
                 let entries = homeHistory.components(separatedBy: ";")
                 for (idx, entry) in entries.enumerated() {
@@ -577,21 +577,21 @@ struct StoredEncountersView: View {
                     ))
                 }
             }
-
+            
             return items
         }
-
+        
         @MapContentBuilder
         private func drawTimeBasedSegments(_ points: [FlightPathPoint]) -> some MapContent {
             if points.count > 4 {
                 let segmentSize = max(1, points.count / 4)
-
+                
                 let recentPoints = Array(points.suffix(segmentSize))
                 if recentPoints.count > 1 {
                     MapPolyline(coordinates: recentPoints.map { $0.coordinate })
                         .stroke(.red, lineWidth: 2)
                 }
-
+                
                 if points.count > segmentSize * 2 {
                     let startIndex = max(0, points.count - segmentSize * 2)
                     let endIndex = points.count - segmentSize
@@ -603,12 +603,12 @@ struct StoredEncountersView: View {
                 }
             }
         }
-
+        
         // MARK: Pilot annotations
         @MapContentBuilder
         private func pilotLocationAnnotations() -> some MapContent {
             let items = buildPilotItems()
-
+            
             Group {
                 ForEach(items) { item in
                     Annotation(item.title,
@@ -620,12 +620,12 @@ struct StoredEncountersView: View {
                 }
             }
         }
-
+        
         // MARK: Home annotations
         @MapContentBuilder
         private func homeLocationAnnotations() -> some MapContent {
             let items = buildHomeItems()
-
+            
             Group {
                 ForEach(items) { item in
                     Annotation(item.title,
@@ -768,8 +768,16 @@ struct StoredEncountersView: View {
                     StatItem(title: "Max Alt", value: String(format: "%.1fm", encounter.maxAltitude))
                     StatItem(title: "Max Speed", value: String(format: "%.1fm/s", encounter.maxSpeed))
                     StatItem(title: "Avg RSSI", value: String(format: "%.1fdBm", encounter.averageRSSI))
-                    StatItem(title: "Points", value: "\(encounter.flightPath.count)")
                     StatItem(title: "Signatures", value: "\(encounter.signatures.count)")
+                    // MARK: - FIX: Show actual detection count for FPV
+                    if encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true" {
+                        let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ??
+                        encounter.flightPath.filter { $0.isProximityPoint }.count
+                        StatItem(title: "Points", value: "\(totalDetections)")
+                    } else {
+                        StatItem(title: "Points", value: "\(encounter.flightPath.count)")
+                    }
+                    
                 }
                 Text("ENCOUNTER TIMELINE")
                     .font(.appHeadline)
@@ -821,20 +829,20 @@ struct StoredEncountersView: View {
                     .strokeBorder(Color.yellow.opacity(0.3), lineWidth: 1)
             )
         }
-
+        
         private var macSectionTitle: some View {
             Text("MAC RANDOMIZATION")
                 .font(.appHeadline)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
-
+        
         private var macSectionContent: some View {
             VStack(alignment: .leading, spacing: 12) {
                 macSectionHeader
                 macAddressScrollView
             }
         }
-
+        
         private var macSectionHeader: some View {
             HStack {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -847,7 +855,7 @@ struct StoredEncountersView: View {
                     .foregroundColor(.secondary)
             }
         }
-
+        
         private var macAddressScrollView: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -858,7 +866,7 @@ struct StoredEncountersView: View {
             }
             .frame(maxHeight: 150)
         }
-
+        
         private func macAddressRow(_ mac: String) -> some View {
             HStack {
                 Image(systemName: "circle.fill")
@@ -898,7 +906,7 @@ struct StoredEncountersView: View {
             .background(Color(UIColor.secondarySystemBackground))
             .cornerRadius(12)
         }
-
+        
     }
     
     struct StatsGrid<Content: View>: View {
@@ -1174,5 +1182,5 @@ extension StoredEncountersView.EncounterDetailView {
             return filename
         }
     }
-
+    
 }
