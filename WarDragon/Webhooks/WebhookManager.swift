@@ -96,6 +96,29 @@ struct WebhookPayload {
     let data: [String: Any]
     let metadata: [String: String]
     
+    // MARK: - Helper method to sanitize data for JSON serialization
+    private func sanitizeForJSON(_ value: Any) -> Any {
+        if let date = value as? Date {
+            return ISO8601DateFormatter().string(from: date)
+        } else if let dict = value as? [String: Any] {
+            return dict.mapValues { sanitizeForJSON($0) }
+        } else if let array = value as? [Any] {
+            return array.map { sanitizeForJSON($0) }
+        } else if let url = value as? URL {
+            return url.absoluteString
+        } else if let data = value as? Data {
+            return data.base64EncodedString()
+        } else if JSONSerialization.isValidJSONObject([value]) {
+            return value
+        } else {
+            return String(describing: value)
+        }
+    }
+    
+    private func sanitizedData() -> [String: Any] {
+        return data.mapValues { sanitizeForJSON($0) }
+    }
+    
     func toIFTTTPayload(eventName: String) -> [String: Any] {
         return [
             "value1": event.displayName,
@@ -105,20 +128,29 @@ struct WebhookPayload {
     }
     
     func toMatrixPayload() -> [String: Any] {
-        let body = """
-        🚁 **\(event.displayName)**
+        // Plain text version - no formatting
+        let plainBody = """
+        \(event.displayName)
         
-        **Time:** \(formatTimestamp())
-        **Details:** \(formatDataForDisplay())
+        Time: \(formatTimestamp())
+        Details: \(formatDataForDisplay())
+        \(formatMetadataPlain())
+        """
         
-        \(formatMetadata())
+        // HTML formatted version - proper HTML without emojis
+        let htmlBody = """
+        <strong>\(event.displayName)</strong><br/>
+        <br/>
+        <strong>Time:</strong> \(formatTimestamp())<br/>
+        <strong>Details:</strong> \(formatDataForDisplay())<br/>
+        \(formatMetadataHTML())
         """
         
         return [
             "msgtype": "m.text",
-            "body": body,
+            "body": plainBody,
             "format": "org.matrix.custom.html",
-            "formatted_body": formatMatrixHTML()
+            "formatted_body": htmlBody
         ]
     }
     
@@ -156,51 +188,38 @@ struct WebhookPayload {
     
     private func formatDataForDisplay() -> String {
         var parts: [String] = []
-        
-        for (key, value) in data {
+        let sanitized = sanitizedData()
+        for (key, value) in sanitized {
             parts.append("\(key.capitalized): \(value)")
         }
-        
         return parts.joined(separator: ", ")
     }
     
-    private func formatMetadata() -> String {
+    private func formatMetadataPlain() -> String {
         guard !metadata.isEmpty else { return "" }
         
         var parts: [String] = []
         for (key, value) in metadata {
-            parts.append("**\(key.capitalized):** \(value)")
+            parts.append("\(key.capitalized): \(value)")
         }
-        
-        return parts.joined(separator: "\n")
-    }
-    
-    private func formatMatrixHTML() -> String {
-        let body = """
-        <h3>🚁 \(event.displayName)</h3>
-        <p><strong>Time:</strong> \(formatTimestamp())</p>
-        <p><strong>Details:</strong> \(formatDataForDisplay())</p>
-        \(formatMetadataHTML())
-        """
-        return body
+        return "\n" + parts.joined(separator: "\n")
     }
     
     private func formatMetadataHTML() -> String {
         guard !metadata.isEmpty else { return "" }
         
-        var html = "<ul>"
+        var parts: [String] = []
         for (key, value) in metadata {
-            html += "<li><strong>\(key.capitalized):</strong> \(value)</li>"
+            parts.append("<br/><strong>\(key.capitalized):</strong> \(value)")
         }
-        html += "</ul>"
-        
-        return html
+        return parts.joined(separator: "")
     }
     
     private func formatFieldsForDiscord() -> [[String: Any]] {
         var fields: [[String: Any]] = []
         
-        for (key, value) in data {
+        let sanitized = sanitizedData()
+        for (key, value) in sanitized {
             fields.append([
                 "name": key.capitalized,
                 "value": "\(value)",
@@ -407,16 +426,37 @@ class WebhookManager: ObservableObject {
         case .discord:
             jsonPayload = payload.toDiscordPayload(username: config.discordUsername, avatarURL: config.discordAvatarURL)
         case .custom:
+            // MARK: - Fix for crash: Sanitize data before creating JSON payload
+            let sanitizedData = payload.data.mapValues { value -> Any in
+                if let date = value as? Date {
+                    return ISO8601DateFormatter().string(from: date)
+                } else if let url = value as? URL {
+                    return url.absoluteString
+                } else if let data = value as? Data {
+                    return data.base64EncodedString()
+                } else if JSONSerialization.isValidJSONObject([value]) {
+                    return value
+                } else {
+                    // Convert any non-serializable value to string
+                    return String(describing: value)
+                }
+            }
+            
             jsonPayload = [
                 "event": payload.event.rawValue,
                 "event_name": payload.event.displayName,
                 "timestamp": ISO8601DateFormatter().string(from: payload.timestamp),
-                "data": payload.data,
+                "data": sanitizedData,
                 "metadata": payload.metadata
             ]
         }
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: jsonPayload)
+        // MARK: - Additional validation before serialization
+        guard JSONSerialization.isValidJSONObject(jsonPayload) else {
+            throw NSError(domain: "WebhookManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON payload structure"])
+        }
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: jsonPayload, options: [])
         
         return request
     }
