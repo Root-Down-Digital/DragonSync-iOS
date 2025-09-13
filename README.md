@@ -10,7 +10,7 @@
 <br>
 
 <div align="center">
-  Real-time drone detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Enjoy professional-grade detection with advanced signal analysis and tracking. 
+  Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Enjoy professional-grade detection with advanced signal analysis and tracking. 
 </div>
 <br>
 
@@ -52,6 +52,13 @@
 
 ### Visualize Encrypted Drones
 - No GPS, no problem. Using the RSSI lets us estimate distance to target.
+
+### Spot FPV Cameras
+- Problematic drones may not have any ID broadcast, but it sure has a camera. Using a RX5808 SIM module and the [FPVWD](https://github.com/alphafox02/FPV_WD/blob/main/fpv_mdn_receiver.py) tool, tracking is trivial:
+
+![image](https://github.com/user-attachments/assets/3e60ec99-e165-45fc-a6d0-bc43d53c07eb)
+
+
 
 ### MAC Randomization Detection
 - Real-time alerts for MAC changes with historical tracking and origin ID association
