@@ -1019,77 +1019,150 @@ class CoTViewModel: ObservableObject {
     func restoreAlertRingsFromStorage() {
         print("Restoring alert rings from storage...")
         
-        var restoredCount: Int = 0
-        
         // Clear existing alert rings
         alertRings.removeAll()
-        
-        // Dictionary to keep track of how many rings we've added per drone ID
-        var ringsPerDrone: [String: Int] = [:]
         
         // Restore alert rings for FPV and encrypted signals from storage
         for (droneId, encounter) in DroneStorageManager.shared.encounters {
             // Only process encounters that have proximity points
             guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
             
-            // Look for ALL proximity points that have RSSI data (not just first one with radius)
-            for proximityPoint in encounter.flightPath.filter({ $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0 }) {
-                
-                var radius: Double
-                
-                // Use stored radius if available, otherwise calculate from RSSI
-                if let storedRadius = proximityPoint.proximityRadius, storedRadius > 0 {
-                    radius = storedRadius
-                } else {
-                    // Calculate radius from RSSI based on detection type
-                    let rssi = proximityPoint.proximityRssi!
-                    
-                    if encounter.metadata["isFPVDetection"] == "true" {
-                        // FPV distance calculation
-                        let minRssi = 1000.0
-                        let maxRssi = 3500.0
-                        
-                        if rssi < minRssi {
-                            radius = 2000.0
-                        } else if rssi > maxRssi {
-                            radius = 50.0
-                        } else {
-                            let normalizedRssi = (rssi - minRssi) / (maxRssi - minRssi)
-                            let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
-                            radius = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
-                        }
-                    } else {
-                        // Standard drone RSSI calculation
-                        radius = DroneSignatureGenerator().calculateDistance(rssi)
-                    }
-                    
-                    // Ensure minimum radius
-                    radius = max(radius, 50.0)
+            // Get all proximity points with RSSI data
+            let proximityPoints = encounter.flightPath.filter {
+                $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0
+            }
+            
+            guard !proximityPoints.isEmpty else { continue }
+            
+            // For FPV detections, show highest, lowest, and median RSSI
+            var ringsToAdd: [AlertRing] = []
+            
+            if encounter.metadata["isFPVDetection"] == "true" || droneId.hasPrefix("fpv-") {
+                // Sort proximity points by RSSI
+                let sortedPoints = proximityPoints.sorted {
+                    ($0.proximityRssi ?? 0) < ($1.proximityRssi ?? 0)
                 }
                 
-                let ring = AlertRing(
-                    droneId: droneId,
-                    centerCoordinate: CLLocationCoordinate2D(
-                        latitude: proximityPoint.latitude,
-                        longitude: proximityPoint.longitude
-                    ),
-                    radius: radius,
-                    rssi: Int(proximityPoint.proximityRssi!)
-                )
-                
-                // Check if we haven't exceeded the limit for this drone (1-2 rings)
-                let currentCountForDrone = ringsPerDrone[droneId] ?? 0
-                if currentCountForDrone < 2 && alertRings.count < 10 {
-                    alertRings.append(ring)
-                    ringsPerDrone[droneId] = currentCountForDrone + 1
-                    print("Restored alert ring for \(droneId): radius \(Int(radius))m, RSSI: \(Int(proximityPoint.proximityRssi!))dBm")
+                // Get lowest RSSI (weakest signal)
+                if let lowestPoint = sortedPoints.first {
+                    let radius = calculateRadiusForPoint(lowestPoint, isFPV: true)
+                    ringsToAdd.append(AlertRing(
+                        droneId: "\(droneId)-lowest",
+                        centerCoordinate: CLLocationCoordinate2D(
+                            latitude: lowestPoint.latitude,
+                            longitude: lowestPoint.longitude
+                        ),
+                        radius: radius,
+                        rssi: Int(lowestPoint.proximityRssi!)
+                    ))
                 }
+                
+                // Get highest RSSI (strongest signal)
+                if sortedPoints.count > 1, let highestPoint = sortedPoints.last {
+                    let radius = calculateRadiusForPoint(highestPoint, isFPV: true)
+                    ringsToAdd.append(AlertRing(
+                        droneId: "\(droneId)-highest",
+                        centerCoordinate: CLLocationCoordinate2D(
+                            latitude: highestPoint.latitude,
+                            longitude: highestPoint.longitude
+                        ),
+                        radius: radius,
+                        rssi: Int(highestPoint.proximityRssi!)
+                    ))
+                }
+                
+                // Get median RSSI (middle signal)
+                if sortedPoints.count > 2 {
+                    let medianIndex = sortedPoints.count / 2
+                    let medianPoint = sortedPoints[medianIndex]
+                    let radius = calculateRadiusForPoint(medianPoint, isFPV: true)
+                    ringsToAdd.append(AlertRing(
+                        droneId: "\(droneId)-median",
+                        centerCoordinate: CLLocationCoordinate2D(
+                            latitude: medianPoint.latitude,
+                            longitude: medianPoint.longitude
+                        ),
+                        radius: radius,
+                        rssi: Int(medianPoint.proximityRssi!)
+                    ))
+                }
+                
+                print("FPV Detection \(droneId): Found \(proximityPoints.count) detections, showing \(ringsToAdd.count) rings (highest/lowest/median)")
+                
+            } else {
+                // For regular drones, show up to 3 most recent proximity points
+                let recentPoints = Array(proximityPoints.suffix(3))
+                
+                for point in recentPoints {
+                    let radius = calculateRadiusForPoint(point, isFPV: false)
+                    ringsToAdd.append(AlertRing(
+                        droneId: droneId,
+                        centerCoordinate: CLLocationCoordinate2D(
+                            latitude: point.latitude,
+                            longitude: point.longitude
+                        ),
+                        radius: radius,
+                        rssi: Int(point.proximityRssi!)
+                    ))
+                }
+            }
+            
+            // Add rings to the collection
+            for ring in ringsToAdd {
+                alertRings.append(ring)
+                print("Restored alert ring for \(ring.droneId): radius \(Int(ring.radius))m, RSSI: \(ring.rssi)")
             }
         }
         
         print("Restored \(alertRings.count) alert rings from storage")
     }
 
+    // MARK: - Helper function to calculate radius for a proximity point
+    private func calculateRadiusForPoint(_ point: FlightPathPoint, isFPV: Bool) -> Double {
+        var radius: Double
+        
+        // Use stored radius if available
+        if let storedRadius = point.proximityRadius, storedRadius > 0 {
+            radius = storedRadius
+        } else {
+            // Calculate radius from RSSI based on detection type
+            let rssi = point.proximityRssi ?? 0
+            
+            if isFPV {
+                // FPV 5.8GHz detection range based on actual capabilities
+                // RSSI values from RX5808 module: 1100 (weak) to 3500 (very strong)
+                // Detection range realistic for 5.8GHz: 10m to 500m max
+                let minRssi = 1100.0  // Weakest detectable signal
+                let maxRssi = 1800.0  // Strong signal (adjusted for realistic range)
+                
+                if rssi <= minRssi {
+                    radius = 500.0  // Maximum detection range for 5.8GHz
+                } else if rssi >= maxRssi {
+                    radius = 10.0   // Very close range for strong signal
+                } else {
+                    // Logarithmic scale for more realistic distance mapping
+                    let normalizedRssi = (rssi - minRssi) / (maxRssi - minRssi)
+                    // Use exponential decay for distance
+                    radius = 500.0 * exp(-3.0 * normalizedRssi)
+                }
+                
+                // Debug log for FPV calculations
+                print("FPV RSSI \(Int(rssi)) -> radius \(Int(radius))m")
+                
+            } else {
+                // Standard drone RSSI calculation (negative dBm values)
+                radius = DroneSignatureGenerator().calculateDistance(rssi)
+            }
+        }
+        
+        // Ensure minimum radius
+        radius = max(radius, 10.0)
+        
+        // Cap at realistic maximum for 5.8GHz
+        radius = min(radius, 500.0)
+        
+        return radius
+    }
     // MARK: - FPV Webhook Integration
     private func sendFPVWebhookNotification(for message: CoTMessage) {
         let event: WebhookEvent = .fpvSignal
@@ -1788,26 +1861,23 @@ class CoTViewModel: ObservableObject {
 
     // Helper function to calculate FPV distance based on signal strength
     private func calculateFPVDistance(_ rssi: Double) -> Double {
-        // FPV signals use different scale (typically 1000-3500 range)
-        let minRssi = 1000.0
-        let maxRssi = 3500.0
+        // FPV 5.8GHz realistic detection range
+        let minRssi = 1100.0  // Weak signal
+        let maxRssi = 2800.0  // Strong signal (realistic for close range)
         
-        if rssi < minRssi {
-            return 2000.0 // Maximum range when signal is too weak
+        if rssi <= minRssi {
+            return 500.0 // Maximum realistic range for 5.8GHz detection
         }
         
-        if rssi > maxRssi {
-            return 50.0 // Minimum range when signal is very strong
+        if rssi >= maxRssi {
+            return 20.0 // Very close range
         }
         
-        // Normalize and calculate distance
+        // Exponential decay for realistic RF propagation
         let normalizedRssi = (rssi - minRssi) / (maxRssi - minRssi)
-        let clampedNormalizedRssi = min(1.0, max(0.0, normalizedRssi))
+        let distance = 500.0 * exp(-3.0 * normalizedRssi)
         
-        // Use exponential curve for distance calculation
-        let distance = 2000.0 * exp(-3.0 * clampedNormalizedRssi)
-        
-        return max(min(distance, 2000.0), 50.0)
+        return max(min(distance, 500.0), 10.0)
     }
     
 

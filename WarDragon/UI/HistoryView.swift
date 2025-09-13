@@ -357,7 +357,10 @@ struct StoredEncountersView: View {
 
             let pilotItems = buildPilotItems()
             let homeItems = buildHomeItems()
-            let alertRings = cotViewModel.alertRings.filter { $0.droneId == encounter.id }
+            let alertRings = cotViewModel.alertRings.filter { ring in
+                ring.droneId == encounter.id ||
+                ring.droneId.hasPrefix("\(encounter.id)-")
+            }
 
             // Group top-level children to keep Map builder tuple arity small
             return Map(position: $mapCameraPosition) {
