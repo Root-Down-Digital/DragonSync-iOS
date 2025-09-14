@@ -10,7 +10,11 @@
 <br>
 
 <div align="center">
-  Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Enjoy professional-grade detection with advanced signal analysis and tracking. 
+Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Professional-grade detection with advanced signal analysis and tracking. 
+</div>
+<br>
+<div align="center">
+Works out of the box with WarDragon Pro. Or use your own gear, including an ESP32 standalone firmware.
 </div>
 <br>
 
@@ -21,7 +25,7 @@
 - [History & Analysis](#history--analysis)
  - [Build Instructions](#build-instructions)
 
-### Supplying Backend Data
+### Detection Feed
 - [Hardware Requirements](#hardware-requirements)
  - [Software Setup](#software-requirements)
  - [Connection Choices](#connection-choices)
