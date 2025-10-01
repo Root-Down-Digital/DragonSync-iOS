@@ -2,16 +2,17 @@
 //  WebhookManager.swift
 //  WarDragon
 //
-//  Enhanced webhook integration system
-//
 
 import Foundation
 import Combine
+
+// MARK: - WebhookType Enum
 
 enum WebhookType: String, CaseIterable, Codable {
     case ifttt = "IFTTT"
     case matrix = "Matrix"
     case discord = "Discord"
+    case mqtt = "MQTT"
     case custom = "Custom"
     
     var icon: String {
@@ -19,6 +20,7 @@ enum WebhookType: String, CaseIterable, Codable {
         case .ifttt: return "link.circle.fill"
         case .matrix: return "message.circle.fill"
         case .discord: return "bubble.left.and.bubble.right.fill"
+        case .mqtt: return "antenna.radiowaves.left.and.right"
         case .custom: return "globe"
         }
     }
@@ -28,10 +30,13 @@ enum WebhookType: String, CaseIterable, Codable {
         case .ifttt: return "blue"
         case .matrix: return "green"
         case .discord: return "indigo"
+        case .mqtt: return "orange"
         case .custom: return "gray"
         }
     }
 }
+
+// MARK: - WebhookEvent Enum
 
 enum WebhookEvent: String, CaseIterable, Codable {
     case droneDetected = "drone_detected"
@@ -59,6 +64,8 @@ enum WebhookEvent: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - WebhookConfiguration Struct
+
 struct WebhookConfiguration: Codable, Identifiable {
     var id: UUID
     var name: String
@@ -77,6 +84,12 @@ struct WebhookConfiguration: Codable, Identifiable {
     var discordUsername: String?
     var discordAvatarURL: String?
     
+    // MQTT-specific configurations
+    var mqttTopic: String?
+    var mqttUsername: String?
+    var mqttPassword: String?
+    var mqttQoS: Int?
+    
     init(name: String, type: WebhookType, url: String) {
         self.id = UUID()
         self.name = name
@@ -87,8 +100,11 @@ struct WebhookConfiguration: Codable, Identifiable {
         self.customHeaders = [:]
         self.retryCount = 3
         self.timeoutSeconds = 10.0
+        self.mqttQoS = 1
     }
 }
+
+// MARK: - WebhookPayload Struct
 
 struct WebhookPayload {
     let event: WebhookEvent
@@ -97,6 +113,7 @@ struct WebhookPayload {
     let metadata: [String: String]
     
     // MARK: - Helper method to sanitize data for JSON serialization
+    
     private func sanitizeForJSON(_ value: Any) -> Any {
         if let date = value as? Date {
             return ISO8601DateFormatter().string(from: date)
@@ -119,6 +136,8 @@ struct WebhookPayload {
         return data.mapValues { sanitizeForJSON($0) }
     }
     
+    // MARK: - Payload Formatters
+    
     func toIFTTTPayload(eventName: String) -> [String: Any] {
         return [
             "value1": event.displayName,
@@ -128,7 +147,6 @@ struct WebhookPayload {
     }
     
     func toMatrixPayload() -> [String: Any] {
-        // Plain text version - no formatting
         let plainBody = """
         \(event.displayName)
         
@@ -137,7 +155,6 @@ struct WebhookPayload {
         \(formatMetadataPlain())
         """
         
-        // HTML formatted version - proper HTML without emojis
         let htmlBody = """
         <strong>\(event.displayName)</strong><br/>
         <br/>
@@ -178,6 +195,18 @@ struct WebhookPayload {
         
         return payload
     }
+    
+    func toMQTTPayload() -> [String: Any] {
+        return [
+            "event": event.rawValue,
+            "event_name": event.displayName,
+            "timestamp": ISO8601DateFormatter().string(from: timestamp),
+            "data": sanitizedData(),
+            "metadata": metadata
+        ]
+    }
+    
+    // MARK: - Formatting Helpers
     
     private func formatTimestamp() -> String {
         let formatter = DateFormatter()
@@ -240,15 +269,17 @@ struct WebhookPayload {
     
     private func getEventColor() -> Int {
         switch event {
-        case .droneDetected: return 0x3498db // Blue
-        case .fpvSignal: return 0x9b59b6 // Purple
-        case .systemAlert, .temperatureAlert, .memoryAlert, .cpuAlert: return 0xe74c3c // Red
-        case .proximityWarning: return 0xf39c12 // Orange
-        case .connectionLost: return 0xe74c3c // Red
-        case .connectionRestored: return 0x27ae60 // Green
+        case .droneDetected: return 0x3498db
+        case .fpvSignal: return 0x9b59b6
+        case .systemAlert, .temperatureAlert, .memoryAlert, .cpuAlert: return 0xe74c3c
+        case .proximityWarning: return 0xf39c12
+        case .connectionLost: return 0xe74c3c
+        case .connectionRestored: return 0x27ae60
         }
     }
 }
+
+// MARK: - WebhookManager
 
 class WebhookManager: ObservableObject {
     static let shared = WebhookManager()
@@ -321,13 +352,9 @@ class WebhookManager: ObservableObject {
     // MARK: - Webhook Delivery
     
     func sendWebhook(event: WebhookEvent, data: [String: Any], metadata: [String: String] = [:]) {
-        // Check if webhooks are globally enabled
         guard Settings.shared.webhooksEnabled else { return }
-        
-        // Check if this event type is globally enabled
         guard Settings.shared.enabledWebhookEvents.contains(event) else { return }
         
-        // Check if any webhooks are configured and enabled for this event
         let enabledConfigs = configurations.filter {
             $0.isEnabled && $0.enabledEvents.contains(event)
         }
@@ -349,6 +376,11 @@ class WebhookManager: ObservableObject {
     }
     
     private func deliverWebhook(config: WebhookConfiguration, payload: WebhookPayload, retryAttempt: Int = 0) async {
+        if config.type == .mqtt {
+            await deliverMQTTWebhook(config: config, payload: payload, retryAttempt: retryAttempt)
+            return
+        }
+        
         do {
             let request = try buildRequest(config: config, payload: payload)
             let (_, response) = try await session.data(for: request)
@@ -395,6 +427,83 @@ class WebhookManager: ObservableObject {
         }
     }
     
+    // MARK: - MQTT Delivery
+    
+    private func deliverMQTTWebhook(config: WebhookConfiguration, payload: WebhookPayload, retryAttempt: Int = 0) async {
+        guard let mqttTopic = config.mqttTopic, !mqttTopic.isEmpty else {
+            await MainActor.run {
+                recordDelivery(
+                    webhookName: config.name,
+                    event: payload.event,
+                    success: false,
+                    responseCode: nil,
+                    error: "MQTT topic not configured",
+                    retryAttempt: retryAttempt
+                )
+            }
+            return
+        }
+        
+        do {
+            let jsonPayload = payload.toMQTTPayload()
+            guard JSONSerialization.isValidJSONObject(jsonPayload) else {
+                throw NSError(domain: "WebhookManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid MQTT JSON payload"])
+            }
+            
+            let jsonData = try JSONSerialization.data(withJSONObject: jsonPayload, options: [])
+            
+            let success = await publishMQTTMessage(
+                broker: config.url,
+                topic: mqttTopic,
+                payload: jsonData,
+                qos: config.mqttQoS ?? 1,
+                username: config.mqttUsername,
+                password: config.mqttPassword
+            )
+            
+            await MainActor.run {
+                recordDelivery(
+                    webhookName: config.name,
+                    event: payload.event,
+                    success: success,
+                    responseCode: success ? 200 : nil,
+                    error: success ? nil : "MQTT publish failed",
+                    retryAttempt: retryAttempt
+                )
+            }
+            
+            if !success && retryAttempt < config.retryCount {
+                let delay = pow(2.0, Double(retryAttempt)) * 1.0
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await deliverMQTTWebhook(config: config, payload: payload, retryAttempt: retryAttempt + 1)
+            }
+            
+        } catch {
+            await MainActor.run {
+                recordDelivery(
+                    webhookName: config.name,
+                    event: payload.event,
+                    success: false,
+                    responseCode: nil,
+                    error: error.localizedDescription,
+                    retryAttempt: retryAttempt
+                )
+            }
+            
+            if retryAttempt < config.retryCount {
+                let delay = pow(2.0, Double(retryAttempt)) * 1.0
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await deliverMQTTWebhook(config: config, payload: payload, retryAttempt: retryAttempt + 1)
+            }
+        }
+    }
+    
+    private func publishMQTTMessage(broker: String, topic: String, payload: Data, qos: Int, username: String?, password: String?) async -> Bool {
+        return false
+    }
+    
+    // MARK: - Request Building
+    
     private func buildRequest(config: WebhookConfiguration, payload: WebhookPayload) throws -> URLRequest {
         guard let url = URL(string: config.url) else {
             throw NSError(domain: "WebhookManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
@@ -404,29 +513,31 @@ class WebhookManager: ObservableObject {
         request.httpMethod = "POST"
         request.timeoutInterval = config.timeoutSeconds
         
-        // Set content type
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Add custom headers
         for (key, value) in config.customHeaders {
             request.setValue(value, forHTTPHeaderField: key)
         }
         
-        // Build payload based on webhook type
         let jsonPayload: [String: Any]
         
         switch config.type {
         case .ifttt:
             jsonPayload = payload.toIFTTTPayload(eventName: config.iftttEventName ?? "wardragon_alert")
+            
         case .matrix:
             jsonPayload = payload.toMatrixPayload()
             if let accessToken = config.matrixAccessToken {
                 request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
             }
+            
         case .discord:
             jsonPayload = payload.toDiscordPayload(username: config.discordUsername, avatarURL: config.discordAvatarURL)
+            
+        case .mqtt:
+            jsonPayload = payload.toMQTTPayload()
+            
         case .custom:
-            // MARK: - Fix for crash: Sanitize data before creating JSON payload
             let sanitizedData = payload.data.mapValues { value -> Any in
                 if let date = value as? Date {
                     return ISO8601DateFormatter().string(from: date)
@@ -437,7 +548,6 @@ class WebhookManager: ObservableObject {
                 } else if JSONSerialization.isValidJSONObject([value]) {
                     return value
                 } else {
-                    // Convert any non-serializable value to string
                     return String(describing: value)
                 }
             }
@@ -451,7 +561,6 @@ class WebhookManager: ObservableObject {
             ]
         }
         
-        // MARK: - Additional validation before serialization
         guard JSONSerialization.isValidJSONObject(jsonPayload) else {
             throw NSError(domain: "WebhookManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON payload structure"])
         }
@@ -489,6 +598,10 @@ class WebhookManager: ObservableObject {
             metadata: ["test": "true"]
         )
         
+        if config.type == .mqtt {
+            return await testMQTTWebhook(config: config, payload: testPayload)
+        }
+        
         do {
             let request = try buildRequest(config: config, payload: testPayload)
             let (_, response) = try await session.data(for: request)
@@ -501,16 +614,34 @@ class WebhookManager: ObservableObject {
             return false
         }
     }
+    
+    private func testMQTTWebhook(config: WebhookConfiguration, payload: WebhookPayload) async -> Bool {
+        guard let mqttTopic = config.mqttTopic, !mqttTopic.isEmpty else {
+            return false
+        }
+        
+        do {
+            let jsonPayload = payload.toMQTTPayload()
+            let jsonData = try JSONSerialization.data(withJSONObject: jsonPayload, options: [])
+            
+            return await publishMQTTMessage(
+                broker: config.url,
+                topic: mqttTopic,
+                payload: jsonData,
+                qos: config.mqttQoS ?? 1,
+                username: config.mqttUsername,
+                password: config.mqttPassword
+            )
+        } catch {
+            return false
+        }
+    }
 }
 
+// MARK: - WebhookManager Extension
+
 extension WebhookManager {
-    /// Record a test‐send in the delivery history so it shows up in the UI.
-    func recordTestDelivery(
-        config: WebhookConfiguration,
-        success: Bool,
-        responseCode: Int? = nil,
-        error: String? = nil
-    ) {
+    func recordTestDelivery(config: WebhookConfiguration, success: Bool, responseCode: Int? = nil, error: String?) {
         let delivery = WebhookDelivery(
             webhookName: config.name,
             event: .systemAlert,
@@ -521,11 +652,10 @@ extension WebhookManager {
             retryAttempt: 0
         )
         
-        Task { @MainActor in
-            recentDeliveries.insert(delivery, at: 0)
-            if recentDeliveries.count > 100 {
-                recentDeliveries.removeLast(recentDeliveries.count - 100)
-            }
+        recentDeliveries.insert(delivery, at: 0)
+        
+        if recentDeliveries.count > maxDeliveryHistory {
+            recentDeliveries = Array(recentDeliveries.prefix(maxDeliveryHistory))
         }
     }
 }

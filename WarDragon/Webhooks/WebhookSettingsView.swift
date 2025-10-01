@@ -228,6 +228,7 @@ struct WebhookRowView: View {
         case .matrix: return .green
         case .discord: return .indigo
         case .custom: return .gray
+        case .mqtt: return .orange
         }
     }
 }

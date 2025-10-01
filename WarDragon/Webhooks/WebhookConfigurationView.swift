@@ -29,6 +29,12 @@ struct WebhookConfigurationView: View {
     @State private var discordUsername: String
     @State private var discordAvatarURL: String
     
+    // MQTT specific
+    @State private var mqttTopic: String
+    @State private var mqttUsername: String
+    @State private var mqttPassword: String
+    @State private var mqttQoS: Int
+    
     // Custom headers
     @State private var customHeaders: [HeaderPair]
     @State private var showingHeaderEditor = false
@@ -61,6 +67,11 @@ struct WebhookConfigurationView: View {
         _discordUsername = State(initialValue: config?.discordUsername ?? "WarDragon")
         _discordAvatarURL = State(initialValue: config?.discordAvatarURL ?? "")
         
+        _mqttTopic = State(initialValue: config?.mqttTopic ?? "wardragon/alerts")
+        _mqttUsername = State(initialValue: config?.mqttUsername ?? "")
+        _mqttPassword = State(initialValue: config?.mqttPassword ?? "")
+        _mqttQoS = State(initialValue: config?.mqttQoS ?? 1)
+        
         let headers = config?.customHeaders.map { HeaderPair(key: $0.key, value: $0.value) } ?? []
         _customHeaders = State(initialValue: headers)
     }
@@ -81,7 +92,7 @@ struct WebhookConfigurationView: View {
                         }
                     }
                     
-                    TextField("URL", text: $url)
+                    TextField(urlPlaceholder, text: $url)
                         .keyboardType(.URL)
                         .autocapitalization(.none)
                 }
@@ -94,6 +105,8 @@ struct WebhookConfigurationView: View {
                     matrixConfigurationSection
                 case .discord:
                     discordConfigurationSection
+                case .mqtt:
+                    mqttConfigurationSection
                 case .custom:
                     customConfigurationSection
                 }
@@ -163,6 +176,18 @@ struct WebhookConfigurationView: View {
         }
     }
     
+    // MARK: - URL Placeholder
+    
+    private var urlPlaceholder: String {
+        switch type {
+        case .ifttt: return "https://maker.ifttt.com/trigger/..."
+        case .matrix: return "https://matrix.org/_matrix/client/..."
+        case .discord: return "https://discord.com/api/webhooks/..."
+        case .mqtt: return "mqtt://broker.example.com:1883"
+        case .custom: return "https://your-api.com/webhook"
+        }
+    }
+    
     // MARK: - Type-specific sections
     
     private var iftttConfigurationSection: some View {
@@ -198,6 +223,28 @@ struct WebhookConfigurationView: View {
                 .autocapitalization(.none)
             
             Text("Use your Discord webhook URL. Messages will be sent as rich embeds.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var mqttConfigurationSection: some View {
+        Section(header: Text("MQTT Configuration")) {
+            TextField("Topic", text: $mqttTopic)
+                .autocapitalization(.none)
+            
+            TextField("Username (optional)", text: $mqttUsername)
+                .autocapitalization(.none)
+            
+            SecureField("Password (optional)", text: $mqttPassword)
+            
+            Picker("Quality of Service", selection: $mqttQoS) {
+                Text("At most once (0)").tag(0)
+                Text("At least once (1)").tag(1)
+                Text("Exactly once (2)").tag(2)
+            }
+            
+            Text("Use an MQTT broker URL. Format: mqtt://broker.example.com:1883 or mqtts://broker.example.com:8883 for TLS.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -248,8 +295,7 @@ struct WebhookConfigurationView: View {
             let success = await WebhookManager.shared.testWebhook(testConfig)
             DispatchQueue.main.async {
                 self.isTesting = false
-                self.testResult = success ? "✅ Test successful!" : "❌ Test failed"
-                // now log it into the Recent Deliveries list
+                self.testResult = success ? "Test successful!" : "Test failed"
                 WebhookManager.shared.recordTestDelivery(
                     config: testConfig,
                     success: success,
@@ -281,6 +327,12 @@ struct WebhookConfigurationView: View {
         configuration.matrixAccessToken = matrixAccessToken.isEmpty ? nil : matrixAccessToken
         configuration.discordUsername = discordUsername.isEmpty ? nil : discordUsername
         configuration.discordAvatarURL = discordAvatarURL.isEmpty ? nil : discordAvatarURL
+        
+        // MQTT configurations
+        configuration.mqttTopic = mqttTopic.isEmpty ? nil : mqttTopic
+        configuration.mqttUsername = mqttUsername.isEmpty ? nil : mqttUsername
+        configuration.mqttPassword = mqttPassword.isEmpty ? nil : mqttPassword
+        configuration.mqttQoS = mqttQoS
         
         // Custom headers
         var headers: [String: String] = [:]
