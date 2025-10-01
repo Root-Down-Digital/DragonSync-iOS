@@ -108,7 +108,6 @@ struct DroneDetailView: View {
             }
 
             Map(position: $mapCameraPosition) {
-                // FPV handling - add at the beginning
                 if message.isFPVDetection {
                     ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
@@ -137,7 +136,6 @@ struct DroneDetailView: View {
                         }
                     }
                 } else {
-                    // Your existing drone code
                     if let pt = message.coordinate {
                         Annotation("Drone", coordinate: pt) {
                             Image(systemName: "airplane")
@@ -149,7 +147,6 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    // Home
                     if message.homeLat != "0.0",
                        let lat = Double(message.homeLat),
                        let lon = Double(message.homeLon)
@@ -162,7 +159,6 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    // Pilot
                     if message.pilotLat != "0.0",
                        let plat = Double(message.pilotLat),
                        let plon = Double(message.pilotLon)
@@ -175,13 +171,16 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    // Flight-path
-                    if flightPath.count > 1 {
-                        MapPolyline(coordinates: flightPath)
+                    let cleanFlightPath = DroneStorageManager.shared
+                        .encounters[message.uid]?.flightPath
+                        .filter { !$0.isProximityPoint }
+                        .map { $0.coordinate } ?? flightPath
+                    
+                    if cleanFlightPath.count > 1 {
+                        MapPolyline(coordinates: cleanFlightPath)
                             .stroke(.purple, lineWidth: 3)
                     }
 
-                    // Alert rings
                     ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .stroke(.red.opacity(0.2), lineWidth: 2)

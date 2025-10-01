@@ -257,12 +257,9 @@ class DroneStorageManager: ObservableObject {
         let lon = Double(message.lon) ?? 0
         let droneId = message.uid
         
-        
-        // Find existing encounter by MAC address first, then by ID
         var targetEncounter: DroneEncounter
         var targetId: String = droneId
         
-        // Step 1: Check for existing encounter by MAC address (for related drones)
         if let mac = message.mac, !mac.isEmpty {
             if let existingPair = encounters.first(where: { $0.value.metadata["mac"] == mac }) {
                 targetId = existingPair.key
@@ -271,9 +268,7 @@ class DroneStorageManager: ObservableObject {
             } else {
                 targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
             }
-        }
-        // Step 2: Check for existing encounter by CAA registration
-        else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
+        } else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
             if let existingPair = encounters.first(where: { $0.value.metadata["caaRegistration"] == caaReg }) {
                 targetId = existingPair.key
                 targetEncounter = existingPair.value
@@ -281,15 +276,12 @@ class DroneStorageManager: ObservableObject {
             } else {
                 targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
             }
-        }
-        // Step 3: Use direct ID lookup
-        else {
+        } else {
             targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
         }
         
         var didAddPoint = false
         
-        // ALWAYS append flight points - never replace existing ones
         if lat != 0 || lon != 0 {
             let newPoint = FlightPathPoint(
                 latitude: lat,
@@ -303,7 +295,6 @@ class DroneStorageManager: ObservableObject {
                 proximityRadius: nil
             )
             
-            // Only add if it's different from last point to save memory and stuffs
             if let lastPoint = targetEncounter.flightPath.last {
                 let distance = calculateDistance(
                     from: CLLocationCoordinate2D(latitude: lastPoint.latitude, longitude: lastPoint.longitude),
@@ -311,7 +302,6 @@ class DroneStorageManager: ObservableObject {
                 )
                 let timeGap = newPoint.timestamp - lastPoint.timestamp
                 
-                // Add if moved more than 0.1 meters OR time gap > 2 seconds
                 if distance > 0.1 || timeGap > 2 {
                     targetEncounter.flightPath.append(newPoint)
                     didAddPoint = true
@@ -324,10 +314,8 @@ class DroneStorageManager: ObservableObject {
             }
         }
         
-        // Handle proximity/RSSI-only detections
         if !didAddPoint && message.rssi != nil && message.rssi != 0 {
             if let monitorStatus = monitorStatus {
-                // Increment total detection count in metadata
                 let currentCount = Int(targetEncounter.metadata["totalDetections"] ?? "0") ?? 0
                 targetEncounter.metadata["totalDetections"] = "\(currentCount + 1)"
                 
@@ -343,7 +331,6 @@ class DroneStorageManager: ObservableObject {
                     proximityRadius: nil
                 )
                 
-                // RSSI optimization - keep latest + strongest + weakest only
                 let existingProximityPoints = targetEncounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
                 
                 if existingProximityPoints.count < 3 {
@@ -351,7 +338,6 @@ class DroneStorageManager: ObservableObject {
                     targetEncounter.metadata["hasProximityPoints"] = "true"
                     print("Added proximity point with RSSI: \(message.rssi!)dBm (Total detections: \(currentCount + 1))")
                 } else {
-                    // Find oldest non-extreme point to replace with latest
                     let currentRssi = Double(message.rssi!)
                     let rssiValues = existingProximityPoints.compactMap { $0.proximityRssi }
                     let minRssi = rssiValues.min() ?? currentRssi
@@ -368,9 +354,6 @@ class DroneStorageManager: ObservableObject {
             }
         }
         
-        
-        
-        // Preserve MAC history
         for source in message.signalSources {
             if !source.mac.isEmpty {
                 targetEncounter.macHistory.insert(source.mac)
@@ -380,7 +363,6 @@ class DroneStorageManager: ObservableObject {
             targetEncounter.macHistory.insert(mac)
         }
         
-        // Preserve signature data
         if let sig = SignatureData(
             timestamp: Date().timeIntervalSince1970,
             rssi: Double(message.rssi ?? 0),
@@ -394,10 +376,8 @@ class DroneStorageManager: ObservableObject {
             }
         }
         
-        //  metadata preservation -- TODO refactor all of history and signatures
         var updatedMetadata = targetEncounter.metadata
         
-        // Basic metadata updates
         if let mac = message.mac {
             updatedMetadata["mac"] = mac
         }
@@ -409,53 +389,66 @@ class DroneStorageManager: ObservableObject {
         }
         updatedMetadata["idType"] = message.idType
         
-        // Preserve ALL pilot locations with timestamps
         if let pilotLat = Double(message.pilotLat), let pilotLon = Double(message.pilotLon),
            pilotLat != 0 && pilotLon != 0 {
             
-            // Current pilot location (for immediate display)
-            updatedMetadata["pilotLat"] = message.pilotLat
-            updatedMetadata["pilotLon"] = message.pilotLon
-            
-            // Historical pilot locations (for complete history)
-            let timestamp = Date().timeIntervalSince1970
-            let pilotEntry = "\(timestamp):\(pilotLat),\(pilotLon)"
-            
-            if let existingHistory = updatedMetadata["pilotHistory"] {
-                updatedMetadata["pilotHistory"] = existingHistory + ";" + pilotEntry
-            } else {
-                updatedMetadata["pilotHistory"] = pilotEntry
+            let newCoordKey = "\(pilotLat),\(pilotLon)"
+            let currentCoordKey = updatedMetadata["pilotLat"].flatMap { lat in
+                updatedMetadata["pilotLon"].map { lon in "\(lat),\(lon)" }
             }
             
-            print("Saved pilot location: (\(pilotLat), \(pilotLon))")
+            if currentCoordKey != newCoordKey {
+                updatedMetadata["pilotLat"] = message.pilotLat
+                updatedMetadata["pilotLon"] = message.pilotLon
+                
+                let timestamp = Date().timeIntervalSince1970
+                let pilotEntry = "\(timestamp):\(pilotLat),\(pilotLon)"
+                
+                if let existingHistory = updatedMetadata["pilotHistory"] {
+                    let existingEntries = Set(existingHistory.components(separatedBy: ";"))
+                    if !existingEntries.contains(where: { $0.hasSuffix(":\(pilotLat),\(pilotLon)") }) {
+                        updatedMetadata["pilotHistory"] = existingHistory + ";" + pilotEntry
+                        print("Saved NEW pilot location: (\(pilotLat), \(pilotLon))")
+                    }
+                } else {
+                    updatedMetadata["pilotHistory"] = pilotEntry
+                    print("Saved FIRST pilot location: (\(pilotLat), \(pilotLon))")
+                }
+            }
         }
         
-        // Preserve ALL home/takeoff locations with timestamps
         if let homeLat = Double(message.homeLat), let homeLon = Double(message.homeLon),
            homeLat != 0 && homeLon != 0 {
             
-            // Current home location (for immediate display)
-            updatedMetadata["homeLat"] = message.homeLat
-            updatedMetadata["homeLon"] = message.homeLon
-            updatedMetadata["takeoffLat"] = message.homeLat
-            updatedMetadata["takeoffLon"] = message.homeLon
-            
-            // Historical home locations (for complete history)
-            let timestamp = Date().timeIntervalSince1970
-            let homeEntry = "\(timestamp):\(homeLat),\(homeLon)"
-            
-            if let existingHistory = updatedMetadata["homeHistory"] {
-                updatedMetadata["homeHistory"] = existingHistory + ";" + homeEntry
-            } else {
-                updatedMetadata["homeHistory"] = homeEntry
+            let newCoordKey = "\(homeLat),\(homeLon)"
+            let currentCoordKey = updatedMetadata["homeLat"].flatMap { lat in
+                updatedMetadata["homeLon"].map { lon in "\(lat),\(lon)" }
             }
             
-            print("Saved home location: (\(homeLat), \(homeLon))")
+            if currentCoordKey != newCoordKey {
+                updatedMetadata["homeLat"] = message.homeLat
+                updatedMetadata["homeLon"] = message.homeLon
+                updatedMetadata["takeoffLat"] = message.homeLat
+                updatedMetadata["takeoffLon"] = message.homeLon
+                
+                let timestamp = Date().timeIntervalSince1970
+                let homeEntry = "\(timestamp):\(homeLat),\(homeLon)"
+                
+                if let existingHistory = updatedMetadata["homeHistory"] {
+                    let existingEntries = Set(existingHistory.components(separatedBy: ";"))
+                    if !existingEntries.contains(where: { $0.hasSuffix(":\(homeLat),\(homeLon)") }) {
+                        updatedMetadata["homeHistory"] = existingHistory + ";" + homeEntry
+                        print("Saved NEW home location: (\(homeLat), \(homeLon))")
+                    }
+                } else {
+                    updatedMetadata["homeHistory"] = homeEntry
+                    print("Saved FIRST home location: (\(homeLat), \(homeLon))")
+                }
+            }
         }
         
         targetEncounter.metadata = updatedMetadata
         
-        // Preserve custom name and trust status from existing encounter
         if encounters[targetId] != nil {
             let existingName = encounters[targetId]?.customName ?? ""
             let existingTrust = encounters[targetId]?.trustStatus ?? .unknown
@@ -468,14 +461,12 @@ class DroneStorageManager: ObservableObject {
             }
         }
         
-        // Update timestamps
         targetEncounter.lastSeen = Date()
         
-        // Save the encounter
         encounters[targetId] = targetEncounter
         saveToStorage()
         
-        print("✅ Saved encounter \(targetId) - \(targetEncounter.flightPath.count) total points")
+        print("Saved encounter \(targetId) - \(targetEncounter.flightPath.count) total points")
     }
     
     private func createNewEncounter(_ id: String, _ message: CoTViewModel.CoTMessage) -> DroneEncounter {

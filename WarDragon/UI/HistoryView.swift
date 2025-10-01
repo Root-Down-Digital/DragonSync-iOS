@@ -350,9 +350,8 @@ struct StoredEncountersView: View {
         }
         
         private var mapSection: some View {
-            // Precompute and sanitize it all for Map builder
-            let validFlightPoints = encounter.flightPath.filter { $0.latitude != 0 || $0.longitude != 0 }
-            let regularPoints = validFlightPoints.filter { !$0.isProximityPoint }
+            // Filter out ALL proximity points from the polyline
+            let droneFlightPoints = encounter.flightPath.filter { !$0.isProximityPoint }
             let proximityPointsWithRssi = encounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
             
             let pilotItems = buildPilotItems()
@@ -362,16 +361,14 @@ struct StoredEncountersView: View {
                 ring.droneId.hasPrefix("\(encounter.id)-")
             }
             
-            // Group top-level children to keep Map builder tuple arity small
             return Map(position: $mapCameraPosition) {
-                // Flight polyline + start/end
                 Group {
-                    if regularPoints.count > 1 {
-                        MapPolyline(coordinates: regularPoints.map { $0.coordinate })
+                    if droneFlightPoints.count > 1 {
+                        MapPolyline(coordinates: droneFlightPoints.map { $0.coordinate })
                             .stroke(.blue, lineWidth: 3)
                     }
                     
-                    if let start = regularPoints.first {
+                    if let start = droneFlightPoints.first {
                         Annotation("First Detection", coordinate: start.coordinate) {
                             Image(systemName: "1.circle.fill")
                                 .foregroundStyle(.green)
@@ -379,50 +376,29 @@ struct StoredEncountersView: View {
                         }
                     }
                     
-                    if regularPoints.count > 1, let end = regularPoints.last {
+                    if droneFlightPoints.count > 1, let end = droneFlightPoints.last {
                         Annotation("Latest Detection", coordinate: end.coordinate) {
                             Image(systemName: "location.fill")
                                 .foregroundStyle(.red)
                                 .background(Circle().fill(.white))
                         }
                     }
-                    
-                    drawTimeBasedSegments(regularPoints)
                 }
                 
-                // Proximity circles + annotations grouped together
                 Group {
                     if !proximityPointsWithRssi.isEmpty {
                         ForEach(proximityPointsWithRssi.indices, id: \.self) { idx in
                             let point = proximityPointsWithRssi[idx]
-                            let rssi = point.proximityRssi! // safe: filtered above
-                            let radius = DroneSignatureGenerator().calculateDistance(rssi)
+                            let rssi = point.proximityRssi!
+                            let radius = point.proximityRadius ?? 100.0
                             
                             MapCircle(center: point.coordinate, radius: radius)
-                                .foregroundStyle(.yellow.opacity(0.1))
-                                .stroke(.yellow, lineWidth: 2)
+                                .foregroundStyle(.orange.opacity(0.1))
+                                .stroke(.orange, lineWidth: 2)
                             
-                            if radius != 0 {
-                                Annotation("Detection #\(idx)", coordinate: point.coordinate) {
-                                    VStack {
-                                        Text("RSSI: \(Int(rssi))dBm").font(.caption)
-                                        //                                        Text("\(Int(radius))m").font(.caption)
-                                    }
-                                    .padding(4)
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(4)
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Group {
-                    if !pilotItems.isEmpty {
-                        ForEach(pilotItems) { item in
-                            Annotation(item.title, coordinate: item.coordinate) {
-                                Image(systemName: item.systemImageName)
-                                    .foregroundStyle(item.tintColor)
+                            Annotation("RSSI: \(Int(rssi))dBm", coordinate: point.coordinate) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundStyle(.orange)
                                     .background(Circle().fill(.white))
                             }
                         }
@@ -430,67 +406,30 @@ struct StoredEncountersView: View {
                 }
                 
                 Group {
-                    if !homeItems.isEmpty {
-                        ForEach(homeItems) { item in
-                            Annotation(item.title, coordinate: item.coordinate) {
-                                Image(systemName: item.systemImageName)
-                                    .foregroundStyle(item.tintColor)
-                                    .background(Circle().fill(.white))
-                            }
+                    ForEach(pilotItems) { item in
+                        Annotation(item.title, coordinate: item.coordinate) {
+                            Image(systemName: item.systemImageName)
+                                .foregroundStyle(item.tintColor)
+                                .background(Circle().fill(.white))
                         }
                     }
                 }
                 
                 Group {
-                    if !alertRings.isEmpty {
-                        ForEach(alertRings) { ring in
-                            let isFPV = encounter.id.hasPrefix("fpv-")
-                            
-                            MapCircle(center: ring.centerCoordinate, radius: ring.radius)
-                                .foregroundStyle(isFPV ? .orange.opacity(0.1) : .red.opacity(0.2))
-                                .stroke(isFPV ? .orange : .red, lineWidth: 2)
-                            
-                            if isFPV {
-                                // FPV specific annotation
-                                Annotation("FPV Signal", coordinate: ring.centerCoordinate) {
-                                    VStack {
-                                        Text("FPV Detection")
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                        Text("\(Int(ring.radius))m radius")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Text("Signal: \(ring.rssi)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(6)
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(6)
-                                }
-                                
-                                // Monitor location marker for FPV
-                                Annotation("Monitor", coordinate: ring.centerCoordinate) {
-                                    Image(systemName: "dot.radiowaves.left.and.right")
-                                        .foregroundColor(.blue)
-                                        .font(.title2)
-                                        .background(Circle().fill(.white))
-                                }
-                            } else {
-                                // Regular drone annotation
-                                Annotation("Detection Range", coordinate: ring.centerCoordinate) {
-                                    VStack {
-                                        Text("RSSI: \(ring.rssi)dBm")
-                                            .font(.caption)
-                                        Text("\(Int(ring.radius))m")
-                                            .font(.caption2)
-                                    }
-                                    .padding(4)
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(4)
-                                }
-                            }
+                    ForEach(homeItems) { item in
+                        Annotation(item.title, coordinate: item.coordinate) {
+                            Image(systemName: item.systemImageName)
+                                .foregroundStyle(item.tintColor)
+                                .background(Circle().fill(.white))
                         }
+                    }
+                }
+                
+                Group {
+                    ForEach(alertRings) { ring in
+                        MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                            .foregroundStyle(.red.opacity(0.1))
+                            .stroke(.red, lineWidth: 2)
                     }
                 }
             }
@@ -509,32 +448,51 @@ struct StoredEncountersView: View {
         
         private func buildPilotItems() -> [MapPointItem] {
             var items: [MapPointItem] = []
+            var seenCoordinates = Set<String>()
             
             if let pilotLatStr = encounter.metadata["pilotLat"],
                let pilotLonStr = encounter.metadata["pilotLon"],
                let lat = Double(pilotLatStr), let lon = Double(pilotLonStr),
                lat != 0 || lon != 0 {
-                items.append(MapPointItem(
-                    title: "Current Pilot",
-                    coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                    systemImageName: "person.fill",
-                    tintColor: .blue
-                ))
+                let coordKey = "\(lat),\(lon)"
+                if !seenCoordinates.contains(coordKey) {
+                    items.append(MapPointItem(
+                        title: "Latest Pilot",
+                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                        systemImageName: "person.fill",
+                        tintColor: .blue
+                    ))
+                    seenCoordinates.insert(coordKey)
+                }
             }
             
             if let pilotHistory = encounter.metadata["pilotHistory"] {
                 let entries = pilotHistory.components(separatedBy: ";")
-                for (idx, entry) in entries.enumerated() {
+                var historicalLocations: [(timestamp: TimeInterval, coordinate: CLLocationCoordinate2D)] = []
+                
+                for entry in entries {
                     let parts = entry.components(separatedBy: ":")
                     guard parts.count == 2 else { continue }
                     let coords = parts[1].components(separatedBy: ",")
                     guard coords.count >= 2,
+                          let timestamp = Double(parts[0]),
                           let lat = Double(coords[0]),
                           let lon = Double(coords[1]),
                           lat != 0 || lon != 0 else { continue }
+                    
+                    let coordKey = "\(lat),\(lon)"
+                    if !seenCoordinates.contains(coordKey) {
+                        historicalLocations.append((timestamp, CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                        seenCoordinates.insert(coordKey)
+                    }
+                }
+                
+                historicalLocations.sort { $0.timestamp < $1.timestamp }
+                
+                for (idx, location) in historicalLocations.enumerated() {
                     items.append(MapPointItem(
-                        title: "Previous Pilot \(idx + 1)",
-                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                        title: "Pilot \(idx + 1)",
+                        coordinate: location.coordinate,
                         systemImageName: "person.circle",
                         tintColor: Color.orange.opacity(0.7)
                     ))
@@ -543,35 +501,55 @@ struct StoredEncountersView: View {
             
             return items
         }
+
         
         private func buildHomeItems() -> [MapPointItem] {
             var items: [MapPointItem] = []
+            var seenCoordinates = Set<String>()
             
             if let latStr = encounter.metadata["homeLat"],
                let lonStr = encounter.metadata["homeLon"],
                let lat = Double(latStr), let lon = Double(lonStr),
                lat != 0 || lon != 0 {
-                items.append(MapPointItem(
-                    title: "Current Home",
-                    coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                    systemImageName: "house.fill",
-                    tintColor: .green
-                ))
+                let coordKey = "\(lat),\(lon)"
+                if !seenCoordinates.contains(coordKey) {
+                    items.append(MapPointItem(
+                        title: "Latest Home",
+                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                        systemImageName: "house.fill",
+                        tintColor: .green
+                    ))
+                    seenCoordinates.insert(coordKey)
+                }
             }
             
             if let homeHistory = encounter.metadata["homeHistory"] {
                 let entries = homeHistory.components(separatedBy: ";")
-                for (idx, entry) in entries.enumerated() {
+                var historicalLocations: [(timestamp: TimeInterval, coordinate: CLLocationCoordinate2D)] = []
+                
+                for entry in entries {
                     let parts = entry.components(separatedBy: ":")
                     guard parts.count == 2 else { continue }
                     let coords = parts[1].components(separatedBy: ",")
                     guard coords.count >= 2,
+                          let timestamp = Double(parts[0]),
                           let lat = Double(coords[0]),
                           let lon = Double(coords[1]),
                           lat != 0 || lon != 0 else { continue }
+                    
+                    let coordKey = "\(lat),\(lon)"
+                    if !seenCoordinates.contains(coordKey) {
+                        historicalLocations.append((timestamp, CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                        seenCoordinates.insert(coordKey)
+                    }
+                }
+                
+                historicalLocations.sort { $0.timestamp < $1.timestamp }
+                
+                for (idx, location) in historicalLocations.enumerated() {
                     items.append(MapPointItem(
-                        title: "Previous Home \(idx + 1)",
-                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                        title: "Home \(idx + 1)",
+                        coordinate: location.coordinate,
                         systemImageName: "house.circle",
                         tintColor: Color.yellow.opacity(0.7)
                     ))
@@ -677,16 +655,14 @@ struct StoredEncountersView: View {
         }
         
         private func setupInitialMapPosition() {
-            // Collect all relevant coordinates
             var allCoordinates: [CLLocationCoordinate2D] = []
             
-            // Add flight path coordinates (excluding 0,0)
-            let validFlightPoints = encounter.flightPath.filter { point in
-                point.latitude != 0 || point.longitude != 0
+            // ONLY add regular flight points, NOT proximity points
+            let regularFlightPoints = encounter.flightPath.filter { point in
+                (point.latitude != 0 || point.longitude != 0) && !point.isProximityPoint
             }
-            allCoordinates.append(contentsOf: validFlightPoints.map { $0.coordinate })
+            allCoordinates.append(contentsOf: regularFlightPoints.map { $0.coordinate })
             
-            // Add home location if available
             if let homeLatStr = encounter.metadata["homeLat"],
                let homeLonStr = encounter.metadata["homeLon"],
                let homeLat = Double(homeLatStr),
@@ -695,7 +671,6 @@ struct StoredEncountersView: View {
                 allCoordinates.append(CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon))
             }
             
-            // Add pilot location if available
             if let pilotLatStr = encounter.metadata["pilotLat"],
                let pilotLonStr = encounter.metadata["pilotLon"],
                let pilotLat = Double(pilotLatStr),
@@ -704,7 +679,6 @@ struct StoredEncountersView: View {
                 allCoordinates.append(CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon))
             }
             
-            // Handle multiple coordinates
             if allCoordinates.count > 1 {
                 let latitudes = allCoordinates.map { $0.latitude }
                 let longitudes = allCoordinates.map { $0.longitude }
@@ -726,16 +700,12 @@ struct StoredEncountersView: View {
                     center: center,
                     span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
                 ))
-            }
-            // Handle single coordinate
-            else if let singleCoord = allCoordinates.first {
+            } else if let singleCoord = allCoordinates.first {
                 mapCameraPosition = .region(MKCoordinateRegion(
                     center: singleCoord,
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                 ))
-            }
-            // Fallback to alert ring if no valid coordinates
-            else if let ring = cotViewModel.alertRings.first(where: { $0.droneId == encounter.id }) {
+            } else if let ring = cotViewModel.alertRings.first(where: { $0.droneId == encounter.id }) {
                 mapCameraPosition = .region(MKCoordinateRegion(
                     center: ring.centerCoordinate,
                     span: MKCoordinateSpan(
@@ -745,6 +715,7 @@ struct StoredEncountersView: View {
                 ))
             }
         }
+
         
         private func mapStyleForSelectedType() -> MapKit.MapStyle {
             switch selectedMapType {
@@ -1008,11 +979,14 @@ private func formatDuration(_ time: TimeInterval) -> String {
 
 extension StoredEncountersView.EncounterDetailView {
     private func generateKML(for encounter: DroneEncounter) -> String {
+        // Filter out proximity points from KML export
+        let regularPoints = encounter.flightPath.filter { !$0.isProximityPoint }
+        
         var kmlContent = """
         <?xml version="1.0" encoding="UTF-8"?>
         <kml xmlns="http://www.opengis.net/kml/2.2">
           <Document>
-            <name>\(encounter.id) Flight Path</name>
+            <n>\(encounter.id) Flight Path</n>
             <Style id="flightPath">
               <LineStyle>
                 <color>ff0000ff</color>
@@ -1038,12 +1012,12 @@ extension StoredEncountersView.EncounterDetailView {
               </IconStyle>
             </Style>
             <Placemark>
-              <name>\(encounter.id) Track</name>
+              <n>\(encounter.id) Track</n>
               <styleUrl>#flightPath</styleUrl>
               <LineString>
                 <altitudeMode>absolute</altitudeMode>
                 <coordinates>
-                    \(encounter.flightPath.map { point in
+                    \(regularPoints.map { point in
                         "\(point.longitude),\(point.latitude),\(point.altitude)"
                     }.joined(separator: "\n                "))
                 </coordinates>

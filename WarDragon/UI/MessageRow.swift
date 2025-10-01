@@ -448,15 +448,12 @@ struct MessageRow: View {
     @ViewBuilder
     private func mapSectionView() -> some View {
         if message.isFPVDetection {
-            // FPV shows RSSI ring at monitor location
             if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
                 Map {
-                    // Show RSSI ring centered at monitor location
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.orange.opacity(0.1))
                         .stroke(.orange, lineWidth: 2)
                     
-                    // Monitor position marker
                     Annotation("Monitor", coordinate: ring.centerCoordinate) {
                         Image(systemName: "dot.radiowaves.left.and.right")
                             .foregroundColor(.blue)
@@ -464,7 +461,6 @@ struct MessageRow: View {
                             .background(Circle().fill(.white))
                     }
                     
-                    // FPV signal annotation
                     Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: ring.centerCoordinate) {
                         VStack {
                             Text("FPV Signal")
@@ -485,7 +481,6 @@ struct MessageRow: View {
                         .stroke(Color.orange, lineWidth: 1)
                 )
             } else {
-                // No ring yet - show placeholder
                 VStack(spacing: 8) {
                     HStack {
                         Image(systemName: "antenna.radiowaves.left.and.right")
@@ -516,12 +511,35 @@ struct MessageRow: View {
                 .frame(height: 80)
             }
         } else {
-            // Regular drone map (existing code)
             let flightCoords = DroneStorageManager.shared
                 .encounters[message.uid]?.flightPath
                 .map { $0.coordinate } ?? []
+            
+            let encounter = DroneStorageManager.shared.encounters[message.uid]
+            
+            let pilotCoordinate: CLLocationCoordinate2D? = {
+                guard let pilotLatStr = encounter?.metadata["pilotLat"],
+                      let pilotLonStr = encounter?.metadata["pilotLon"],
+                      let pilotLat = Double(pilotLatStr),
+                      let pilotLon = Double(pilotLonStr),
+                      pilotLat != 0 || pilotLon != 0 else {
+                    return nil
+                }
+                return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+            }()
+            
+            let takeoffCoordinate: CLLocationCoordinate2D? = {
+                guard let homeLatStr = encounter?.metadata["homeLat"],
+                      let homeLonStr = encounter?.metadata["homeLon"],
+                      let homeLat = Double(homeLatStr),
+                      let homeLon = Double(homeLonStr),
+                      homeLat != 0 || homeLon != 0 else {
+                    return nil
+                }
+                return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+            }()
+            
             Map {
-                // Existing drone marker
                 if let coordinate = message.coordinate {
                     Annotation(message.uid, coordinate: coordinate) {
                         Image(systemName: "airplane")
@@ -532,9 +550,26 @@ struct MessageRow: View {
                             .foregroundStyle(.blue)
                     }
                 }
+                
                 if flightCoords.count > 1 {
                     MapPolyline(coordinates: flightCoords)
                         .stroke(.purple, lineWidth: 2)
+                }
+                
+                if let pilotCoordinate = pilotCoordinate {
+                    Annotation("Pilot", coordinate: pilotCoordinate) {
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(.orange)
+                            .background(Circle().fill(.white))
+                    }
+                }
+                
+                if let takeoffCoordinate = takeoffCoordinate {
+                    Annotation("Takeoff", coordinate: takeoffCoordinate) {
+                        Image(systemName: "house.fill")
+                            .foregroundStyle(.green)
+                            .background(Circle().fill(.white))
+                    }
                 }
             }
             .frame(height: 150)
@@ -576,6 +611,9 @@ struct MessageRow: View {
                 }
                 if message.pilotLat != "0.0" {
                     Text("Pilot Location: \(message.pilotLat), \(message.pilotLon)")
+                }
+                if message.homeLat != "0.0" {
+                    Text("Takeoff Location: \(message.homeLat), \(message.homeLon)")
                 }
                 if let mac = message.mac, !mac.isEmpty {
                     Text("MAC: \(mac)")
