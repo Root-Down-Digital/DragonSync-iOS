@@ -151,7 +151,7 @@ struct DroneDetailView: View {
                        let lat = Double(message.homeLat),
                        let lon = Double(message.homeLon)
                     {
-                        Annotation("Home", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                        Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                             Image(systemName: "house.fill")
                                 .foregroundStyle(.green)
                                 .background(Circle().fill(.white))
