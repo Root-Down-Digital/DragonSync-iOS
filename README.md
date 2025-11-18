@@ -129,7 +129,7 @@ Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally
   
   - ### Auto Installation
     
-    _**The below unix command will verify the expected sha256sum and install the [software](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/Scripts/setup.sh) and then flash an esp32.**_
+    _**The below unix command will verify the expected sha256sum and install the [software](https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh) and then flash an esp32.**_
 
     > _For Windows see [manual setup](#python-tools-setup-instructions)_
 
