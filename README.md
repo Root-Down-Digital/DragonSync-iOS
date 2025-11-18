@@ -13,10 +13,6 @@
 Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Professional-grade detection with advanced signal analysis and tracking. 
 </div>
 <br>
-<div align="center">
-Works out of the box with WarDragon Pro. Or use your own gear, including an ESP32 standalone firmware.
-</div>
-<br>
 
 
 ### App
@@ -113,12 +109,6 @@ Works out of the box with WarDragon Pro. Or use your own gear, including an ESP3
 ## 1. Pick a Stack 
 
 #### Hardware Requirements
-
-**Option 1: [WarDragon/Pro](https://cemaxecuter.com/?post_type=product)**
-- Works out of the box, put its IP into the connection settings and go.
-
-**Option 2: DIY**
-- Uses your own stack to provide the app data
 
   **Configuration A: WiFi & BT Adapters**
    - WiFi adapter 
@@ -346,10 +336,8 @@ The Multicast option uses Cursor on Target (CoT) to transmit data for integratio
 ## Credits, Disclaimer & License
 
 - **Credits:**  
-  - [DragonSync](https://github.com/alphafox02/DragonSync)  
   - [DroneID](https://github.com/alphafox02/DroneID)  
-  - [Sniffle](https://github.com/nccgroup/Sniffle)  
-  - Special thanks to [@alphafox02](https://github.com/alphafox02) and [@bkerler](https://github.com/bkerler)
+  - [Sniffle](https://github.com/nccgroup/Sniffle) 
 
 - **Disclaimer:**  
   This software is provided as-is without warranty. Use at your own risk and in compliance with local regulations.
