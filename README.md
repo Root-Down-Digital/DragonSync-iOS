@@ -109,6 +109,8 @@ Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally
 ## 1. Pick a Stack 
 
 #### Hardware Requirements
+(Optional) ANTSDR E200 - for decoding Ocusync and others
+(Optional) GPS USB module to use host instead of on-device GPS
 
   **Configuration A: WiFi & BT Adapters**
    - WiFi adapter 
@@ -116,9 +118,7 @@ Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally
 
   **Configuration B:**
   - ESP32S3/C3
-
-- (Optional) ANTSDR E200 - for decoding Ocusync and others
-- (Optional) GPS USB module to use host instead of on-device GPS
+    
     
 > [!NOTE]
 > **New standalone WiFi RID [option](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util) can be flashed with the auto installer below:**
