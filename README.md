@@ -227,6 +227,7 @@ The installer handles:
 
 <details>
 <summary><strong>Linux</strong></summary>
+  
 ```bash
 sudo apt update && sudo apt install -y python3 python3-pip git gpsd gpsd-clients lm-sensors
 git clone https://github.com/alphafox02/DroneID.git
@@ -240,6 +241,7 @@ git submodule update --init
 
 <details>
 <summary><strong>macOS</strong></summary>
+  
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 brew install python3 git gpsd
@@ -262,6 +264,7 @@ Install WSL: `wsl --install`, then follow Linux instructions above.
 **Native Windows:**
 
 Install [Python](https://www.python.org/downloads/) and [Git](https://git-scm.com/download/win), then:
+
 ```bash
 git clone https://github.com/alphafox02/DroneID.git
 cd DroneID
