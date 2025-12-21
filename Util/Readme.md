@@ -1,96 +1,111 @@
-# `Drag0net Scanner`
+# Drag0net Scanner
 
-_**A standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**_
+**Standalone ESP32 WiFi Remote ID Scanner with ZMQ Publisher**
 
-- Made for [DragonSync iOS & macOS](https://github.com/Root-Down-Digital/DragonSync-iOS) as a portable alternative to the whole detection stack.
+A portable alternative to the full detection stack for [DragonSync iOS & macOS](https://github.com/Root-Down-Digital/DragonSync-iOS). No computer required—just flash, power on, and connect.
 
-### Firmware for Currently Supported Boards
-   
-- `AP/Mesh espc3_xiao`   
-- `AP/Mesh esps3_xiao`
-- `AP esps3_lily_T_dongle`
+---
 
-  _(More options in the `FW` folder)_
+## Supported Hardware
 
-## 1. Flash
+- **ESP32-C3 XIAO** (AP/Mesh)
+- **ESP32-S3 XIAO** (AP/Mesh)
+- **ESP32-S3 LilyGO T-Dongle** (AP only)
 
-**Options**: Use a binary file hosted here or, you can build from source (to change the SSID name and password and more)
+Additional firmware options available in the `FW` folder.
 
-### Flash Precompiled Binary
+---
 
-- An [auto-flasher](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main#2-install-software--flash-firmware) script is here also to make it even simpler, or continue below:
+## Installation
 
-- Use default credentials, flash precompiled binary with `esptool.py`:
+### Quick Flash (Recommended)
 
-   ```
-  esptool.py --chip auto --port /dev/yourportname --baud 115200 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size detect 0x10000 firmwareFile.bin
-   ```
-
-### Build Source
-
-- Grab the codebase
-
+Use the [auto-flasher script](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main#2-install-software--flash-firmware) for automated installation, or flash manually:
 ```bash
-git clone https://github.com/Root-Down-Digital/DragonSync-iOS.git
+esptool.py --chip auto --port /dev/YOUR_PORT --baud 115200 \
+  --before default_reset --after hard_reset write_flash -z \
+  --flash_mode dio --flash_freq 80m --flash_size detect \
+  0x10000 firmwareFile.bin
 ```
 
-- Open the `DragonSync-iOS/Util/ESP32_RID_AP_FW` folder in VSCode
-- Change AP creds `main.cpp`:
+Replace `/dev/YOUR_PORT` with your ESP32's serial port and `firmwareFile.bin` with the downloaded firmware.
 
-```
-const char* ap_ssid = "Dr4g0net";
-const char* ap_password = "wardragon1234";
-```
+### Build from Source
 
-- Upload using PlatformIO (can be ported to most any esp32 board)
+Customize WiFi credentials and settings:
 
-## 2. Usage 
-
-**Default WiFi AP Credentials**
-
-```
-SSID: Dr4g0net
-PW: wardragon1234
-IP:  192.168.4.1
+1. Clone repository:
+```bash
+   git clone https://github.com/Root-Down-Digital/DragonSync-iOS.git
 ```
 
+2. Open `DragonSync-iOS/Util/ESP32_RID_AP_FW` in VSCode
 
-#### A. DragonSync App
-   - Enter the ZMQ IP `192.168.4.1`
-   
-      <img src="https://github.com/user-attachments/assets/9903ebef-0dd7-4a6e-a976-c855221eff52" width="60%" />
-   
-   - Activate, status will appear within 60s
+3. Edit `main.cpp` to change credentials:
+```cpp
+   const char* ap_ssid = "Dr4g0net";
+   const char* ap_password = "wardragon1234";
+```
 
-     <img src="https://github.com/user-attachments/assets/6fe4d993-61e9-43bc-83eb-311b7df89342" width="60%" />
+4. Upload using PlatformIO (portable to most ESP32 boards)
 
-#### B. WebUI
-   - Connect to the AP
-   - Visit `192.168.4.1` in your browser
+---
 
-      <img src="https://github.com/user-attachments/assets/93a034eb-4c81-456c-8457-f604307392f5" width="60%" />
+## Usage
 
-#### C. Mesh
+### Default Credentials
+```
+SSID:     Dr4g0net
+Password: wardragon1234
+IP:       192.168.4.1
+```
 
-1. `CONNECT TO MESHTASTIC`:
-  - Install Meshtastic app on your phone or use the webUI
-  - Connect to your device via Bluetooth or serial
+### Option A: DragonSync App
 
-2. `CONFIGURE SERIAL MODULE`:
-  - Module Settings → Serial Config
-  - Set the following settings:
-      - Enabled: ON 
-      - Mode: TEXTMSG
-      - RX GPIO: 19
-      - TX GPIO: 20  
-      - Baud Rate: 115200
-      - Timeout: 5000ms
+1. Connect phone to `Dr4g0net` WiFi network
+2. Open DragonSync app → Settings
+3. Enter ZMQ IP: `192.168.4.1`
+4. Enable ZMQ connection
+5. Status appears within 60 seconds
+
+<img src="https://github.com/user-attachments/assets/9903ebef-0dd7-4a6e-a976-c855221eff52" width="60%" />
+
+<img src="https://github.com/user-attachments/assets/6fe4d993-61e9-43bc-83eb-311b7df89342" width="60%" />
+
+### Option B: Web Interface
+
+1. Connect to `Dr4g0net` WiFi network
+2. Open browser and navigate to `192.168.4.1`
+3. Monitor detections via web dashboard
+
+<img src="https://github.com/user-attachments/assets/93a034eb-4c81-456c-8457-f604307392f5" width="60%" />
+
+### Option C: Meshtastic Integration
+
+**1. Connect to Meshtastic:**
+- Install Meshtastic app on phone or use web interface
+- Connect to your Meshtastic device via Bluetooth or serial
+
+**2. Configure Serial Module:**
+
+Navigate to: Module Settings → Serial Config
+
+Set parameters:
+- **Enabled:** ON
+- **Mode:** TEXTMSG
+- **RX GPIO:** 19
+- **TX GPIO:** 20
+- **Baud Rate:** 115200
+- **Timeout:** 5000ms
+
+---
 
 ## Notes
-- This project not affiliated with WarDragon, DragonOS etc.
-- Based on cemaxecuter WiFi [RID FW](https://github.com/alphafox02/T-Halow/tree/master/firmware)
+
+- This project is not affiliated with WarDragon, DragonOS, or related projects
+- Based on [cemaxecuter WiFi RID firmware](https://github.com/alphafox02/T-Halow/tree/master/firmware)
 
 > [!IMPORTANT]
-> This is a work in progress, expect breaking changes and possible stability issues.
+> **Work in Progress:** Expect breaking changes and possible stability issues.
 >
-> Use within legal and ethical bounds. Author not responsible for anything that happens should you use any code or knowledge provided here.
+> **Legal Use Only:** Use within legal and ethical bounds. Author is not responsible for misuse of this code or knowledge.
