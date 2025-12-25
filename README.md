@@ -1,16 +1,18 @@
+> [!IMPORTANT]
+> TestFlight beta has expired. With the rapid dev of DragonSync and DroneID by @alphafox02, I no longer have the resources to dedicate to this project. Thanks to the supporters, this stayed in active dev. When time and resources allow, I will update and overhaul the app to work with his backend repos.
+> - Until then the standalone [Dragonet WiFi RID](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util) can be used with the app. Open an issue if you'd like to see this back in development. Thanks again to those who contributed and made this possible. 
+
 <div align="center">
   
-# DragonSync iOS
-
-[![TestFlight Beta](https://img.shields.io/badge/TestFlight-Beta-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
-[![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
-[![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
-
+  # DragonSync iOS
+  
+  [![TestFlight Beta](https://img.shields.io/badge/TestFlight-Beta-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
+  [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
+  [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="80%" alt="DragonSync Logo">
 
 <br>
-
 
 Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Professional-grade detection with advanced signal analysis and tracking. 
 </div>
