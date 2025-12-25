@@ -1,6 +1,9 @@
 > [!IMPORTANT]
-> TestFlight beta has expired. With the rapid dev of DragonSync and DroneID by @alphafox02, I no longer have the resources to dedicate to this project. Thanks to the supporters, this stayed in active dev. When time and resources allow, I will update and overhaul the app to work with his backend repos.
-> - Until then the standalone [Dragonet WiFi RID](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util) can be used with the app. Open an issue if you'd like to see this back in development. Thanks again to those who contributed and made this possible. 
+> **TestFlight beta has expired**. With the rapid dev of DragonSync and DroneID by @alphafox02, I no longer have the resources to dedicate to this project.
+> 
+> Thanks to the supporters, this stayed in active development. When time and resources allow, I will overhaul the app to work with his backend repos. The standalone ESP32 FW will also eventually be updated (works with codebase as is for those building from source).
+> 
+> Open an issue if you'd like to see this back in development. Thanks again to those who contributed and made this possible. 
 
 <div align="center">
   
