@@ -604,7 +604,11 @@ struct MessageRow: View {
                     Text("Position: \(message.lat), \(message.lon)")
                 }
                 if message.alt != "0.0" {
-                    Text("Altitude: \(message.alt)m")
+                    if let altValue = Double(message.alt) {
+                        Text("Altitude: \(String(format: "%.1f", altValue))m")
+                    } else {
+                        Text("Altitude: \(message.alt)m")
+                    }
                 }
                 if message.speed != "0.0" {
                     Text("Speed: \(message.speed)m/s")

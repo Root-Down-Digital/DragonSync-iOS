@@ -369,12 +369,9 @@ class DroneMessageGenerator:
             "observed_at": unix_timestamp,  # Unix timestamp
             "rid_timestamp": timestamp,  # ISO8601 timestamp
             "rid": {  # FAA RID enrichment from faa-rid-lookup
-                "tracking": random.choice(["Active", "Lost", "Unknown"]),
-                "status": random.choice(["Valid", "Expired", "Unknown"]),
-                "make": random.choice(["DJI", "Autel", "Skydio", "Parrot", "Unknown"]),
-                "model": random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2", "Unknown"]),
-                "source": random.choice(["FAA", "EASA", "CAA", "Unknown"]),
-                "lookup_success": random.choice([True, False])
+                "make": random.choice(["DJI", "Autel", "Skydio", "Parrot"]),
+                "model": random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2"]),
+                "source": random.choice(["faa", "dronedb", "caa"])
             }
         }
         
@@ -531,14 +528,14 @@ def main_menu():
         print(f"CoT Port: {config.cot_port}")
         print(f"Status Port: {config.status_port}")
         
-        print("\n1. DragonSync Drone CoT (with Track)")
-        print("2. DragonSync Pilot CoT")
-        print("3. DragonSync Home/Takeoff CoT")
-        print("4. DragonSync Status Messages (with Track)")
-        print("5. ESP32 Format (with Enrichment)")
-        print("6. FPV Detection Messages")
-        print("7. Broadcast All DragonSync Messages")
-        print("8. JSON Enriched Messages (freq, seen_by, observed_at, rid)")
+        print("\n1. Multicast: DragonSync Drone CoT XML (with Track)")
+        print("2. Multicast: DragonSync Pilot CoT XML")
+        print("3. Multicast: DragonSync Home/Takeoff CoT XML")
+        print("4. Multicast: DragonSync Status XML (with Track)")
+        print("5. ZMQ: ESP32 JSON Format (RID Telemetry)")
+        print("6. ZMQ: FPV Detection Messages")
+        print("7. Multicast: Broadcast All DragonSync XML Messages")
+        print("8. ZMQ: Broadcast All ESP32 JSON + FPV")
         print("9. Configure Settings")
         print("0. Exit")
         
@@ -657,7 +654,7 @@ def main_menu():
                         except KeyboardInterrupt:
                             break
                     
-                    elif choice == '7':  # Broadcast All DragonSync Messages
+                    elif choice == '7':  # Broadcast All DragonSync XML Messages (Multicast)
                         # Send drone CoT
                         drone_message = generator.generate_drone_cot_with_track()
                         if config.broadcast_mode == 'multicast':
@@ -692,11 +689,43 @@ def main_menu():
                         else:
                             status_sock.send_string(status_message)
                             
-                        print(f"📡 Sent Complete DragonSync Message Set at {time.strftime('%H:%M:%S')}")
-                        print(f"   ✓ Drone CoT (with track)")
-                        print(f"   ✓ Pilot CoT")
-                        print(f"   ✓ Home CoT") 
-                        print(f"   ✓ Status CoT (with track)\n")
+                        print(f"📡 Sent Complete DragonSync XML Message Set at {time.strftime('%H:%M:%S')}")
+                        print(f"   ✓ Drone CoT XML (with track)")
+                        print(f"   ✓ Pilot CoT XML")
+                        print(f"   ✓ Home CoT XML") 
+                        print(f"   ✓ Status CoT XML (with track)\n")
+                    
+                    elif choice == '8':  # Broadcast All ESP32 JSON + FPV (ZMQ)
+                        # Send ESP32 RID telemetry JSON
+                        esp32_message = generator.generate_esp32_format()
+                        if config.broadcast_mode == 'multicast':
+                            cot_sock.sendto(esp32_message.encode(), (config.multicast_group, config.cot_port))
+                        else:
+                            cot_sock.send_string(esp32_message)
+                        
+                        time.sleep(0.1)
+                        
+                        # Send FPV detection
+                        fpv_message = generator.generate_fpv_detection_message()
+                        if config.broadcast_mode == 'multicast':
+                            cot_sock.sendto(fpv_message.encode(), (config.multicast_group, config.cot_port))
+                        else:
+                            cot_sock.send_string(fpv_message)
+                        
+                        time.sleep(0.1)
+                        
+                        # Send FPV update
+                        fpv_update = generator.generate_fpv_update_message()
+                        if fpv_update:
+                            if config.broadcast_mode == 'multicast':
+                                cot_sock.sendto(fpv_update.encode(), (config.multicast_group, config.cot_port))
+                            else:
+                                cot_sock.send_string(fpv_update)
+                        
+                        print(f"📡 Sent Complete ESP32/ZMQ JSON Message Set at {time.strftime('%H:%M:%S')}")
+                        print(f"   ✓ ESP32 RID Telemetry JSON")
+                        print(f"   ✓ FPV Detection JSON")
+                        print(f"   ✓ FPV Update JSON\n")
 
                     time.sleep(interval)
 

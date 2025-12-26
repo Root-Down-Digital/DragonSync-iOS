@@ -596,9 +596,9 @@ class ZMQHandler: ObservableObject {
         var ridInfo = ""
         if let make = ridMake, let model = ridModel {
             ridInfo = ", RID: \(make) \(model)"
-            if let source = ridSource {
-                ridInfo += " (\(source))"
-            }
+            // Always include source, default to "UNKNOWN" if not provided
+            let source = ridSource ?? "UNKNOWN"
+            ridInfo += " (\(source))"
         }
         
         // Generate XML

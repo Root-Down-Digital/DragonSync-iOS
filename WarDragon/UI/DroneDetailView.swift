@@ -623,6 +623,20 @@ struct DroneDetailView: View {
 
 
     private func formatRawMessage() -> String {
+        // First priority: show the original raw string if available
+        if let originalRaw = message.originalRawString, !originalRaw.isEmpty {
+            // Try to format it as JSON if it is JSON
+            if let data = originalRaw.data(using: .utf8),
+               let jsonObject = try? JSONSerialization.jsonObject(with: data),
+               let prettyData = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.prettyPrinted]),
+               let prettyString = String(data: prettyData, encoding: .utf8) {
+                return prettyString
+            }
+            // Otherwise return as-is
+            return originalRaw
+        }
+        
+        // Fallback to FPV data construction (if FPV)
         if message.isFPVDetection {
             // Format FPV raw data more cleanly
             var fpvData: [String: Any] = [:]
@@ -649,13 +663,13 @@ struct DroneDetailView: View {
             }
         }
         
-        // Fall back to original raw message formatting
+        // Final fallback to rawMessage dictionary
         if let jsonData = try? JSONSerialization.data(withJSONObject: message.rawMessage, options: [.prettyPrinted]),
            let jsonString = String(data: jsonData, encoding: .utf8) {
             return jsonString
         }
         
-        return message.originalRawString ?? "No raw data available"
+        return "No raw data available"
     }
 }
 

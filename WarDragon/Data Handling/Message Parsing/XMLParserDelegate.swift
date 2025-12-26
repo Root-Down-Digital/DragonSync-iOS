@@ -1403,7 +1403,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                         ridLookupSuccess = true
                     }
                 } else {
-                    // No source info, just make/model
+                    // No source info, just make/model - set source to "UNKNOWN"
+                    ridSource = "UNKNOWN"
                     let components = ridStr.components(separatedBy: " ")
                     if components.count >= 2 {
                         ridMake = components[0]
