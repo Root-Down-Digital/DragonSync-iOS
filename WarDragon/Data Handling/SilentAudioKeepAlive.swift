@@ -59,10 +59,23 @@ final class SilentAudioKeepAlive {
     }
 
     private func configureEngine() {
-        let sourceNode = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+        // First, detach any existing nodes
+        if let sourceNode = sourceNode {
+            engine.detach(sourceNode)
+            self.sourceNode = nil
+        }
+        
+        // Create a proper audio format with mono channel at 8kHz
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1) else {
+            os_log("Failed to create audio format", log: log, type: .error)
+            return
+        }
+        
+        let sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
             for buffer in ablPointer {
                 if let data = buffer.mData {
+                    // Fill with silence (zeros)
                     memset(data, 0, Int(buffer.mDataByteSize))
                 }
             }
@@ -72,10 +85,11 @@ final class SilentAudioKeepAlive {
         self.sourceNode = sourceNode
         engine.attach(sourceNode)
         
-        let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1)
+        // Connect with explicit format
         engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
         
-        os_log("Audio engine configured", log: log, type: .info)
+        os_log("Audio engine configured with format: %{public}@", log: log, type: .info, 
+               format.description)
     }
 
     private func startEngine() {
@@ -97,8 +111,18 @@ final class SilentAudioKeepAlive {
     }
     
     private func reconfigureAndRestart() {
+        os_log("Reconfiguring audio engine", log: log, type: .info)
+        
         engine.stop()
+        
+        // Detach old source node if it exists
+        if let sourceNode = sourceNode {
+            engine.detach(sourceNode)
+            self.sourceNode = nil
+        }
+        
         engine.reset()
+        
         configureSession()
         configureEngine()
         startEngine()

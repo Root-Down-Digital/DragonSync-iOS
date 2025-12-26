@@ -19,9 +19,7 @@ struct MapView: View {
         
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
-        let droneId = message.uid
         
-        // Initialize with default region
         let defaultRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)

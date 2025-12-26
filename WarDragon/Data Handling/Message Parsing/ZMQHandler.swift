@@ -363,29 +363,6 @@ class ZMQHandler: ObservableObject {
     
     func convertTelemetryToXML(_ jsonString: String) -> String? {
         guard let data = jsonString.data(using: .utf8) else { return nil }
-        print("Raw Message: ", jsonString)
-        
-        // MARK: Check for FPV update messages
-        if jsonString.contains("AUX_ADV_IND") && jsonString.contains("aext") {
-            // This is an FPV update message - convert to XML for processing
-            do {
-                if let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
-                   let aext = jsonObject["aext"] as? [String: Any],
-                   let advA = aext["AdvA"] as? String {
-                    
-                    let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
-                    let source = advA.replacingOccurrences(of: " random", with: "")
-                    
-                    // Extract frequency if present
-                    let frequency = jsonObject["frequency"] as? Double ?? 5785.0
-                    
-                    return createFPVUpdateCoTMessage(source, rssi: rssi, frequency: frequency)
-                }
-            } catch {
-                print("Error parsing FPV update: \(error)")
-            }
-        }
         
         // Determine format from raw string and runtime/index presence
         if jsonString.contains("fpv") {
@@ -401,35 +378,66 @@ class ZMQHandler: ObservableObject {
             messageFormat = .sdr
         }
         
-        do {
-            // Try parsing as a single object first (ESP32 format)
-            if let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return processJsonObject(jsonObject)
-            }
-            
-            // If not a single object, try parsing as an array (DJI/BT formats)
-            if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                return processJsonArray(jsonArray)
-            }
-        } catch {
-            print("JSON parsing error: \(error)")
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
         }
         
-        return nil
+        return processJsonObject(jsonObject)
     }
     
     func processJsonObject(_ jsonObject: [String: Any]) -> String? {
-        // Extract messages from the object
-        let basicId = jsonObject["Basic ID"] as? [String: Any]
-        let location = jsonObject["Location/Vector Message"] as? [String: Any]
-        let system = jsonObject["System Message"] as? [String: Any]
+        print("→ processJsonObject CALLED")
+        
+        // Extract messages from the object - try both with and without spaces
+        var basicId = jsonObject["Basic ID"] as? [String: Any]
+        if basicId == nil {
+            basicId = jsonObject["BasicID"] as? [String: Any]
+        }
+        if basicId == nil {
+            basicId = jsonObject["Basic_ID"] as? [String: Any]
+        }
+        
+        var location = jsonObject["Location/Vector Message"] as? [String: Any]
+        if location == nil {
+            location = jsonObject["Location"] as? [String: Any]
+        }
+        
+        var system = jsonObject["System Message"] as? [String: Any]
+        if system == nil {
+            system = jsonObject["System"] as? [String: Any]
+        }
+        
         let auth = jsonObject["Auth Message"] as? [String: Any]
-        let operatorId = jsonObject["Operator ID Message"] as? [String: Any]
-        let selfID = jsonObject["Self-ID Message"] as? [String: Any]
+        
+        var operatorId = jsonObject["Operator ID Message"] as? [String: Any]
+        if operatorId == nil {
+            operatorId = jsonObject["OperatorID"] as? [String: Any]
+        }
+        
+        var selfID = jsonObject["Self-ID Message"] as? [String: Any]
+        if selfID == nil {
+            selfID = jsonObject["SelfID"] as? [String: Any]
+        }
         
         // Extract index and runtime
         let mIndex = jsonObject["index"] as? Int ?? 0
         let mRuntime = jsonObject["runtime"] as? Int ?? 0
+        
+        // Extract backend metadata (from dragonsync.py/drone.py)
+        let freq = jsonObject["freq"] as? Double
+        let seenBy = jsonObject["seen_by"] as? String
+        let observedAt = jsonObject["observed_at"] as? Double
+        let ridTimestamp = jsonObject["rid_timestamp"] as? String
+        
+        // Extract FAA RID enrichment data
+        var ridMake: String?
+        var ridModel: String?
+        var ridSource: String?
+        if let rid = jsonObject["rid"] as? [String: Any] {
+            ridMake = rid["make"] as? String
+            ridModel = rid["model"] as? String
+            ridSource = rid["source"] as? String
+        }
         
         // Extract takeoff location from DJI via SDR
         let homeLat = system?["home_lat"] as? Double ?? 0.0
@@ -442,27 +450,28 @@ class ZMQHandler: ObservableObject {
         if opID == "Terminator0x00" {
             opID = "N/A"
         }
-        guard let basicId = basicId else {
-            print("No Basic ID found")
+        
+        if basicId == nil {
+            print("ERROR: No Basic ID in JSON")
             return nil
         }
         
         // Basic ID Message Fields
-        let uaType = String(describing: basicId["ua_type"] ?? "")
-        let droneId = basicId["id"] as? String ?? UUID().uuidString
+        let uaType = String(describing: basicId!["ua_type"] ?? "")
+        let droneId = basicId!["id"] as? String ?? UUID().uuidString
         if droneId.contains("NONE"){
             print("SKIPPING THE NONE IN ID")
             return nil
         }
-        let idType = basicId["id_type"] as? String ?? ""
+        let idType = basicId!["id_type"] as? String ?? ""
         var caaReg =  ""
         if idType.contains("CAA") {
             caaReg = droneId.replacingOccurrences(of: "drone-", with: "")
         }
-        var mac = basicId["MAC"] as? String ?? ""
-        let rssi = basicId["RSSI"] as? Int ?? 0
-        let desc = basicId["description"] as? String ?? ""
-        let mProtocol = basicId["protocol_version"] as? String ?? ""
+        var mac = basicId!["MAC"] as? String ?? ""
+        let rssi = basicId!["RSSI"] as? Int ?? 0
+        let desc = basicId!["description"] as? String ?? ""
+        let mProtocol = basicId!["protocol_version"] as? String ?? ""
         
         // SelfID Message Fields
         let selfIDtext = selfID?["text"] as? String ?? ""
@@ -566,16 +575,42 @@ class ZMQHandler: ObservableObject {
             advAddress = aext["AdvA"] as? String ?? ""
         }
         
+        // Build backend metadata string
+        var backendMetadata = ""
+        if let freq = freq {
+            backendMetadata += ", Frequency: \(String(format: "%.3f", freq)) MHz"
+        }
+        if let seenBy = seenBy {
+            backendMetadata += ", SeenBy: \(seenBy)"
+        }
+        if let observedAt = observedAt {
+            let date = Date(timeIntervalSince1970: observedAt)
+            let formatter = ISO8601DateFormatter()
+            backendMetadata += ", ObservedAt: \(formatter.string(from: date))"
+        }
+        if let ridTimestamp = ridTimestamp {
+            backendMetadata += ", RID_TS: \(ridTimestamp)"
+        }
+        
+        // Build FAA RID enrichment string
+        var ridInfo = ""
+        if let make = ridMake, let model = ridModel {
+            ridInfo = ", RID: \(make) \(model)"
+            if let source = ridSource {
+                ridInfo += " (\(source))"
+            }
+        }
+        
         // Generate XML
         let now = ISO8601DateFormatter().string(from: Date())
         let stale = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
         
-        return """
+        let xmlOutput = """
         <event version="2.0" uid="drone-\(droneId)" type="a-u-A-M-H-R" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
             <point lat="\(lat)" lon="\(lon)" hae="\(alt)" ce="9999999" le="999999"/>
             <detail>
                 <track course="\(direction)" speed="\(speed)"/>
-                <remarks>MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]</remarks>
+                <remarks>MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)</remarks>
                 <contact endpoint="" phone="" callsign="drone-\(droneId)"/>
                 <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
                 <color argb="-256"/>
@@ -583,6 +618,9 @@ class ZMQHandler: ObservableObject {
             </detail>
         </event>
         """
+        
+        print("GENERATED XML: \(xmlOutput)")
+        return xmlOutput
     }
     
     func createFPVUpdateCoTMessage(_ source: String, rssi: Double, frequency: Double) -> String {

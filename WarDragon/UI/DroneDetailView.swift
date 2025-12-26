@@ -235,6 +235,27 @@ struct DroneDetailView: View {
                 if let manufacturer = message.manufacturer {
                     DroneInfoRow(title: "Manufacturer", value: manufacturer)
                 }
+                
+                // Display FAA RID enrichment if available
+                if message.ridLookupSuccess {
+                    Divider()
+                    if let make = message.ridMake, let model = message.ridModel {
+                        DroneInfoRow(title: "FAA Registration", value: "\(make) \(model)")
+                    }
+                    if let source = message.ridSource {
+                        DroneInfoRow(title: "RID Source", value: source.uppercased())
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                // Display detection metadata
+                if let seenBy = message.seenBy {
+                    Divider()
+                    DroneInfoRow(title: "Detected By", value: seenBy)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
             .background(
@@ -344,6 +365,28 @@ struct DroneDetailView: View {
                     
                     if let mac = message.mac {
                         DroneInfoRow(title: "MAC Address", value: mac)
+                    }
+                    
+                    if let freqMHz = message.freq {
+                        DroneInfoRow(title: "Frequency", value: String(format: "%.3f MHz", freqMHz))
+                    }
+                    
+                    if let obs = message.observedAt {
+                        DroneInfoRow(title: "Observed At", value: {
+                            let date = Date(timeIntervalSince1970: obs)
+                            let formatter = DateFormatter()
+                            formatter.dateStyle = .none
+                            formatter.timeStyle = .medium
+                            return formatter.string(from: date)
+                        }())
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+                    
+                    if let ridts = message.ridTimestamp, ridts != message.timestamp {
+                        DroneInfoRow(title: "RID Timestamp", value: ridts)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                     
                     // Show MAC randomization if detected

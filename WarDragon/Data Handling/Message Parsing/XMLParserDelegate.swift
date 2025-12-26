@@ -59,15 +59,47 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     private var runtime: String?
     var originalRawString: String?
     
+    // Public method to parse JSON directly (for ZMQ messages)
+    func parseJSONMessage(_ jsonData: [String: Any]) -> CoTViewModel.CoTMessage? {
+        // Check if it's an array format or single object
+        if let messages = jsonData["messages"] as? [[String: Any]] {
+            processJSONArray(messages)
+        } else {
+            processSingleJSON(jsonData)
+        }
+        return cotMessage
+    }
+    
     private var fpvFrequency: String?
     private var fpvSource: String?
     private var fpvBandwidth: String?
     private var fpvRSSI: Int?
     
+    // Backend metadata fields
+    private var freq: Double?
+    private var seenBy: String?
+    private var observedAt: Double?
+    private var ridTimestamp: String?
+    
+    // FAA RID enrichment fields
+    private var ridTracking: String?
+    private var ridStatus: String?
+    private var ridMake: String?
+    private var ridModel: String?
+    private var ridSource: String?
+    private var ridLookupSuccess: Bool = false
+    
     private var trackAttributes: [String: String] = [:]
     private var track_course: String?
     private var track_speed: String?
     private var track_bearing: String?
+    
+    private var classification: Int?
+    private var system_timestamp: Int?
+    private var location_status: Int?
+    private var alt_pressure: Double?
+    private var horiz_acc: Int?
+    private var description_type: Int?
     
     private var memoryTotal: Double = 0.0
     private var memoryAvailable: Double = 0.0
@@ -157,6 +189,30 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             droneData["index"] = message["index"]
             droneData["runtime"] = message["runtime"]
             
+            // Extract backend metadata (from dragonsync.py/drone.py)
+            if let freq = message["freq"] as? Double {
+                droneData["freq"] = freq
+            }
+            if let seenBy = message["seen_by"] as? String {
+                droneData["seen_by"] = seenBy
+            }
+            if let observedAt = message["observed_at"] as? Double {
+                droneData["observed_at"] = observedAt
+            }
+            if let ridTimestamp = message["rid_timestamp"] as? String {
+                droneData["rid_timestamp"] = ridTimestamp
+            }
+            
+            // Extract FAA RID enrichment (from faa-rid-lookup)
+            if let rid = message["rid"] as? [String: Any] {
+                droneData["rid_tracking"] = rid["tracking"]
+                droneData["rid_status"] = rid["status"]
+                droneData["rid_make"] = rid["make"]
+                droneData["rid_model"] = rid["model"]
+                droneData["rid_source"] = rid["source"]
+                droneData["rid_lookup_success"] = rid["lookup_success"] as? Bool ?? false
+            }
+            
             if let basicId = message["Basic ID"] as? [String: Any] {
                 droneData["id"] = basicId["id"]
                 droneData["id_type"] = basicId["id_type"]
@@ -180,6 +236,13 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 droneData["baro_accuracy"] = location["baro_accuracy"]
                 droneData["speed_accuracy"] = location["speed_accuracy"]
                 droneData["timestamp"] = location["timestamp"]
+                droneData["status"] = location["status"]
+                droneData["alt_pressure"] = location["alt_pressure"]
+                droneData["horiz_acc"] = location["horiz_acc"]
+                droneData["vert_acc"] = location["vert_acc"]
+                droneData["speed_acc"] = location["speed_acc"]
+                droneData["ew_dir_segment"] = location["ew_dir_segment"]
+                droneData["speed_multiplier"] = location["speed_multiplier"]
             }
             
             if let system = message["System Message"] as? [String: Any] {
@@ -193,11 +256,13 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 droneData["area_floor"] = system["area_floor"]
                 droneData["operator_alt_geo"] = system["operator_alt_geo"]
                 droneData["classification"] = system["classification"]
+                droneData["system_timestamp"] = system["timestamp"]
             }
             
             if let selfId = message["Self-ID Message"] as? [String: Any] {
                 droneData["description"] = selfId["description"]
                 droneData["text"] = selfId["text"]
+                droneData["description_type"] = selfId["description_type"]
             }
             
             if let operatorId = message["Operator ID Message"] as? [String: Any] {
@@ -210,7 +275,24 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         }
         
         if let basicId = droneData["id"] as? String {
-            cotMessage = CoTViewModel.CoTMessage(
+            let mac = droneData["mac"] as? String ?? ""
+            var manufacturer: String?
+            
+            if !mac.isEmpty {
+                let normalizedMac = mac.uppercased()
+                for (key, prefixes) in macPrefixesByManufacturer {
+                    for prefix in prefixes {
+                        let normalizedPrefix = prefix.uppercased()
+                        if normalizedMac.hasPrefix(normalizedPrefix) {
+                            manufacturer = key
+                            break
+                        }
+                    }
+                    if manufacturer != nil { break }
+                }
+            }
+            
+            var message = CoTViewModel.CoTMessage(
                 uid: basicId,
                 type: buildDroneType(droneData),
                 lat: String(describing: droneData["latitude"] ?? "0.0"),
@@ -220,37 +302,62 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 speed: String(describing: droneData["speed"] ?? "0.0"),
                 vspeed: String(describing: droneData["vert_speed"] ?? "0.0"),
                 alt: String(describing: droneData["geodetic_altitude"] ?? "0.0"),
-                height: String(describing: droneData["height_agl"] ?? "0.0"),
                 pilotLat: String(describing: droneData["pilot_lat"] ?? "0.0"),
                 pilotLon: String(describing: droneData["pilot_lon"] ?? "0.0"),
                 description: droneData["description"] as? String ?? "",
                 selfIDText: droneData["text"] as? String ?? "",
                 uaType: mapUAType(droneData["ua_type"]),
                 idType: droneData["id_type"] as? String ?? "Unknown",
-                mac: droneData["mac"] as? String,
-                rssi: droneData["rssi"] as? Int,
-                location_protocol: droneData["protocol_version"] as? String,
-                op_status: droneData["op_status"] as? String,
-                height_type: droneData["height_type"] as? String,
-                ew_dir_segment: droneData["ew_dir_segment"] as? String,
-                speed_multiplier: droneData["speed_multiplier"] as? String,
-                direction: droneData["direction"] as? String,
-                vertical_accuracy: droneData["vertical_accuracy"] as? String,
-                horizontal_accuracy: droneData["horizontal_accuracy"] as? String,
-                baro_accuracy: droneData["baro_accuracy"] as? String,
-                speed_accuracy: droneData["speed_accuracy"] as? String,
-                timestamp: droneData["timestamp"] as? String,
-                timestamp_accuracy: droneData["timestamp_accuracy"] as? String,
-                operator_id: droneData["operator_id"] as? String,
-                operator_id_type: droneData["operator_id_type"] as? String,
-                index: droneData["index"] as? String,
-                runtime: droneData["runtime"] as? String ?? "",
-                rawMessage: droneData,
-                originalRawString: originalRawString 
+                rawMessage: droneData
             )
             
-            cotMessage?.trackCourse  = track_course
-            cotMessage?.trackSpeed   = track_speed
+            message.height = droneData["height_agl"] as? String
+            message.protocolVersion = droneData["protocol_version"] as? String
+            message.mac = mac
+            message.rssi = droneData["rssi"] as? Int
+            message.manufacturer = manufacturer
+            message.freq = droneData["freq"] as? Double
+            message.seenBy = droneData["seen_by"] as? String
+            message.observedAt = droneData["observed_at"] as? Double
+            message.ridTimestamp = droneData["rid_timestamp"] as? String
+            message.ridTracking = droneData["rid_tracking"] as? String
+            message.ridStatus = droneData["rid_status"] as? String
+            message.ridMake = droneData["rid_make"] as? String
+            message.ridModel = droneData["rid_model"] as? String
+            message.ridSource = droneData["rid_source"] as? String
+            message.ridLookupSuccess = droneData["rid_lookup_success"] as? Bool ?? false
+            message.location_protocol = droneData["protocol_version"] as? String
+            message.op_status = droneData["op_status"] as? String
+            message.height_type = droneData["height_type"] as? String
+            message.ew_dir_segment = droneData["ew_dir_segment"] as? String
+            message.speed_multiplier = droneData["speed_multiplier"] as? String
+            message.direction = droneData["direction"] as? String
+            message.geodetic_altitude = droneData["geodetic_altitude"] as? Double
+            message.vertical_accuracy = droneData["vertical_accuracy"] as? String
+            message.horizontal_accuracy = droneData["horizontal_accuracy"] as? String
+            message.baro_accuracy = droneData["baro_accuracy"] as? String
+            message.speed_accuracy = droneData["speed_accuracy"] as? String
+            message.timestamp = droneData["timestamp"] as? String
+            message.timestamp_accuracy = droneData["timestamp_accuracy"] as? String
+            message.operator_id = droneData["operator_id"] as? String
+            message.operator_id_type = droneData["operator_id_type"] as? String
+            message.index = droneData["index"] as? String
+            message.runtime = droneData["runtime"] as? String ?? ""
+            message.trackCourse  = track_course
+            message.trackSpeed   = track_speed
+            message.originalRawString = originalRawString
+            
+            // Parse new fields
+            if let classificationInt = droneData["classification"] as? Int {
+                message.classification = String(classificationInt)
+            }
+            message.system_timestamp = droneData["system_timestamp"] as? Int
+            message.location_status = droneData["status"] as? Int
+            message.alt_pressure = droneData["alt_pressure"] as? Double
+            message.horiz_acc = droneData["horiz_acc"] as? Int
+            message.description_type = droneData["description_type"] as? Int
+            
+            cotMessage = message
         }
     }
     
@@ -303,7 +410,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             
             // Get MAC from all possible sources
             var mac = basicId["MAC"] as? String ?? ""
-            var manufacturer = "Unknown"
+            var manufacturer: String?
             
             // Check if MAC exists and match it against prefixes
             if !mac.isEmpty {
@@ -316,7 +423,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                             break
                         }
                     }
-                    if manufacturer != "Unknown" { break }
+                    if manufacturer != nil { break }
                 }
             }
             
@@ -335,7 +442,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                             break
                         }
                     }
-                    if manufacturer != "Unknown" { break }
+                    if manufacturer != nil { break }
                 }
             }
             
@@ -349,8 +456,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 return nil
             }
             
-            return CoTViewModel.CoTMessage(
-                caaRegistration: caaReg,
+            var message = CoTViewModel.CoTMessage(
                 uid: droneId,
                 type: droneType,
                 lat: String(describing: location?["latitude"] ?? "0.0"),
@@ -360,34 +466,61 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 speed: String(describing: location?["speed"] ?? "0.0"),
                 vspeed: String(describing: location?["vert_speed"] ?? "0.0"),
                 alt: String(describing: location?["geodetic_altitude"] ?? "0.0"),
-                height: String(describing: location?["height_agl"] ?? "0.0"),
                 pilotLat: String(describing: system?["operator_lat"] ?? system?["latitude"] ?? "0.0"),
                 pilotLon: String(describing: system?["operator_lon"] ?? system?["longitude"] ?? "0.0"),
                 description: selfId?["description"] as? String ?? "",
                 selfIDText: selfId?["text"] as? String ?? "",
                 uaType: mapUAType(basicId["ua_type"] as? String),
                 idType: idType,
-                mac: mac,
-                rssi: basicId["RSSI"] as? Int ?? 0,
-                manufacturer: manufacturer,
-                location_protocol: location?["protocol_version"] as? String,
-                op_status: location?["op_status"] as? String,
-                height_type: location?["height_type"] as? String,
-                ew_dir_segment: location?["ew_dir_segment"] as? String,
-                speed_multiplier: location?["speed_multiplier"] as? String,
-                direction: location?["direction"] as? String,
-                vertical_accuracy: location?["vertical_accuracy"] as? String,
-                horizontal_accuracy: location?["horizontal_accuracy"] as? String,
-                baro_accuracy: location?["baro_accuracy"] as? String,
-                speed_accuracy: location?["speed_accuracy"] as? String,
-                timestamp: location?["timestamp"] as? String,
-                timestamp_accuracy: location?["timestamp_accuracy"] as? String,
-                operator_id: opID,
-                operator_id_type: opIDType,
-                index: String(index),
-                runtime: String(runtime),
                 rawMessage: jsonData
             )
+            
+            message.caaRegistration = caaReg
+            message.height = String(describing: location?["height_agl"] ?? "0.0")
+            message.protocolVersion = location?["protocol_version"] as? String
+            message.mac = mac
+            message.rssi = basicId["RSSI"] as? Int ?? 0
+            message.manufacturer = manufacturer
+            message.freq = jsonData["freq"] as? Double
+            message.seenBy = jsonData["seen_by"] as? String
+            message.observedAt = jsonData["observed_at"] as? Double
+            message.ridTimestamp = jsonData["rid_timestamp"] as? String
+            message.ridTracking = jsonData["rid_tracking"] as? String
+            message.ridStatus = jsonData["rid_status"] as? String
+            message.ridMake = jsonData["rid_make"] as? String
+            message.ridModel = jsonData["rid_model"] as? String
+            message.ridSource = jsonData["rid_source"] as? String
+            message.ridLookupSuccess = jsonData["rid_lookup_success"] as? Bool ?? false
+            message.location_protocol = location?["protocol_version"] as? String
+            message.op_status = location?["op_status"] as? String
+            message.height_type = location?["height_type"] as? String
+            message.ew_dir_segment = location?["ew_dir_segment"] as? String
+            message.speed_multiplier = location?["speed_multiplier"] as? String
+            message.direction = location?["direction"] as? String
+            message.geodetic_altitude = location?["geodetic_altitude"] as? Double
+            message.vertical_accuracy = location?["vertical_accuracy"] as? String
+            message.horizontal_accuracy = location?["horizontal_accuracy"] as? String
+            message.baro_accuracy = location?["baro_accuracy"] as? String
+            message.speed_accuracy = location?["speed_accuracy"] as? String
+            message.timestamp = location?["timestamp"] as? String
+            message.timestamp_accuracy = location?["timestamp_accuracy"] as? String
+            message.operator_id = opID
+            message.operator_id_type = opIDType
+            message.index = String(index)
+            message.runtime = String(runtime)
+            message.originalRawString = originalRawString
+            
+            // Parse new fields
+            if let classificationInt = system?["classification"] as? Int {
+                message.classification = String(classificationInt)
+            }
+            message.system_timestamp = system?["timestamp"] as? Int
+            message.location_status = location?["status"] as? Int
+            message.alt_pressure = location?["alt_pressure"] as? Double
+            message.horiz_acc = location?["horiz_acc"] as? Int
+            message.description_type = selfId?["description_type"] as? Int
+            
+            return message
         }
         return nil
     }
@@ -546,22 +679,21 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     private func handleDroneMessage(_ elementName: String, _ parent: String) {
         switch elementName {
         case "remarks":
-            // Parse remarks field
             let (mac, rssi, caaReg, idRegType, manufacturer, protocolVersion, description, speed, vspeed, alt, heightAGL,
-                 heightType, pressureAltitude, ewDirSegment, speedMultiplier, opStatus,
+                 heightType, _, ewDirSegment, speedMultiplier, opStatus,
                  direction, timestamp, runtime, index, status, altPressure, horizAcc,
                  vertAcc, baroAcc, speedAcc, selfIDtext, selfIDDesc, operatorID, uaType,
                  operatorLat, operatorLon, operatorAltGeo, classification,
-                 channel, phy, accessAddress, advMode, deviceId, sequenceId, advAddress,
-                 timestampAdv, homeLat, homeLon, trackCourse, trackSpeed) = parseDroneRemarks(remarks)
+                 channel, phy, accessAddress, advMode, _, _, advAddress,
+                 _, homeLat, homeLon, trackCourse, trackSpeed,
+                 freq, seenBy, observedAt, ridTimestamp, ridMake, ridModel, ridSource) = parseDroneRemarks(remarks)
             
             print("DEBUG - Parsing Remarks: \(remarks) and op lon is \(String(describing: operatorLon)) and home is \(String(describing: homeLat)) / \(String(describing: homeLon))")
             
             let finalDescription = description?.isEmpty ?? true ? selfIDDesc : description ?? ""
             
             if cotMessage == nil {
-                cotMessage = CoTViewModel.CoTMessage(
-                    caaRegistration: caaReg,
+                var message = CoTViewModel.CoTMessage(
                     uid: eventAttributes["uid"] ?? "",
                     type: eventAttributes["type"] ?? "",
                     lat: pointAttributes["lat"] ?? "0.0",
@@ -571,88 +703,72 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     speed: speed?.description ?? "0.0",
                     vspeed: vspeed?.description ?? "0.0",
                     alt: pointAttributes["hae"] ?? (alt?.description ?? "0.0"),
-                    height: heightAGL?.description ?? "0.0",
                     pilotLat: operatorLat?.description ?? "0.0",
                     pilotLon: operatorLon?.description ?? "0.0",
                     description: finalDescription ?? "",
                     selfIDText: selfIDtext ?? "",
                     uaType: mapUAType(uaType),
                     idType: idRegType ?? "",
-                    protocolVersion: protocolVersion,
-                    mac: mac,
-                    rssi: rssi,
-                    manufacturer: manufacturer,
-                    location_protocol: location_protocol,
-                    op_status: opStatus,
-                    height_type: heightType,
-                    ew_dir_segment: ewDirSegment,
-                    speed_multiplier: speedMultiplier?.description,
-                    direction: direction?.description,
-                    vertical_accuracy: vertAcc,
-                    horizontal_accuracy: horizAcc?.description,
-                    baro_accuracy: baroAcc?.description,
-                    speed_accuracy: speedAcc?.description,
-                    timestamp: timestamp,
-                    timestamp_accuracy: timestamp_accuracy,
-                    time: nil,
-                    start: nil,
-                    stale: nil,
-                    how: nil,
-                    ce: nil,
-                    le: nil,
-                    hae: nil,
-                    aux_rssi: aux_rssi,
-                    channel: channel,
-                    phy: phy,
-                    aa: accessAddress,
-                    adv_mode: advMode,
-                    adv_mac: advAddress,
-                    did: did,
-                    sid: sid,
-                    timeSpeed: nil,
-                    status: status,
-                    opStatus: opStatus,
-                    altPressure: altPressure?.description,
-                    heightType: heightType,
-                    horizAcc: horizAcc?.description,
-                    vertAcc: vertAcc,
-                    baroAcc: baroAcc?.description,
-                    speedAcc: speedAcc?.description,
-                    timestampAccuracy: timestamp_accuracy,
-                    operator_id: operatorID,
-                    operator_id_type: nil,
-                    classification_type: nil,
-                    operator_location_type: nil,
-                    area_count: nil,
-                    area_radius: nil,
-                    area_ceiling: nil,
-                    area_floor: nil,
-                    advMode: advMode,
-                    txAdd: nil,
-                    rxAdd: nil,
-                    adLength: nil,
-                    accessAddress: accessAddress,
-                    operatorAltGeo: operatorAltGeo?.description,
-                    areaCount: nil,
-                    areaRadius: nil,
-                    areaCeiling: nil,
-                    areaFloor: nil,
-                    classification: classification?.description,
-                    selfIdType: nil,
-                    selfIdId: nil,
-                    authType: nil,
-                    authPage: nil,
-                    authLength: nil,
-                    authTimestamp: nil,
-                    authData: nil,
-                    isSpoofed: false,
-                    spoofingDetails: nil,
-                    runtime: runtime ?? "",
-                    trackCourse: trackCourse?.description,
-                    trackSpeed: trackSpeed?.description,
-                    rawMessage: buildRawMessage(mac, rssi, description),
-                    originalRawString: originalRawString
+                    rawMessage: buildRawMessage(mac, rssi, description)
                 )
+                
+                message.caaRegistration = caaReg
+                message.height = heightAGL?.description ?? "0.0"
+                message.protocolVersion = protocolVersion
+                message.mac = mac
+                message.rssi = rssi
+                message.manufacturer = manufacturer
+                message.freq = freq
+                message.seenBy = seenBy
+                message.observedAt = observedAt
+                message.ridTimestamp = ridTimestamp
+                message.ridTracking = ridTracking
+                message.ridStatus = ridStatus
+                message.ridMake = ridMake
+                message.ridModel = ridModel
+                message.ridSource = ridSource
+                message.ridLookupSuccess = ridLookupSuccess
+                message.location_protocol = location_protocol
+                message.op_status = opStatus
+                message.height_type = heightType
+                message.ew_dir_segment = ewDirSegment
+                message.speed_multiplier = speedMultiplier?.description
+                message.direction = direction?.description
+                message.vertical_accuracy = vertAcc
+                message.horizontal_accuracy = horizAcc?.description
+                message.baro_accuracy = baroAcc?.description
+                message.speed_accuracy = speedAcc?.description
+                message.timestamp = timestamp
+                message.timestamp_accuracy = timestamp_accuracy
+                message.aux_rssi = aux_rssi
+                message.channel = channel
+                message.phy = phy
+                message.aa = accessAddress
+                message.adv_mode = advMode
+                message.adv_mac = advAddress
+                message.did = did
+                message.sid = sid
+                message.status = status
+                message.opStatus = opStatus
+                message.altPressure = altPressure?.description
+                message.heightType = heightType
+                message.horizAcc = horizAcc?.description
+                message.vertAcc = vertAcc
+                message.baroAcc = baroAcc?.description
+                message.speedAcc = speedAcc?.description
+                message.timestampAccuracy = timestamp_accuracy
+                message.operator_id = operatorID
+                message.advMode = advMode
+                message.accessAddress = accessAddress
+                message.operatorAltGeo = operatorAltGeo?.description
+                message.classification = classification?.description
+                message.index = index
+                message.runtime = runtime ?? ""
+                message.trackCourse = trackCourse?.description
+                message.trackSpeed = trackSpeed?.description
+                message.originalRawString = originalRawString
+                
+                cotMessage = message
             }
         case "location_protocol", "op_status", "height_type", "ew_dir_segment",
             "speed_multiplier", "vertical_accuracy", "horizontal_accuracy",
@@ -712,7 +828,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
                 
                 let mac = eventAttributes["MAC"] ?? ""
-                var manufacturer = "Unknown"
+                var manufacturer: String?
                 
                 if !mac.isEmpty {
                     let normalizedMac = mac.uppercased()
@@ -724,7 +840,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                                 break
                             }
                         }
-                        if manufacturer != "Unknown" { break }
+                        if manufacturer != nil { break }
                     }
                 }
                 
@@ -736,8 +852,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     caaReg = droneId.replacingOccurrences(of: "drone-", with: "")
                 }
                 
-                cotMessage = CoTViewModel.CoTMessage(
-                    caaRegistration: caaReg,
+                var message = CoTViewModel.CoTMessage(
                     uid: droneId,
                     type: eventAttributes["type"] ?? "",
                     lat: pointAttributes["lat"] ?? "0.0",
@@ -747,49 +862,47 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     speed: speed,
                     vspeed: vspeed,
                     alt: pointAttributes["hae"] ?? "0.0",
-                    height: height,
                     pilotLat: pilotLat,
                     pilotLon: pilotLon,
                     description: droneDescription,
                     selfIDText: "",
                     uaType: .helicopter,
                     idType: idType,
-                    mac: mac,
-                    rssi: Int(eventAttributes["RSSI"] ?? "") ?? 0,
-                    manufacturer: manufacturer,
-                    location_protocol: location_protocol,
-                    op_status: op_status,
-                    height_type: height_type,
-                    ew_dir_segment: ew_dir_segment,
-                    speed_multiplier: speed_multiplier,
-                    //                    direction: direction,
-                    vertical_accuracy: vertical_accuracy,
-                    horizontal_accuracy: horizontal_accuracy,
-                    baro_accuracy: baro_accuracy,
-                    speed_accuracy: speed_accuracy,
-                    timestamp: timestamp,
-                    timestamp_accuracy: timestamp_accuracy,
-                    operator_id: operator_id,
-                    operator_id_type: operator_id_type,
-                    classification_type: nil,
-                    operator_location_type: nil,
-                    area_count: nil,
-                    area_radius: nil,
-                    area_ceiling: nil,
-                    area_floor: nil,
-                    advMode: nil,
-                    txAdd: nil,
-                    rxAdd: nil,
-                    adLength: nil,
-                    accessAddress: nil,
-                    index: index,
-                    runtime: runtime ?? "",
-                    trackCourse: track_course?.description,
-                    trackSpeed: track_speed?.description,
-//                    operatorAltGeo: operatorAltGeo,
-                    rawMessage: jsonFormat,
-                    originalRawString: originalRawString
+                    rawMessage: jsonFormat
                 )
+                
+                message.caaRegistration = caaReg
+                message.height = height
+                message.mac = mac
+                message.rssi = Int(eventAttributes["RSSI"] ?? "") ?? 0
+                message.manufacturer = manufacturer
+                message.location_protocol = location_protocol
+                message.op_status = op_status
+                message.height_type = height_type
+                message.ew_dir_segment = ew_dir_segment
+                message.speed_multiplier = speed_multiplier
+                message.vertical_accuracy = vertical_accuracy
+                message.horizontal_accuracy = horizontal_accuracy
+                message.baro_accuracy = baro_accuracy
+                message.speed_accuracy = speed_accuracy
+                message.timestamp = timestamp
+                message.timestamp_accuracy = timestamp_accuracy
+                message.opStatus = op_status
+                message.heightType = height_type
+                message.horizAcc = horizontal_accuracy
+                message.vertAcc = vertical_accuracy
+                message.baroAcc = baro_accuracy
+                message.speedAcc = speed_accuracy
+                message.timestampAccuracy = timestamp_accuracy
+                message.operator_id = operator_id
+                message.operator_id_type = operator_id_type
+                message.index = index
+                message.runtime = runtime ?? ""
+                message.trackCourse = track_course?.description
+                message.trackSpeed = track_speed?.description
+                message.originalRawString = originalRawString
+                
+                cotMessage = message
             }
         default:
             break
@@ -967,7 +1080,14 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         homeLat: Double?,
         homeLon: Double?,
         trackCourse: String?,
-        trackSpeed: String?
+        trackSpeed: String?,
+        freq: Double?,
+        seenBy: String?,
+        observedAt: Double?,
+        ridTimestamp: String?,
+        ridMake: String?,
+        ridModel: String?,
+        ridSource: String?
     ) {
         var mac: String?
         var rssi: Int?
@@ -1002,7 +1122,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         var operatorLon: Double?
         var operatorAltGeo: Double?
         var classification: Int?
-        var manufacturer = "Unknown"
+        var manufacturer: String?
         var channel: Int?
         var phy: Int?
         var accessAddress: Int?
@@ -1016,9 +1136,46 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         var trackCourse: String?
         var trackSpeed: String?
         
-        let normalized = remarks.replacingOccurrences(of: "; ", with: "|")
+        // Backend metadata variables
+        var freq: Double?
+        var seenBy: String?
+        var observedAt: Double?
+        var ridTimestamp: String?
+        
+        // FAA RID enrichment variables
+        var ridMake: String?
+        var ridModel: String?
+        var ridSource: String?
+        
+        // First, extract and preserve special blocks that contain internal commas
+        var specialBlocks: [String: String] = [:]
+        var workingRemarks = remarks
+        
+        // Extract System block
+        if let systemRange = remarks.range(of: "System: \\[[^\\]]+\\]", options: .regularExpression) {
+            let systemBlock = String(remarks[systemRange])
+            specialBlocks["SYSTEM_BLOCK"] = systemBlock
+            workingRemarks = workingRemarks.replacingOccurrences(of: systemBlock, with: "SYSTEM_BLOCK")
+        }
+        
+        // Extract Location/Vector block
+        if let locationRange = remarks.range(of: "Location/Vector: \\[[^\\]]+\\]", options: .regularExpression) {
+            let locationBlock = String(remarks[locationRange])
+            specialBlocks["LOCATION_BLOCK"] = locationBlock
+            workingRemarks = workingRemarks.replacingOccurrences(of: locationBlock, with: "LOCATION_BLOCK")
+        }
+        
+        // Now normalize and split
+        let normalized = workingRemarks.replacingOccurrences(of: "; ", with: "|")
             .replacingOccurrences(of: ", ", with: "|")
-        let components = normalized.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        var components = normalized.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        
+        // Restore special blocks
+        for i in 0..<components.count {
+            if let block = specialBlocks[components[i]] {
+                components[i] = block
+            }
+        }
         
         
         print("DEBUG: REMARKS COMPONENTS: \(components)")
@@ -1040,7 +1197,11 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             } else if trimmed.hasPrefix("UA Type:") {
                 uaType = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Manufacturer:") {
-                manufacturer = trimmed.dropFirst(13).trimmingCharacters(in: .whitespaces)
+                let mfr = trimmed.dropFirst(13).trimmingCharacters(in: .whitespaces)
+                // Only set manufacturer if it's not empty and not "Unknown"
+                if !mfr.isEmpty && mfr != "Unknown" {
+                    manufacturer = mfr
+                }
             } else if trimmed.hasPrefix("Channel:") {
                 channel = Int(trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("PHY:") {
@@ -1134,27 +1295,31 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             } else if trimmed.hasPrefix("SelfID Description:") {
                 selfIDDesc = trimmed.dropFirst(19).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("System:") {
-                // Since components are already split, need to reconstruct full System string first
-                let systemComponents = components.filter { $0.contains("System:") || $0.contains("Operator") || $0.contains("Home") }
-                let fullSystemString = systemComponents.joined(separator: ", ")
-                
-                let content = fullSystemString.components(separatedBy: "[").last?
+                // Parse System message which is formatted as: System: [Operator Lat: X, Operator Lon: Y, Home Lat: Z, Home Lon: W]
+                print("DEBUG: Found System block: \(trimmed)")
+                let content = trimmed.components(separatedBy: "[").last?
                     .replacingOccurrences(of: "]", with: "") ?? ""
+                print("DEBUG: System content: '\(content)'")
                 let systemParts = content.components(separatedBy: ", ")
+                print("DEBUG: System parts: \(systemParts)")
                 for part in systemParts {
                     let clean = part.trimmingCharacters(in: .whitespaces)
                     if clean.hasPrefix("Operator Lat:") {
                         operatorLat = Double(clean.dropFirst(13)
                             .trimmingCharacters(in: .whitespaces))
+                        print("DEBUG: Extracted operator lat: \(String(describing: operatorLat))")
                     } else if clean.hasPrefix("Operator Lon:") {
                         operatorLon = Double(clean.dropFirst(13)
                             .trimmingCharacters(in: .whitespaces))
+                        print("DEBUG: Extracted operator lon: \(String(describing: operatorLon))")
                     } else if clean.hasPrefix("Home Lat:") {
                         homeLat = Double(clean.dropFirst(9)
                             .trimmingCharacters(in: .whitespaces))
+                        print("DEBUG: Extracted home lat: \(String(describing: homeLat))")
                     } else if clean.hasPrefix("Home Lon:") {
                         homeLon = Double(clean.dropFirst(9)
                             .trimmingCharacters(in: .whitespaces))
+                        print("DEBUG: Extracted home lon: \(String(describing: homeLon))")
                     }
                 }
             } else if trimmed.contains("Location/Vector:") {
@@ -1201,10 +1366,56 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                        let sourceStr = trimmed[sourceMatch].replacingOccurrences(of: "Source: ", with: "")
                        fpvSource = sourceStr
                    }
+            // Parse backend metadata fields from dragonsync.py
+            } else if trimmed.hasPrefix("Frequency:") {
+                // Parse frequency in MHz format: "Frequency: 5785.000 MHz"
+                let freqStr = trimmed.dropFirst(10)
+                    .replacingOccurrences(of: " MHz", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                freq = Double(freqStr)
+            } else if trimmed.hasPrefix("SeenBy:") {
+                seenBy = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("ObservedAt:") {
+                // Parse ISO8601 timestamp and convert to Unix timestamp
+                let dateStr = trimmed.dropFirst(11).trimmingCharacters(in: .whitespaces)
+                let formatter = ISO8601DateFormatter()
+                if let date = formatter.date(from: dateStr) {
+                    observedAt = date.timeIntervalSince1970
+                }
+            } else if trimmed.hasPrefix("RID_TS:") {
+                ridTimestamp = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
+            // Parse FAA RID enrichment fields
+            } else if trimmed.hasPrefix("RID:") {
+                // Parse "RID: Make Model (source)"
+                let ridStr = trimmed.dropFirst(4).trimmingCharacters(in: .whitespaces)
+                
+                // Extract source in parentheses
+                if let sourceStart = ridStr.lastIndex(of: "("),
+                   let sourceEnd = ridStr.lastIndex(of: ")") {
+                    ridSource = String(ridStr[ridStr.index(after: sourceStart)..<sourceEnd])
+                    
+                    // Extract make/model before parentheses
+                    let makeModelStr = ridStr[..<sourceStart].trimmingCharacters(in: .whitespaces)
+                    let components = makeModelStr.components(separatedBy: " ")
+                    if components.count >= 2 {
+                        ridMake = components[0]
+                        ridModel = components.dropFirst().joined(separator: " ")
+                        ridLookupSuccess = true
+                    }
+                } else {
+                    // No source info, just make/model
+                    let components = ridStr.components(separatedBy: " ")
+                    if components.count >= 2 {
+                        ridMake = components[0]
+                        ridModel = components.dropFirst().joined(separator: " ")
+                        ridLookupSuccess = true
+                    }
+                }
                }
         }
         
-        if manufacturer == "Unknown", let mac = mac {
+        // Only try MAC-based manufacturer lookup if not already set from remarks
+        if manufacturer == nil, let mac = mac {
             print("MAC is \(mac)")
             let cleanMac = mac.replacingOccurrences(of: ":", with: "").uppercased()
             for (brand, prefixes) in macPrefixesByManufacturer {
@@ -1212,11 +1423,11 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     let cleanPrefix = prefix.replacingOccurrences(of: ":", with: "").uppercased()
                     if cleanMac.hasPrefix(cleanPrefix) {
                         manufacturer = brand
-                        print("Match found! Manufacturer: \(manufacturer)")
+                        print("Match found! Manufacturer: \(manufacturer ?? "nil")")
                         break
                     }
                 }
-                if manufacturer != "Unknown" { break }
+                if manufacturer != nil { break }
             }
         }
         
@@ -1266,7 +1477,14 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             homeLat: homeLat,
             homeLon: homeLon,
             trackCourse: trackCourse,
-            trackSpeed: trackSpeed
+            trackSpeed: trackSpeed,
+            freq: freq,
+            seenBy: seenBy,
+            observedAt: observedAt,
+            ridTimestamp: ridTimestamp,
+            ridMake: ridMake,
+            ridModel: ridModel,
+            ridSource: ridSource
         )
     }
     

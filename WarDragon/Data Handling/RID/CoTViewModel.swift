@@ -26,6 +26,7 @@ class CoTViewModel: ObservableObject {
     private let statusViewModel: StatusViewModel
     private var spectrumViewModel: SpectrumData.SpectrumViewModel?
     private var zmqHandler: ZMQHandler?
+    private lazy var messageConverter = ZMQHandler() // For message conversion even in multicast mode
     private let backgroundManager = BackgroundManager.shared
     private var cotListener: NWListener?
     private var statusListener: NWListener?
@@ -182,6 +183,11 @@ class CoTViewModel: ObservableObject {
         var areaCeiling: String?
         var areaFloor: String?
         var classification: String?
+        var system_timestamp: Int?
+        var location_status: Int?
+        var alt_pressure: Double?
+        var horiz_acc: Int?
+        var description_type: Int?
         
         // Self-ID fields
         var selfIdType: String?
@@ -200,6 +206,17 @@ class CoTViewModel: ObservableObject {
         
         var index: String?
         var runtime: String?
+        
+        var freq: Double?
+        var seenBy: String?
+        var observedAt: Double?
+        var ridTimestamp: String?
+        var ridTracking: String?
+        var ridStatus: String?
+        var ridMake: String?
+        var ridModel: String?
+        var ridSource: String?
+        var ridLookupSuccess: Bool = false
         
         // FPV Detection Properties
         var isFPVDetection: Bool {
@@ -282,7 +299,7 @@ class CoTViewModel: ObservableObject {
         // Helper
         public var headingDeg: Double {
             // First try to get heading from track data
-            if let rawTrack = trackSpeed,
+            if let rawTrack = trackCourse,
                rawTrack != "0.0",
                let deg = Double(rawTrack.replacingOccurrences(of: "°", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)) {
@@ -622,10 +639,28 @@ class CoTViewModel: ObservableObject {
     
     func startListening() {
         // Prevent multiple starts or starts during reconnection
-        guard !isListeningCot && !isReconnecting else { return }
+        guard !isListeningCot && !isReconnecting else { 
+            print("Already listening or reconnecting, skipping start")
+            return 
+        }
         
-        // Clean up any existing connections
-        stopListening()
+        print("Settings: Toggle listening to true")
+        
+        // Clean up any existing connections with proper delay
+        if cotListener != nil || multicastConnection != nil || zmqHandler != nil {
+            print("Cleaning up existing connections before restart...")
+            stopListening()
+            
+            // Wait for cleanup to complete before starting new connections
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.proceedWithStartListening()
+            }
+        } else {
+            proceedWithStartListening()
+        }
+    }
+    
+    private func proceedWithStartListening() {
         isListeningCot = true
         
         // Setup background processing notification observer
@@ -652,34 +687,107 @@ class CoTViewModel: ObservableObject {
     
     private func startMulticastListening() {
         let parameters = NWParameters.udp
+        
+        // Critical: Allow reuse to prevent "Address already in use" errors
         parameters.allowLocalEndpointReuse = true
+        parameters.acceptLocalOnly = false
+        
+        // Network requirements
         parameters.prohibitedInterfaceTypes = [.cellular]
         parameters.requiredInterfaceType = .wifi
         
+        // Configure multicast options
+        if let udpOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            udpOptions.version = .v4
+        }
+        
         do {
+            // Create listener on the multicast port
             cotListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: cotPortMC))
-            cotListener?.stateUpdateHandler = { state in
+            
+            cotListener?.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    print("Multicast listener ready.")
+                    print("Multicast listener ready - now joining multicast group...")
+                    // When listener is ready, create connection to join multicast group
+                    self?.joinMulticastGroup()
+                    DispatchQueue.main.async {
+                        self?.isListeningCot = true
+                    }
                 case .failed(let error):
                     print("Multicast listener failed: \(error)")
+                    DispatchQueue.main.async {
+                        self?.isListeningCot = false
+                        // Attempt recovery after a delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            if Settings.shared.connectionMode == .multicast && 
+                               Settings.shared.isListening {
+                                print("Attempting to recover multicast connection...")
+                                self?.startMulticastListening()
+                            }
+                        }
+                    }
                 case .cancelled:
                     print("Multicast listener cancelled.")
+                    DispatchQueue.main.async {
+                        self?.isListeningCot = false
+                    }
                 default:
                     break
                 }
             }
             
             cotListener?.newConnectionHandler = { [weak self] connection in
+                print("New multicast connection received")
                 connection.start(queue: self?.listenerQueue ?? .main)
                 self?.receiveMessages(from: connection)
             }
             
             cotListener?.start(queue: listenerQueue)
+            
         } catch {
             print("Failed to create multicast listener: \(error)")
+            if let nwError = error as? NWError {
+                print("NWError details: \(nwError)")
+            }
         }
+    }
+    
+    private func joinMulticastGroup() {
+        let parameters = NWParameters.udp
+        parameters.allowLocalEndpointReuse = true
+        parameters.requiredInterfaceType = .wifi
+        
+        // Set up multicast options
+        if let udpOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            udpOptions.version = .v4
+        }
+        
+        // Create endpoint for multicast group
+        let host = NWEndpoint.Host(multicastGroup)
+        let port = NWEndpoint.Port(integerLiteral: cotPortMC)
+        let multicastEndpoint = NWEndpoint.hostPort(host: host, port: port)
+        
+        // Create connection to multicast group - THIS triggers the permission dialog
+        multicastConnection = NWConnection(to: multicastEndpoint, using: parameters)
+        
+        multicastConnection?.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+            switch state {
+            case .ready:
+                print("Successfully joined multicast group \(self.multicastGroup):\(self.cotPortMC)")
+                // Start receiving data immediately after joining
+                self.receiveMessages(from: self.multicastConnection!)
+            case .failed(let error):
+                print("Failed to join multicast group: \(error)")
+            case .waiting(let error):
+                print("Waiting to join multicast group: \(error)")
+            default:
+                break
+            }
+        }
+        
+        multicastConnection?.start(queue: listenerQueue)
     }
     
     private func startZMQListening() {
@@ -1221,18 +1329,29 @@ class CoTViewModel: ObservableObject {
             // Handle JSON input
             if message.contains("system_stats") {
                 // Status JSON
-                guard let statusXML = self.zmqHandler?.convertStatusToXML(message),
-                      let convertedData = statusXML.data(using: String.Encoding.utf8) else { return }
+                guard let statusXML = self.messageConverter.convertStatusToXML(message),
+                      let convertedData = statusXML.data(using: String.Encoding.utf8) else {
+                    print("ERROR: Failed to convert status JSON to XML")
+                    return
+                }
                 xmlData = convertedData
             } else if let jsonData = message.data(using: .utf8),
                       let parsedJson = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
                       parsedJson["Basic ID"] != nil {
                 // Drone JSON
-                guard let droneXML = self.zmqHandler?.convertTelemetryToXML(message),
-                      let convertedData = droneXML.data(using: String.Encoding.utf8) else { return }
+                print("DEBUG: Detected drone JSON with Basic ID, converting to XML...")
+                guard let droneXML = self.messageConverter.convertTelemetryToXML(message) else {
+                    print("ERROR: convertTelemetryToXML returned nil")
+                    return
+                }
+                guard let convertedData = droneXML.data(using: String.Encoding.utf8) else {
+                    print("ERROR: Failed to convert XML string to data")
+                    return
+                }
+                print("DEBUG: Successfully converted JSON to XML")
                 xmlData = convertedData
             } else {
-                print("Unrecognized JSON format")
+                print("ERROR: Unrecognized JSON format - no 'Basic ID' or 'system_stats' found")
                 return
             }
         } else {
@@ -1414,16 +1533,32 @@ class CoTViewModel: ObservableObject {
     
     // Reconnect BG if we need to
     func reconnectIfNeeded() {
-        if !isReconnecting && Settings.shared.isListening && !isListeningCot {
-            isReconnecting = true
+        guard !isReconnecting else { 
+            print("Reconnection already in progress, skipping")
+            return 
+        }
+        
+        guard Settings.shared.isListening && !isListeningCot else {
+            print("No reconnection needed: listening=\(Settings.shared.isListening), isListeningCot=\(isListeningCot)")
+            return
+        }
+        
+        print("Initiating reconnection...")
+        isReconnecting = true
+        
+        // Clean up any existing connections
+        stopListening()
+        
+        // Wait for cleanup to complete before reconnecting
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
             
-            // Clean up any existing connections
-            stopListening()
+            self.startListening()
             
-            // Wait a moment before reconnecting
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.startListening()
+            // Clear reconnecting flag after a delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.isReconnecting = false
+                print("Reconnection complete")
             }
         }
     }
@@ -2103,6 +2238,8 @@ class CoTViewModel: ObservableObject {
         
         isListeningCot = false
         
+        print("Stopping all listeners...")
+        
         // Remove notification observer
         NotificationCenter.default.removeObserver(
             self,
@@ -2110,30 +2247,46 @@ class CoTViewModel: ObservableObject {
             object: nil
         )
         
-        // Clean up multicast if using it
-        multicastConnection?.cancel()
-        cotListener?.cancel()
-        statusListener?.cancel()
-        
-        // Chill and let it die
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self = self else { return }
-            self.multicastConnection = nil
-            self.cotListener = nil
-            self.statusListener = nil
-            
-            print("Listeners properly released after delay")
+        // Cancel multicast connection first
+        if let connection = multicastConnection {
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            multicastConnection = nil
+            print("Multicast connection cancelled")
         }
         
+        // Cancel listeners with force close
+        if let listener = cotListener {
+            listener.stateUpdateHandler = nil
+            listener.newConnectionHandler = nil
+            listener.cancel()
+            cotListener = nil
+            print("CoT listener cancelled")
+        }
+        
+        if let listener = statusListener {
+            listener.stateUpdateHandler = nil
+            listener.newConnectionHandler = nil
+            listener.cancel()
+            statusListener = nil
+            print("Status listener cancelled")
+        }
+        
+        // Disconnect ZMQ handler
         if let zmqHandler = zmqHandler {
             zmqHandler.disconnect()
             self.zmqHandler = nil
+            print("ZMQ: Disconnected")
         }
         
         // Stop background processing
         backgroundManager.stopBackgroundProcessing()
         
-        print("All listeners stopped and connections cleaned up.")
+        // Give the system a moment to fully release resources
+        // This is critical to prevent "Address already in use" errors
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("All listeners stopped and connections cleaned up.")
+        }
     }
     
     func verifyZMQSubscription() {
