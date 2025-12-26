@@ -329,6 +329,23 @@ struct SettingsView: View {
                 }
             }
             
+            Section("Input") {
+                NavigationLink {
+                    ADSBSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "airplane")
+                            .foregroundColor(.purple)
+                        Text("ADS-B Aircraft")
+                        Spacer()
+                        if settings.adsbEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+            }
+            
             Section("Ports") {
                 switch settings.connectionMode {
                 case .multicast:

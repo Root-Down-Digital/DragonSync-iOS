@@ -53,6 +53,10 @@ class CoTViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var publishedDrones: Set<String> = [] // Track drones for HA discovery
     
+    // MARK: - ADS-B Integration
+    private var adsbClient: ADSBClient?
+    @Published var aircraftTracks: [Aircraft] = []
+    
     struct AlertRing: Identifiable {
             let id = UUID()
             let droneId: String
@@ -557,6 +561,7 @@ class CoTViewModel: ObservableObject {
         // Setup MQTT and TAK clients
         setupMQTTClient()
         setupTAKClient()
+        setupADSBClient()
         
         // Register for application lifecycle notifications
         NotificationCenter.default.addObserver(
@@ -2603,6 +2608,89 @@ extension CoTViewModel {
         """
         
         return xml
+    }
+}
+
+// MARK: - ADS-B Integration
+extension CoTViewModel {
+    
+    /// Setup ADS-B client and start polling
+    func setupADSBClient() {
+        let config = Settings.shared.adsbConfiguration
+        guard config.enabled && config.isValid else {
+            adsbClient?.stop()
+            adsbClient = nil
+            return
+        }
+        
+        Task { @MainActor in
+            adsbClient = ADSBClient(configuration: config)
+            adsbClient?.start()
+            
+            // Observe aircraft updates
+            adsbClient?.$aircraft
+                .sink { [weak self] aircraft in
+                    self?.handleAircraftUpdate(aircraft)
+                }
+                .store(in: &cancellables)
+            
+            // Observe connection state
+            adsbClient?.$state
+                .sink { [weak self] state in
+                    print("ADS-B state: \(state)")
+                }
+                .store(in: &cancellables)
+        }
+    }
+    
+    /// Handle aircraft data updates
+    private func handleAircraftUpdate(_ aircraft: [Aircraft]) {
+        aircraftTracks = aircraft
+        
+        // Publish to MQTT if enabled
+        if Settings.shared.mqttEnabled {
+            publishAircraftToMQTT(aircraft)
+        }
+        
+        // Publish to TAK if enabled
+        if Settings.shared.takEnabled {
+            publishAircraftToTAK(aircraft)
+        }
+    }
+    
+    /// Publish aircraft to MQTT
+    private func publishAircraftToMQTT(_ aircraft: [Aircraft]) {
+        guard let mqttClient = mqttClient else { return }
+        
+        Task {
+            for aircraft in aircraft {
+                do {
+                    let topic = "\(Settings.shared.mqttBaseTopic)/aircraft/\(aircraft.hex)"
+                    let message = aircraft.toMQTTMessage()
+                    let data = try JSONSerialization.data(withJSONObject: message)
+                    
+                    try await mqttClient.publish(topic: topic, payload: data)
+                } catch {
+                    print("MQTT aircraft publish failed: \(error)")
+                }
+            }
+        }
+    }
+    
+    /// Publish aircraft to TAK server
+    private func publishAircraftToTAK(_ aircraft: [Aircraft]) {
+        guard let takClient = takClient else { return }
+        
+        Task {
+            for aircraft in aircraft {
+                do {
+                    let cotXML = aircraft.toCoTXML()
+                    try await takClient.send(cotXML)
+                } catch {
+                    print("TAK aircraft publish failed: \(error)")
+                }
+            }
+        }
     }
 }
 

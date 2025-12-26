@@ -438,6 +438,56 @@ class Settings: ObservableObject {
         mqttConfiguration = config
     }
     
+    // MARK: - ADS-B Settings
+    @AppStorage("adsbEnabled") var adsbEnabled = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("adsbReadsbURL") var adsbReadsbURL: String = "http://localhost:8080" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("adsbPollInterval") var adsbPollInterval: Double = 2.0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("adsbMaxDistance") var adsbMaxDistance: Double = 0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("adsbMinAltitude") var adsbMinAltitude: Double = 0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("adsbMaxAltitude") var adsbMaxAltitude: Double = 50000 {
+        didSet { objectWillChange.send() }
+    }
+    
+    var adsbConfiguration: ADSBConfiguration {
+        get {
+            ADSBConfiguration(
+                enabled: adsbEnabled,
+                readsbURL: adsbReadsbURL,
+                pollInterval: adsbPollInterval,
+                maxDistance: adsbMaxDistance > 0 ? adsbMaxDistance : nil,
+                minAltitude: adsbMinAltitude > 0 ? adsbMinAltitude : nil,
+                maxAltitude: adsbMaxAltitude < 50000 ? adsbMaxAltitude : nil
+            )
+        }
+        set {
+            adsbEnabled = newValue.enabled
+            adsbReadsbURL = newValue.readsbURL
+            adsbPollInterval = newValue.pollInterval
+            adsbMaxDistance = newValue.maxDistance ?? 0
+            adsbMinAltitude = newValue.minAltitude ?? 0
+            adsbMaxAltitude = newValue.maxAltitude ?? 50000
+        }
+    }
+    
+    func updateADSBConfiguration(_ config: ADSBConfiguration) {
+        adsbConfiguration = config
+    }
+    
     //MARK: - Connection
     
     private init() {
