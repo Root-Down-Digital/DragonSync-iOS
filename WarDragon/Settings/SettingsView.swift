@@ -211,6 +211,21 @@ struct SettingsView: View {
                         }
                     }
                 }
+                
+                NavigationLink {
+                    RateLimitSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "speedometer")
+                            .foregroundColor(.orange)
+                        Text("Rate Limiting")
+                        Spacer()
+                        if settings.rateLimitEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
             }
             
             Section("Warning Thresholds") {

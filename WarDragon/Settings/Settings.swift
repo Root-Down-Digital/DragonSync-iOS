@@ -488,6 +488,80 @@ class Settings: ObservableObject {
         adsbConfiguration = config
     }
     
+    // MARK: - Rate Limiting Settings
+    @AppStorage("rateLimitEnabled") var rateLimitEnabled = true {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitDroneInterval") var rateLimitDroneInterval: Double = 1.0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitDroneMaxPerMinute") var rateLimitDroneMaxPerMinute: Int = 30 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitMQTTMaxPerSecond") var rateLimitMQTTMaxPerSecond: Int = 10 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitMQTTBurstCount") var rateLimitMQTTBurstCount: Int = 20 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitMQTTBurstPeriod") var rateLimitMQTTBurstPeriod: Double = 5.0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitTAKMaxPerSecond") var rateLimitTAKMaxPerSecond: Int = 5 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitTAKInterval") var rateLimitTAKInterval: Double = 0.5 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitWebhookMaxPerMinute") var rateLimitWebhookMaxPerMinute: Int = 20 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("rateLimitWebhookInterval") var rateLimitWebhookInterval: Double = 2.0 {
+        didSet { objectWillChange.send() }
+    }
+    
+    var rateLimitConfiguration: RateLimitConfiguration {
+        get {
+            RateLimitConfiguration(
+                enabled: rateLimitEnabled,
+                dronePublishInterval: rateLimitDroneInterval,
+                droneMaxPerMinute: rateLimitDroneMaxPerMinute,
+                mqttMaxPerSecond: rateLimitMQTTMaxPerSecond,
+                mqttBurstCount: rateLimitMQTTBurstCount,
+                mqttBurstPeriod: rateLimitMQTTBurstPeriod,
+                takMaxPerSecond: rateLimitTAKMaxPerSecond,
+                takPublishInterval: rateLimitTAKInterval,
+                webhookMaxPerMinute: rateLimitWebhookMaxPerMinute,
+                webhookPublishInterval: rateLimitWebhookInterval
+            )
+        }
+        set {
+            rateLimitEnabled = newValue.enabled
+            rateLimitDroneInterval = newValue.dronePublishInterval
+            rateLimitDroneMaxPerMinute = newValue.droneMaxPerMinute
+            rateLimitMQTTMaxPerSecond = newValue.mqttMaxPerSecond
+            rateLimitMQTTBurstCount = newValue.mqttBurstCount
+            rateLimitMQTTBurstPeriod = newValue.mqttBurstPeriod
+            rateLimitTAKMaxPerSecond = newValue.takMaxPerSecond
+            rateLimitTAKInterval = newValue.takPublishInterval
+            rateLimitWebhookMaxPerMinute = newValue.webhookMaxPerMinute
+            rateLimitWebhookInterval = newValue.webhookPublishInterval
+        }
+    }
+    
+    func updateRateLimitConfiguration(_ config: RateLimitConfiguration) {
+        rateLimitConfiguration = config
+    }
+    
     //MARK: - Connection
     
     private init() {

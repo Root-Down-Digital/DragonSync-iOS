@@ -2427,6 +2427,12 @@ extension CoTViewModel.CoTMessage {
 extension CoTViewModel {
     
     private func sendWebhookNotification(for message: CoTMessage) {
+        // Check rate limit
+        guard RateLimiterManager.shared.shouldAllowWebhook() else {
+            // Rate limited - skip this webhook
+            return
+        }
+        
         // Always drone detected for this branch (no FPV support)
         let event: WebhookEvent = .droneDetected
         
@@ -2535,6 +2541,18 @@ extension CoTViewModel {
     func publishDroneToMQTT(_ message: CoTMessage) {
         guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
         
+        // Check rate limit
+        let droneId = message.mac ?? message.uid
+        guard RateLimiterManager.shared.shouldAllowDronePublish(for: droneId) else {
+            // Rate limited - skip this publish
+            return
+        }
+        
+        guard RateLimiterManager.shared.shouldAllowMQTTPublish() else {
+            // Global MQTT rate limit hit
+            return
+        }
+        
         Task {
             do {
                 let mqttMessage = message.toMQTTDroneMessage()
@@ -2560,6 +2578,12 @@ extension CoTViewModel {
     /// Publish CoT XML to TAK server
     func publishCoTToTAK(_ cotXML: String) {
         guard Settings.shared.takEnabled, let takClient = takClient else { return }
+        
+        // Check rate limit
+        guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
+            // Rate limited - skip this publish
+            return
+        }
         
         Task {
             do {
