@@ -297,6 +297,38 @@ struct SettingsView: View {
                 }
             }
             
+            Section("Output") {
+                NavigationLink {
+                    TAKServerSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundColor(.blue)
+                        Text("TAK Server")
+                        Spacer()
+                        if settings.takEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+                
+                NavigationLink {
+                    MQTTSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "network")
+                            .foregroundColor(.orange)
+                        Text("MQTT Broker")
+                        Spacer()
+                        if settings.mqttEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+            }
+            
             Section("Ports") {
                 switch settings.connectionMode {
                 case .multicast:

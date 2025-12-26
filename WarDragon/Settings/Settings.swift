@@ -264,6 +264,179 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
 
+    // MARK: - TAK Server Settings
+    @AppStorage("takEnabled") var takEnabled = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("takHost") var takHost: String = "" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("takPort") var takPort: Int = 8089 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("takProtocol") private var takProtocolRaw: String = TAKProtocol.tls.rawValue {
+        didSet { objectWillChange.send() }
+    }
+    
+    var takProtocol: TAKProtocol {
+        get { TAKProtocol(rawValue: takProtocolRaw) ?? .tls }
+        set { takProtocolRaw = newValue.rawValue }
+    }
+    
+    @AppStorage("takTLSEnabled") var takTLSEnabled = true {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("takSkipVerification") var takSkipVerification = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    // P12 password stored in UserDefaults (not ideal but matches webhook pattern)
+    @AppStorage("takP12Password") private var takP12Password: String = "" {
+        didSet { objectWillChange.send() }
+    }
+    
+    var takConfiguration: TAKConfiguration {
+        get {
+            TAKConfiguration(
+                enabled: takEnabled,
+                host: takHost,
+                port: takPort,
+                protocol: takProtocol,
+                tlsEnabled: takTLSEnabled,
+                p12CertificateData: TAKConfiguration.loadP12FromKeychain(),
+                p12Password: takP12Password.isEmpty ? nil : takP12Password,
+                skipVerification: takSkipVerification
+            )
+        }
+        set {
+            takEnabled = newValue.enabled
+            takHost = newValue.host
+            takPort = newValue.port
+            takProtocol = newValue.protocol
+            takTLSEnabled = newValue.tlsEnabled
+            takSkipVerification = newValue.skipVerification
+            takP12Password = newValue.p12Password ?? ""
+            
+            // Save certificate to keychain if provided
+            if let certData = newValue.p12CertificateData {
+                try? newValue.saveP12ToKeychain()
+            }
+        }
+    }
+    
+    func updateTAKConfiguration(_ config: TAKConfiguration) {
+        takConfiguration = config
+    }
+    
+    // MARK: - MQTT Settings
+    @AppStorage("mqttEnabled") var mqttEnabled = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttHost") var mqttHost: String = "" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttPort") var mqttPort: Int = 1883 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttUseTLS") var mqttUseTLS = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttUsername") var mqttUsername: String = "" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttPassword") private var mqttPassword: String = "" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttBaseTopic") var mqttBaseTopic: String = "wardragon" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttQoS") private var mqttQoSRaw: Int = 1 {
+        didSet { objectWillChange.send() }
+    }
+    
+    var mqttQoS: MQTTQoS {
+        get { MQTTQoS(rawValue: mqttQoSRaw) ?? .atLeastOnce }
+        set { mqttQoSRaw = newValue.rawValue }
+    }
+    
+    @AppStorage("mqttRetain") var mqttRetain = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttCleanSession") var mqttCleanSession = true {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttHomeAssistantEnabled") var mqttHomeAssistantEnabled = false {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttHomeAssistantDiscoveryPrefix") var mqttHomeAssistantDiscoveryPrefix: String = "homeassistant" {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttKeepalive") var mqttKeepalive: Int = 60 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("mqttReconnectDelay") var mqttReconnectDelay: Int = 5 {
+        didSet { objectWillChange.send() }
+    }
+    
+    var mqttConfiguration: MQTTConfiguration {
+        get {
+            MQTTConfiguration(
+                enabled: mqttEnabled,
+                host: mqttHost,
+                port: mqttPort,
+                useTLS: mqttUseTLS,
+                username: mqttUsername.isEmpty ? nil : mqttUsername,
+                password: mqttPassword.isEmpty ? nil : mqttPassword,
+                baseTopic: mqttBaseTopic,
+                droneTopicTemplate: "{base}/drones/{mac}",
+                systemTopic: "{base}/system",
+                statusTopic: "{base}/status",
+                qos: mqttQoS,
+                retain: mqttRetain,
+                cleanSession: mqttCleanSession,
+                homeAssistantEnabled: mqttHomeAssistantEnabled,
+                homeAssistantDiscoveryPrefix: mqttHomeAssistantDiscoveryPrefix,
+                keepalive: mqttKeepalive,
+                reconnectDelay: mqttReconnectDelay
+            )
+        }
+        set {
+            mqttEnabled = newValue.enabled
+            mqttHost = newValue.host
+            mqttPort = newValue.port
+            mqttUseTLS = newValue.useTLS
+            mqttUsername = newValue.username ?? ""
+            mqttPassword = newValue.password ?? ""
+            mqttBaseTopic = newValue.baseTopic
+            mqttQoS = newValue.qos
+            mqttRetain = newValue.retain
+            mqttCleanSession = newValue.cleanSession
+            mqttHomeAssistantEnabled = newValue.homeAssistantEnabled
+            mqttHomeAssistantDiscoveryPrefix = newValue.homeAssistantDiscoveryPrefix
+            mqttKeepalive = newValue.keepalive
+            mqttReconnectDelay = newValue.reconnectDelay
+        }
+    }
+    
+    func updateMQTTConfiguration(_ config: MQTTConfiguration) {
+        mqttConfiguration = config
+    }
     
     //MARK: - Connection
     
