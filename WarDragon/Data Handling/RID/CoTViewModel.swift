@@ -11,6 +11,7 @@ import UserNotifications
 import CoreLocation
 import UIKit
 import SwiftUI
+import Combine
 
 class CoTViewModel: ObservableObject {
     @Published var parsedMessages: [CoTMessage] = []
@@ -45,6 +46,12 @@ class CoTViewModel: ObservableObject {
     private var currentMessageFormat: ZMQHandler.MessageFormat {
         return zmqHandler?.messageFormat ?? .bluetooth
     }
+    
+    // MARK: - MQTT and TAK Integration
+    private var mqttClient: MQTTClient?
+    private var takClient: TAKClient?
+    private var cancellables = Set<AnyCancellable>()
+    private var publishedDrones: Set<String> = [] // Track drones for HA discovery
     
     struct AlertRing: Identifiable {
             let id = UUID()
@@ -546,6 +553,10 @@ class CoTViewModel: ObservableObject {
         self.statusViewModel = statusViewModel
         self.spectrumViewModel = spectrumViewModel
         self.checkPermissions()
+        
+        // Setup MQTT and TAK clients
+        setupMQTTClient()
+        setupTAKClient()
         
         // Register for application lifecycle notifications
         NotificationCenter.default.addObserver(
@@ -1600,6 +1611,12 @@ class CoTViewModel: ObservableObject {
                         self.parsedMessages.append(fpvMessage)
                         self.updateAlertRing(for: fpvMessage)
                         self.sendNotification(for: fpvMessage)
+                        
+                        // Publish to MQTT and TAK
+                        self.publishDroneToMQTT(fpvMessage)
+                        if let cotXML = self.generateCoTXML(from: fpvMessage) {
+                            self.publishCoTToTAK(cotXML)
+                        }
                     }
                     
                     // Save to storage
@@ -2175,6 +2192,12 @@ class CoTViewModel: ObservableObject {
             if !updatedMessage.idType.contains("CAA") {
                 self.sendNotification(for: updatedMessage)
             }
+            
+            // Publish to MQTT and TAK
+            self.publishDroneToMQTT(updatedMessage)
+            if let cotXML = self.generateCoTXML(from: updatedMessage) {
+                self.publishCoTToTAK(cotXML)
+            }
         }
     }
     
@@ -2457,3 +2480,129 @@ extension CoTViewModel {
         WebhookManager.shared.sendWebhook(event: event, data: data)
     }
 }
+
+// MARK: - MQTT and TAK Integration
+extension CoTViewModel {
+    
+    /// Setup MQTT client and start connection
+    func setupMQTTClient() {
+        let config = Settings.shared.mqttConfiguration
+        guard config.enabled && config.isValid else {
+            mqttClient = nil
+            return
+        }
+        
+        Task { @MainActor in
+            mqttClient = MQTTClient(configuration: config)
+            mqttClient?.connect()
+            
+            // Observe connection state
+            mqttClient?.$state
+                .sink { [weak self] state in
+                    print("MQTT state: \(state)")
+                }
+                .store(in: &cancellables)
+        }
+    }
+    
+    /// Setup TAK client and start connection
+    func setupTAKClient() {
+        let config = Settings.shared.takConfiguration
+        guard config.enabled && config.isValid else {
+            takClient = nil
+            return
+        }
+        
+        Task { @MainActor in
+            takClient = TAKClient(configuration: config)
+            takClient?.connect()
+            
+            // Observe connection state
+            takClient?.$state
+                .sink { [weak self] state in
+                    print("TAK state: \(state)")
+                }
+                .store(in: &cancellables)
+        }
+    }
+    
+    /// Publish drone detection to MQTT
+    func publishDroneToMQTT(_ message: CoTMessage) {
+        guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
+        
+        Task {
+            do {
+                let mqttMessage = message.toMQTTDroneMessage()
+                try await mqttClient.publishDrone(mqttMessage)
+                
+                // Home Assistant discovery (first time only per MAC)
+                if Settings.shared.mqttHomeAssistantEnabled {
+                    let mac = message.mac ?? message.uid
+                    if !publishedDrones.contains(mac) {
+                        publishedDrones.insert(mac)
+                        try await mqttClient.publishHomeAssistantDiscovery(
+                            for: mac,
+                            deviceName: message.deviceName
+                        )
+                    }
+                }
+            } catch {
+                print("MQTT publish failed: \(error)")
+            }
+        }
+    }
+    
+    /// Publish CoT XML to TAK server
+    func publishCoTToTAK(_ cotXML: String) {
+        guard Settings.shared.takEnabled, let takClient = takClient else { return }
+        
+        Task {
+            do {
+                try await takClient.send(cotXML)
+            } catch {
+                print("TAK publish failed: \(error)")
+            }
+        }
+    }
+    
+    /// Publish system status to MQTT (call periodically)
+    func publishSystemStatusToMQTT() {
+        guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
+        
+        Task {
+            do {
+                let systemMessage = createMQTTSystemMessage(dronesTracked: droneSignatures.count)
+                try await mqttClient.publishSystemStatus(systemMessage)
+            } catch {
+                print("MQTT system status failed: \(error)")
+            }
+        }
+    }
+    
+    /// Generate CoT XML from message (for TAK server)
+    func generateCoTXML(from message: CoTMessage) -> String? {
+        let dateFormatter = ISO8601DateFormatter()
+        let now = dateFormatter.string(from: Date())
+        
+        // Calculate stale time (15 minutes from now)
+        let staleDate = Date().addingTimeInterval(900)
+        let stale = dateFormatter.string(from: staleDate)
+        
+        // Build CoT XML
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <event version="2.0" uid="\(message.uid)" type="a-f-A-M-H-Q" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
+            <point lat="\(message.lat)" lon="\(message.lon)" hae="\(message.alt)" ce="10.0" le="10.0"/>
+            <detail>
+                <contact callsign="\(message.deviceName)"/>
+                <remarks>\(message.selfIDText)</remarks>
+                <track course="\(message.direction ?? "0")" speed="\(message.speed)"/>
+                <uid Droneid="\(message.uid)"/>
+            </detail>
+        </event>
+        """
+        
+        return xml
+    }
+}
+
