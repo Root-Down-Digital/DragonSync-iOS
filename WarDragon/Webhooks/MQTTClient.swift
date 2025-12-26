@@ -4,8 +4,7 @@
 //
 //  MQTT client for publishing drone detections and system status
 //
-//  Uses CocoaMQTT library - install via SPM:
-//  https://github.com/emqx/CocoaMQTT
+//  Uses CocoaMQTT 1.3.2 (stable version)
 //
 
 import Foundation
@@ -49,9 +48,9 @@ class MQTTClient: ObservableObject {
     private var configuration: MQTTConfiguration
     private let logger = Logger(subsystem: "com.wardragon", category: "MQTTClient")
     
-    // CocoaMQTT instance
+    // CocoaMQTT 1.3.2 instance
     private var mqtt: CocoaMQTT?
-    private var mqttDelegate: MQTTClientDelegateHandler?
+    private let connectionQueue = DispatchQueue(label: "com.wardragon.mqtt")
     
     // CocoaMQTT instance (weak reference to avoid retain cycles)
     // NOTE: You'll need to add CocoaMQTT to your project via SPM
@@ -70,7 +69,13 @@ class MQTTClient: ObservableObject {
     }
     
     deinit {
-        disconnect()
+        // Cancel reconnection task
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        
+        // Disconnect MQTT (direct call to avoid actor isolation)
+        mqtt?.disconnect()
+        mqtt = nil
     }
     
     // MARK: - Public Methods
@@ -123,18 +128,9 @@ class MQTTClient: ObservableObject {
             }
         }
         
-        // Disconnect CocoaMQTT
+        // Disconnect MQTT
         mqtt?.disconnect()
         mqtt = nil
-        mqttDelegate = nil
-        
-        state = .disconnected
-        logger.info("Disconnected from MQTT broker")
-    }
-                    )
-                }
-            }
-        }
         
         state = .disconnected
         logger.info("Disconnected from MQTT broker")
@@ -247,7 +243,7 @@ class MQTTClient: ObservableObject {
                 
                 // Wait for connection to fail before retrying
                 await withTaskCancellationHandler {
-                    await Task.sleep(nanoseconds: UInt64.max)
+                    try? await Task.sleep(nanoseconds: UInt64.max)
                 } onCancel: {
                     // Cancelled by disconnect() or deinit
                 }
@@ -280,56 +276,71 @@ class MQTTClient: ObservableObject {
         
         let clientID = "wardragon_\(UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString)"
         
-        let mqtt = CocoaMQTT(
-            clientID: clientID,
-            host: configuration.host,
-            port: UInt16(configuration.port)
-        )
-        
-        // Basic configuration
+        let mqtt = CocoaMQTT(clientID: clientID, host: configuration.host, port: UInt16(configuration.port))
         mqtt.username = configuration.username
         mqtt.password = configuration.password
         mqtt.keepAlive = UInt16(configuration.keepalive)
         mqtt.cleanSession = configuration.cleanSession
         mqtt.enableSSL = configuration.useTLS
         
-        // Create and set delegate
-        let delegate = MQTTClientDelegateHandler(client: self)
-        mqtt.delegate = delegate
+        // Set up callbacks (CocoaMQTT 1.3.2 style)
+        mqtt.didConnectAck = { [weak self] mqtt, ack in
+            Task { @MainActor in
+                guard let self = self else { return }
+                if ack == .accept {
+                    self.logger.info("MQTT connected")
+                    self.state = .connected
+                } else {
+                    self.logger.error("MQTT rejected: \(ack)")
+                    self.state = .failed(MQTTError.connectionFailed)
+                }
+            }
+        }
         
-        // Store references
+        mqtt.didDisconnect = { [weak self] mqtt, error in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.logger.warning("MQTT disconnected: \(error?.localizedDescription ?? "unknown")")
+                self.state = .disconnected
+            }
+        }
+        
+        mqtt.didPublishMessage = { [weak self] mqtt, message, id in
+            self?.logger.debug("Published message \(id)")
+        }
+        
+        // Store and connect
         await MainActor.run {
             self.mqtt = mqtt
-            self.mqttDelegate = delegate
         }
         
-        // Connect
-        let connected = mqtt.connect()
-        if !connected {
-            throw MQTTError.connectionFailed
-        }
+        _ = mqtt.connect()
         
-        // Wait for connection with timeout
-        var attempts = 0
-        while attempts < 50 { // 5 seconds total
+        // Wait for connection
+        try await waitForConnection()
+        
+        logger.info("Connected to MQTT broker \(self.configuration.host):\(self.configuration.port)")
+    }
+    
+    /// Wait for connection to establish
+    private func waitForConnection() async throws {
+        for _ in 0..<50 { // 5 seconds
             try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
             
             let currentState = await MainActor.run { self.state }
             switch currentState {
             case .connected:
-                logger.info("Connected to MQTT broker \(self.configuration.host):\(self.configuration.port)")
                 return
             case .failed(let error):
                 throw error
             default:
-                attempts += 1
+                continue
             }
         }
-        
         throw MQTTError.connectionFailed
     }
     
-    /// Publish message internally using CocoaMQTT
+    /// Publish message internally using CocoaMQTT 1.3.2
     private func publishInternal(topic: String, payload: Data, qos: MQTTQoS, retain: Bool) async throws {
         guard let mqtt = await MainActor.run(body: { self.mqtt }) else {
             throw MQTTError.notConnected
@@ -346,13 +357,9 @@ class MQTTClient: ObservableObject {
             cocoaQoS = .qos2
         }
         
-        // Create message
-        let message = CocoaMQTTMessage(topic: topic, payload: [UInt8](payload))
-        message.qos = cocoaQoS
-        message.retained = retain
-        
-        // Publish
-        mqtt.publish(message)
+        // Publish (CocoaMQTT 1.3.2 API)
+        let messageString = String(data: payload, encoding: .utf8) ?? ""
+        mqtt.publish(topic, withString: messageString, qos: cocoaQoS, retained: retain)
         
         logger.debug("Would publish \(payload.count) bytes to \(topic) (QoS \(qos.rawValue), retain: \(retain))")
     }
@@ -410,91 +417,5 @@ enum MQTTError: LocalizedError {
     }
 }
 
-// MARK: - CocoaMQTT Delegate Handler
-
-class MQTTClientDelegateHandler: CocoaMQTTDelegate {
-    weak var client: MQTTClient?
-    private let logger = Logger(subsystem: "com.wardragon", category: "MQTTDelegate")
-    
-    init(client: MQTTClient) {
-        self.client = client
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didConnectAck ack: CocoaMQTTConnAck) {
-        Task { @MainActor in
-            guard let client = client else { return }
-            
-            if ack == .accept {
-                logger.info("MQTT connection accepted")
-                client.state = .connected
-            } else {
-                logger.error("MQTT connection rejected: \(ack)")
-                client.state = .failed(MQTTError.connectionFailed)
-            }
-        }
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState) {
-        Task { @MainActor in
-            guard let client = client else { return }
-            
-            switch state {
-            case .initial:
-                client.state = .disconnected
-            case .connecting:
-                client.state = .connecting
-            case .connected:
-                client.state = .connected
-            case .disconnected:
-                client.state = .disconnected
-            @unknown default:
-                break
-            }
-        }
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {
-        logger.debug("Published message \(id) to \(message.topic)")
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didPublishAck id: UInt16) {
-        logger.debug("Publish ACK \(id)")
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
-        // Handle incoming messages if needed (for future subscriptions)
-        logger.debug("Received message on \(message.topic)")
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {
-        logger.info("Subscribed to topics successfully")
-    }
-    
-    func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {
-        logger.info("Unsubscribed from topics")
-    }
-    
-    func mqttDidPing(_ mqtt: CocoaMQTT) {
-        // Keepalive ping
-    }
-    
-    func mqttDidReceivePong(_ mqtt: CocoaMQTT) {
-        // Keepalive pong
-    }
-    
-    func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {
-        Task { @MainActor in
-            guard let client = client else { return }
-            
-            if let error = err {
-                logger.warning("MQTT disconnected with error: \(error.localizedDescription)")
-                client.state = .failed(error)
-            } else {
-                logger.info("MQTT disconnected gracefully")
-                client.state = .disconnected
-            }
-        }
-    }
-}
 
 

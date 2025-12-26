@@ -36,7 +36,7 @@ struct TAKConfiguration: Codable, Equatable {
     var enabled: Bool
     var host: String
     var port: Int
-    var protocol: TAKProtocol
+    var `protocol`: TAKProtocol
     
     // TLS-specific settings
     var tlsEnabled: Bool

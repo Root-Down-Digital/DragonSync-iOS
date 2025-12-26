@@ -158,7 +158,7 @@ class TAKClient: ObservableObject {
                 
                 // Wait for connection to fail before retrying
                 await withTaskCancellationHandler {
-                    await Task.sleep(nanoseconds: UInt64.max)
+                    try? await Task.sleep(nanoseconds: UInt64.max)
                 } onCancel: {
                     // Cancelled by disconnect() or deinit
                 }
@@ -241,7 +241,9 @@ class TAKClient: ObservableObject {
         // Load P12 certificate if provided
         if let p12Data = configuration.p12CertificateData {
             let identity = try loadP12Identity(data: p12Data, password: configuration.p12Password)
-            sec_protocol_options_set_local_identity(options.securityProtocolOptions, identity)
+            if let unwrappedIdentity = identity {
+                sec_protocol_options_set_local_identity(options.securityProtocolOptions, unwrappedIdentity)
+            }
         }
         
         // Skip verification (UNSAFE - for testing only)
@@ -260,7 +262,7 @@ class TAKClient: ObservableObject {
     }
     
     /// Load P12 identity from data
-    private func loadP12Identity(data: Data, password: String?) throws -> sec_identity_t {
+    private func loadP12Identity(data: Data, password: String?) throws -> sec_identity_t? {
         let options: [String: Any] = [
             kSecImportExportPassphrase as String: password ?? ""
         ]

@@ -38,9 +38,9 @@ extension CoTViewModel.CoTMessage {
             uaType: uaType.rawValue,
             serialNumber: uid,
             caaRegistration: caaRegistration,
-            freq: freq,
-            seenBy: seen_by,
-            observedAt: observed_at
+            freq: freq.map { String($0) },
+            seenBy: seenBy,
+            observedAt: observedAt.map { String($0) }
         )
     }
     
@@ -58,27 +58,3 @@ extension CoTViewModel.CoTMessage {
     }
 }
 
-// MARK: - System Status Conversion
-
-extension CoTViewModel {
-    
-    /// Create MQTT system message from current app state
-    func createMQTTSystemMessage(dronesTracked: Int) -> MQTTSystemMessage {
-        // Get system metrics if available from StatusViewModel
-        let cpuUsage: Double? = nil // Implement if needed
-        let memoryUsed: Double? = nil // Implement if needed
-        let temperature: Double? = nil // From device
-        
-        return MQTTSystemMessage(
-            timestamp: ISO8601DateFormatter().string(from: Date()),
-            cpuUsage: cpuUsage,
-            memoryUsed: memoryUsed,
-            temperature: temperature,
-            plutoTemp: nil,  // N/A for iOS
-            zynqTemp: nil,   // N/A for iOS
-            gpsFix: nil,     // Could add location manager status
-            dronesTracked: dronesTracked,
-            uptime: nil      // Could track app uptime
-        )
-    }
-}

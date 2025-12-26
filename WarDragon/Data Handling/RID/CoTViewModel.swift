@@ -2608,6 +2608,45 @@ extension CoTViewModel {
         }
     }
     
+    /// Create MQTT system status message
+    private func createMQTTSystemMessage(dronesTracked: Int) -> MQTTSystemMessage {
+        // Get latest status message if available
+        guard let latestStatus = statusViewModel.statusMessages.last else {
+            // Return minimal message if no status available
+            return MQTTSystemMessage(
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                cpuUsage: nil,
+                memoryUsed: nil,
+                temperature: nil,
+                plutoTemp: nil,
+                zynqTemp: nil,
+                gpsFix: nil,
+                dronesTracked: dronesTracked,
+                uptime: formatUptime()
+            )
+        }
+        
+        return MQTTSystemMessage(
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            cpuUsage: latestStatus.systemStats.cpuUsage,
+            memoryUsed: latestStatus.systemStats.memory.percent,
+            temperature: latestStatus.systemStats.temperature,
+            plutoTemp: latestStatus.antStats.plutoTemp,
+            zynqTemp: latestStatus.antStats.zynqTemp,
+            gpsFix: latestStatus.gpsData.latitude != 0 && latestStatus.gpsData.longitude != 0,
+            dronesTracked: dronesTracked,
+            uptime: formatUptime()
+        )
+    }
+    
+    /// Format uptime string
+    private func formatUptime() -> String {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let hours = Int(uptime) / 3600
+        let minutes = (Int(uptime) % 3600) / 60
+        return String(format: "%dh %dm", hours, minutes)
+    }
+    
     /// Generate CoT XML from message (for TAK server)
     func generateCoTXML(from message: CoTMessage) -> String? {
         let dateFormatter = ISO8601DateFormatter()
@@ -2642,8 +2681,10 @@ extension CoTViewModel {
     func setupADSBClient() {
         let config = Settings.shared.adsbConfiguration
         guard config.enabled && config.isValid else {
-            adsbClient?.stop()
-            adsbClient = nil
+            Task { @MainActor in
+                adsbClient?.stop()
+                adsbClient = nil
+            }
             return
         }
         

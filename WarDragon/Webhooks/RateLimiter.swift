@@ -30,7 +30,7 @@ enum RateLimitStrategy {
 
 /// Rate limiter for throttling events
 class RateLimiter {
-    private var lastEventTime: Date?
+    fileprivate var lastEventTime: Date?
     private var eventTimestamps: [Date] = []
     private let strategy: RateLimitStrategy
     private let queue = DispatchQueue(label: "com.wardragon.ratelimiter", attributes: .concurrent)

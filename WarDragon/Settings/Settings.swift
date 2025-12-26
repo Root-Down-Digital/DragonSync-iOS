@@ -353,7 +353,7 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
     
-    @AppStorage("mqttPassword") private var mqttPassword: String = "" {
+    @AppStorage("mqttPassword") var mqttPassword: String = "" {
         didSet { objectWillChange.send() }
     }
     

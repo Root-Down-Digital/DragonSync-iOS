@@ -101,7 +101,9 @@ class ADSBClient: ObservableObject {
     }
     
     deinit {
-        stop()
+        // Cancel polling timer
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
     
     // MARK: - Public Methods
@@ -173,7 +175,7 @@ class ADSBClient: ObservableObject {
             // Filter aircraft based on configuration
             var filteredAircraft = readsbResponse.aircraft.filter { $0.coordinate != nil }
             
-            if let maxDist = configuration.maxDistance {
+            if configuration.maxDistance != nil {
                 // TODO: Add distance filtering if user location available
             }
             

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UIKit
 
 /// Home Assistant MQTT Discovery helper
 struct HomeAssistantIntegration {
