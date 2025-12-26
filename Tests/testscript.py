@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+DragonSync Enhanced Test Data Broadcaster
+Supports testing: Multicast CoT, ZMQ, MQTT, TAK Server, and ADS-B readsb simulation
+"""
 
 import socket
 import time
@@ -10,14 +14,42 @@ import string
 import struct
 import zmq
 from datetime import datetime, timezone, timedelta
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+# Try to import paho-mqtt, provide fallback if not available
+try:
+    import paho.mqtt.client as mqtt
+    MQTT_AVAILABLE = True
+except ImportError:
+    MQTT_AVAILABLE = False
+    print("⚠️  paho-mqtt not installed. MQTT features disabled.")
+    print("   Install with: pip3 install paho-mqtt")
 
 class Config:
     def __init__(self):
+        # Multicast/ZMQ settings
         self.multicast_group = '224.0.0.1'
         self.cot_port = 6969
         self.status_port = 6969
         self.broadcast_mode = 'multicast'
         self.zmq_host = '224.0.0.1'
+        
+        # MQTT settings
+        self.mqtt_broker = 'localhost'
+        self.mqtt_port = 1883
+        self.mqtt_username = None
+        self.mqtt_password = None
+        self.mqtt_base_topic = 'wardragon'
+        self.mqtt_use_tls = False
+        
+        # TAK Server settings
+        self.tak_host = 'localhost'
+        self.tak_port = 8087
+        self.tak_protocol = 'tcp'  # tcp, udp, or tls
+        
+        # ADS-B settings
+        self.adsb_port = 8080  # HTTP port for readsb-compatible API
         
 class DroneMessageGenerator:
     def __init__(self):
@@ -468,6 +500,333 @@ def setup_zmq():
     status_socket = context.socket(zmq.PUB)
     return context, cot_socket, status_socket
 
+# ============================================================================
+# MQTT TEST FUNCTIONS
+# ============================================================================
+
+def test_mqtt_connection(config):
+    """Test MQTT broker connectivity and publish sample messages"""
+    if not MQTT_AVAILABLE:
+        print("❌ MQTT testing requires paho-mqtt: pip3 install paho-mqtt")
+        input("\nPress Enter to continue...")
+        return
+    
+    clear_screen()
+    print("🔌 MQTT Broker Connection Test")
+    print(f"\nBroker: {config.mqtt_broker}:{config.mqtt_port}")
+    print(f"Base Topic: {config.mqtt_base_topic}")
+    
+    try:
+        client = mqtt.Client(client_id=f"wardragon_test_{random.randint(1000,9999)}")
+        
+        if config.mqtt_username and config.mqtt_password:
+            client.username_pw_set(config.mqtt_username, config.mqtt_password)
+        
+        if config.mqtt_use_tls:
+            client.tls_set()
+        
+        # Connection callback
+        def on_connect(client, userdata, flags, rc):
+            if rc == 0:
+                print("✅ Connected to MQTT broker successfully!")
+            else:
+                print(f"❌ Connection failed with code: {rc}")
+        
+        def on_publish(client, userdata, mid):
+            print(f"📤 Message published (ID: {mid})")
+        
+        client.on_connect = on_connect
+        client.on_publish = on_publish
+        
+        print("\n🔄 Connecting...")
+        client.connect(config.mqtt_broker, config.mqtt_port, 60)
+        client.loop_start()
+        time.sleep(2)
+        
+        # Publish test messages
+        print("\n📡 Publishing test messages...")
+        
+        # 1. Test drone detection
+        drone_topic = f"{config.mqtt_base_topic}/drones/TEST_DRONE"
+        drone_payload = json.dumps({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "latitude": 37.25,
+            "longitude": -115.75,
+            "altitude": 150.0,
+            "rssi": -65,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "manufacturer": "DJI",
+            "uaType": "Helicopter"
+        })
+        client.publish(drone_topic, drone_payload, qos=1)
+        time.sleep(0.5)
+        
+        # 2. Test system status
+        status_topic = f"{config.mqtt_base_topic}/status"
+        status_payload = json.dumps({
+            "status": "online",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "device": "wardragon_test"
+        })
+        client.publish(status_topic, status_payload, qos=1, retain=True)
+        time.sleep(0.5)
+        
+        # 3. Test system stats
+        system_topic = f"{config.mqtt_base_topic}/system"
+        system_payload = json.dumps({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "cpuUsage": 25.5,
+            "memoryUsed": 45.2,
+            "dronesTracked": 1,
+            "uptime": "1h 23m"
+        })
+        client.publish(system_topic, system_payload, qos=0)
+        
+        print("\n✅ Test messages published successfully!")
+        print(f"\n📊 Published to:")
+        print(f"   • {drone_topic}")
+        print(f"   • {status_topic}")
+        print(f"   • {system_topic}")
+        
+        time.sleep(1)
+        client.loop_stop()
+        client.disconnect()
+        
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+    
+    input("\n\nPress Enter to continue...")
+
+# ============================================================================
+# TAK SERVER TEST FUNCTIONS
+# ============================================================================
+
+def test_tak_connection(config, generator):
+    """Test TAK server connectivity and send CoT messages"""
+    clear_screen()
+    print("🎯 TAK Server Connection Test")
+    print(f"\nServer: {config.tak_host}:{config.tak_port}")
+    print(f"Protocol: {config.tak_protocol.upper()}")
+    
+    try:
+        if config.tak_protocol in ['tcp', 'tls']:
+            # TCP/TLS connection
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            
+            print(f"\n🔄 Connecting to {config.tak_host}:{config.tak_port}...")
+            sock.connect((config.tak_host, config.tak_port))
+            print("✅ Connected successfully!")
+            
+            # Send test CoT message
+            print("\n📡 Sending test CoT XML...")
+            cot_xml = generator.generate_drone_cot_with_track()
+            sock.sendall(cot_xml.encode('utf-8'))
+            print("✅ CoT message sent!")
+            
+            time.sleep(1)
+            
+            # Send status message
+            print("📡 Sending system status CoT...")
+            status_xml = generator.generate_status_message()
+            sock.sendall(status_xml.encode('utf-8'))
+            print("✅ Status message sent!")
+            
+            sock.close()
+            
+        elif config.tak_protocol == 'udp':
+            # UDP connection
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            print(f"\n📡 Sending via UDP to {config.tak_host}:{config.tak_port}...")
+            
+            # Send test messages
+            cot_xml = generator.generate_drone_cot_with_track()
+            sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print("✅ CoT message sent!")
+            
+            time.sleep(0.5)
+            
+            status_xml = generator.generate_status_message()
+            sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print("✅ Status message sent!")
+            
+            sock.close()
+        
+        print("\n✅ TAK server test completed successfully!")
+        
+    except socket.timeout:
+        print("\n❌ Connection timeout")
+    except ConnectionRefusedError:
+        print("\n❌ Connection refused - is TAK server running?")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+    
+    input("\n\nPress Enter to continue...")
+
+# ============================================================================
+# ADS-B READSB SIMULATION
+# ============================================================================
+
+class ReadsbHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP handler that serves readsb-compatible aircraft.json"""
+    
+    def do_GET(self):
+        if self.path == '/data/aircraft.json':
+            # Generate realistic aircraft data
+            now = time.time()
+            
+            aircraft = []
+            for i in range(random.randint(3, 8)):
+                # Generate ICAO hex
+                hex_id = ''.join(random.choices('0123456789ABCDEF', k=6))
+                
+                # Position around Area 51
+                lat = 37.25 + random.uniform(-0.2, 0.2)
+                lon = -115.75 + random.uniform(-0.2, 0.2)
+                
+                aircraft.append({
+                    "hex": hex_id,
+                    "flight": f"N{random.randint(100,999)}AB",
+                    "alt_baro": random.randint(5000, 35000),
+                    "gs": random.randint(150, 500),
+                    "track": random.randint(0, 359),
+                    "lat": round(lat, 6),
+                    "lon": round(lon, 6),
+                    "seen": round(random.uniform(0, 10), 1),
+                    "rssi": round(random.uniform(-25, -10), 1),
+                    "category": random.choice(["A1", "A2", "A3", "A5"]),
+                    "squawk": f"{random.randint(1000, 7777):04d}"
+                })
+            
+            response = {
+                "now": now,
+                "messages": random.randint(10000, 50000),
+                "aircraft": aircraft
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Suppress logging
+        pass
+
+def start_adsb_server(config):
+    """Start simulated ADS-B readsb HTTP server"""
+    clear_screen()
+    print("✈️  Starting ADS-B Readsb Simulator")
+    print(f"\nHTTP Server: http://localhost:{config.adsb_port}")
+    print(f"Endpoint: /data/aircraft.json")
+    
+    try:
+        server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
+        print("\n✅ Server started successfully!")
+        print("\n📡 Serving random aircraft data...")
+        print("   Press Ctrl+C to stop\n")
+        
+        server.serve_forever()
+        
+    except KeyboardInterrupt:
+        print("\n\n🛑 Server stopped")
+        server.shutdown()
+    except OSError as e:
+        if "Address already in use" in str(e):
+            print(f"\n❌ Port {config.adsb_port} already in use")
+        else:
+            print(f"\n❌ Error: {e}")
+    
+    input("\nPress Enter to continue...")
+
+# ============================================================================
+# CONFIGURATION FUNCTIONS
+# ============================================================================
+
+def configure_mqtt_settings(config):
+    """Configure MQTT broker settings"""
+    clear_screen()
+    print("🔧 MQTT Configuration")
+    print(f"\nCurrent Settings:")
+    print(f"  Broker: {config.mqtt_broker}:{config.mqtt_port}")
+    print(f"  Base Topic: {config.mqtt_base_topic}")
+    print(f"  TLS: {'Enabled' if config.mqtt_use_tls else 'Disabled'}")
+    
+    print("\n1. Change Broker Host")
+    print("2. Change Port")
+    print("3. Set Username/Password")
+    print("4. Change Base Topic")
+    print("5. Toggle TLS")
+    print("6. Back")
+    
+    choice = input("\nEnter choice (1-6): ")
+    
+    if choice == '1':
+        config.mqtt_broker = input("Enter broker host: ")
+    elif choice == '2':
+        try:
+            config.mqtt_port = int(input("Enter port: "))
+        except ValueError:
+            print("Invalid port")
+    elif choice == '3':
+        config.mqtt_username = input("Username (blank for none): ") or None
+        if config.mqtt_username:
+            config.mqtt_password = input("Password: ") or None
+    elif choice == '4':
+        config.mqtt_base_topic = input("Enter base topic: ")
+    elif choice == '5':
+        config.mqtt_use_tls = not config.mqtt_use_tls
+
+def configure_tak_settings(config):
+    """Configure TAK server settings"""
+    clear_screen()
+    print("🔧 TAK Server Configuration")
+    print(f"\nCurrent Settings:")
+    print(f"  Server: {config.tak_host}:{config.tak_port}")
+    print(f"  Protocol: {config.tak_protocol.upper()}")
+    
+    print("\n1. Change Host")
+    print("2. Change Port")
+    print("3. Change Protocol (TCP/UDP/TLS)")
+    print("4. Back")
+    
+    choice = input("\nEnter choice (1-4): ")
+    
+    if choice == '1':
+        config.tak_host = input("Enter host: ")
+    elif choice == '2':
+        try:
+            config.tak_port = int(input("Enter port: "))
+        except ValueError:
+            print("Invalid port")
+    elif choice == '3':
+        protocol = input("Enter protocol (tcp/udp/tls): ").lower()
+        if protocol in ['tcp', 'udp', 'tls']:
+            config.tak_protocol = protocol
+
+def configure_adsb_settings(config):
+    """Configure ADS-B settings"""
+    clear_screen()
+    print("🔧 ADS-B Configuration")
+    print(f"\nCurrent Settings:")
+    print(f"  HTTP Port: {config.adsb_port}")
+    
+    print("\n1. Change Port")
+    print("2. Back")
+    
+    choice = input("\nEnter choice (1-2): ")
+    
+    if choice == '1':
+        try:
+            config.adsb_port = int(input("Enter port: "))
+        except ValueError:
+            print("Invalid port")
+
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
     
@@ -521,32 +880,75 @@ def main_menu():
     
     while True:
         clear_screen()
-        print("🐉 DragonSync Test Data Broadcaster 🐉")
-        print("\nCurrent Settings:")
-        print(f"Mode: {config.broadcast_mode}")
-        print(f"Host/Group: {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}")
-        print(f"CoT Port: {config.cot_port}")
-        print(f"Status Port: {config.status_port}")
+        print("🐉 WarDragon Enhanced Test Suite 🐉")
+        print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("CURRENT SETTINGS:")
+        print(f"  Multicast/ZMQ: {config.broadcast_mode} @ {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
+        print(f"  MQTT: {config.mqtt_broker}:{config.mqtt_port} | Topic: {config.mqtt_base_topic}")
+        print(f"  TAK: {config.tak_protocol.upper()}://{config.tak_host}:{config.tak_port}")
+        print(f"  ADS-B: HTTP Port {config.adsb_port}")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        print("\n1. Multicast: DragonSync Drone CoT XML (with Track)")
-        print("2. Multicast: DragonSync Pilot CoT XML")
-        print("3. Multicast: DragonSync Home/Takeoff CoT XML")
-        print("4. Multicast: DragonSync Status XML (with Track)")
-        print("5. ZMQ: ESP32 JSON Format (RID Telemetry)")
-        print("6. ZMQ: FPV Detection Messages")
-        print("7. Multicast: Broadcast All DragonSync XML Messages")
-        print("8. ZMQ: Broadcast All ESP32 JSON + FPV")
-        print("9. Configure Settings")
-        print("0. Exit")
+        print("\n📡 MULTICAST/ZMQ TESTS")
+        print("  1. Multicast: DragonSync Drone CoT XML (with Track)")
+        print("  2. Multicast: DragonSync Pilot CoT XML")
+        print("  3. Multicast: DragonSync Home/Takeoff CoT XML")
+        print("  4. Multicast: DragonSync Status XML (with Track)")
+        print("  5. ZMQ: ESP32 JSON Format (RID Telemetry)")
+        print("  6. ZMQ: FPV Detection Messages")
+        print("  7. Multicast: Broadcast All DragonSync XML Messages")
+        print("  8. ZMQ: Broadcast All ESP32 JSON + FPV")
         
-        choice = input("\nEnter your choice (0-9): ")
+        print("\n🔌 MQTT TESTS")
+        print("  M. Test MQTT Connection & Publish")
+        
+        print("\n🎯 TAK SERVER TESTS")
+        print("  T. Test TAK Server Connection & Send CoT")
+        
+        print("\n✈️  ADS-B TESTS")
+        print("  A. Start ADS-B Readsb Simulator")
+        
+        print("\n⚙️  CONFIGURATION")
+        print("  C. Configure Multicast/ZMQ Settings")
+        print("  Q. Configure MQTT Settings")
+        print("  K. Configure TAK Settings")
+        print("  B. Configure ADS-B Settings")
+        
+        print("\n  0. Exit")
+        
+        choice = input("\nEnter your choice: ").upper()
         
         if choice == '0':
             print("\n👋 Goodbye!")
             break
         
-        if choice == '9':
+        # Configuration menus
+        if choice == 'C':
             configure_settings(config)
+            continue
+        elif choice == 'Q':
+            configure_mqtt_settings(config)
+            continue
+        elif choice == 'K':
+            configure_tak_settings(config)
+            continue
+        elif choice == 'B':
+            configure_adsb_settings(config)
+            continue
+        
+        # MQTT test
+        elif choice == 'M':
+            test_mqtt_connection(config)
+            continue
+        
+        # TAK test
+        elif choice == 'T':
+            test_tak_connection(config, generator)
+            continue
+        
+        # ADS-B test
+        elif choice == 'A':
+            start_adsb_server(config)
             continue
         
         if choice in ['1', '2', '3', '4', '5', '6', '7', '8']:
