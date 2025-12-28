@@ -610,6 +610,14 @@ class CoTViewModel: ObservableObject {
             object: nil
         )
         
+        // Add observer for drone info updates
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDroneInfoUpdate(_:)),
+            name: Notification.Name("DroneInfoUpdated"),
+            object: nil
+        )
+        
         restoreAlertRingsFromStorage()
     }
     
@@ -631,6 +639,35 @@ class CoTViewModel: ObservableObject {
         if isListeningCot && !isReconnecting {
             // Briefly reconnect to keep connections alive
             performBackgroundRefresh()
+        }
+    }
+    
+    @objc private func handleDroneInfoUpdate(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let droneId = userInfo["droneId"] as? String else {
+            return
+        }
+        
+        // Find and update the message in parsedMessages
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            if let index = self.parsedMessages.firstIndex(where: { $0.uid == droneId }) {
+                // Get fresh encounter data from storage
+                if let encounter = DroneStorageManager.shared.encounters[droneId] {
+                    var updatedMessage = self.parsedMessages[index]
+                    
+                    // Update the metadata from storage
+                    let customName = encounter.customName
+                    let trustStatus = encounter.trustStatus
+                    
+                    print("Updated drone info in parsedMessages: \(droneId) - Name: '\(customName)', Trust: \(trustStatus.rawValue)")
+                    
+                    // Force UI refresh
+                    self.parsedMessages[index] = updatedMessage
+                    self.objectWillChange.send()
+                }
+            }
         }
     }
     

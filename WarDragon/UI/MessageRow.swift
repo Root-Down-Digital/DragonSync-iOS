@@ -68,6 +68,10 @@ struct MessageRow: View {
     
     // MARK: - Helper Properties
     
+    private var currentEncounter: DroneEncounter? {
+        droneStorage.encounters[message.uid]
+    }
+    
     private var signature: DroneSignature? {
         cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
     }
@@ -250,10 +254,9 @@ struct MessageRow: View {
     @ViewBuilder
     private func headerView() -> some View {
         HStack {
-            // Dynamically fetch encounter information
-            let encounter = droneStorage.encounters[message.uid]
-            let customName = encounter?.customName ?? ""
-            let trustStatus = encounter?.trustStatus ?? .unknown
+            // Use computed property for encounter info
+            let customName = currentEncounter?.customName ?? ""
+            let trustStatus = currentEncounter?.trustStatus ?? .unknown
             
             VStack(alignment: .leading) {
                 if !customName.isEmpty {

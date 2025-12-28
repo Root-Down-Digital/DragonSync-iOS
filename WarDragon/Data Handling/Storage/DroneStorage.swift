@@ -512,6 +512,13 @@ class DroneStorageManager: ObservableObject {
             encounters[id] = encounter
             saveToStorage()
             objectWillChange.send()
+            
+            // Notify CoTViewModel to update its parsedMessages array
+            NotificationCenter.default.post(
+                name: Notification.Name("DroneInfoUpdated"),
+                object: nil,
+                userInfo: ["droneId": id, "customName": name, "trustStatus": trustStatus.rawValue]
+            )
         }
     }
     

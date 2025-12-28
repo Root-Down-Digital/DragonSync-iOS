@@ -874,6 +874,364 @@ def configure_settings(config):
         except ValueError:
             print("Invalid port number")
 
+def quick_test_mode(config, generator):
+    """Quick test mode - broadcasts directly to app without external services"""
+    clear_screen()
+    print("🚀 QUICK TEST MODE - Direct to WarDragon App")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("\nThis mode broadcasts test data directly to your app.")
+    print("Built-in simulated services - no external setup required!")
+    print("\nWhat to test:")
+    print("  1. Complete Drone Scenario (All XML - Drone/Pilot/Home/Status)")
+    print("  2. FPV Detection Scenario")
+    print("  3. Mixed Drone + FPV Scenario")
+    print("  4. Simulated Flight Path (Continuous)")
+    print("  5. Everything At Once (Drone + FPV + MQTT + TAK + ADS-B)")
+    print("  6. Back to Main Menu")
+    
+    choice = input("\nEnter choice (1-6): ")
+    
+    if choice == '6':
+        return
+    
+    # Determine mode from config
+    if choice in ['1', '2', '3', '4', '5']:
+        interval = 2.0  # Default to 2 seconds
+        
+        # Setup simulated services for option 5
+        mqtt_client = None
+        tak_socket = None
+        adsb_server = None
+        adsb_thread = None
+        
+        if choice == '5':
+            print("\n🔧 Setting up simulated services...")
+            
+            # Setup MQTT if available
+            if MQTT_AVAILABLE:
+                try:
+                    mqtt_client = mqtt.Client(client_id=f"wardragon_quicktest_{random.randint(1000,9999)}")
+                    if config.mqtt_username and config.mqtt_password:
+                        mqtt_client.username_pw_set(config.mqtt_username, config.mqtt_password)
+                    mqtt_client.connect(config.mqtt_broker, config.mqtt_port, 60)
+                    mqtt_client.loop_start()
+                    print("✅ MQTT client connected")
+                except Exception as e:
+                    print(f"⚠️  MQTT connection failed: {e}")
+                    mqtt_client = None
+            
+            # Setup TAK socket
+            try:
+                if config.tak_protocol in ['tcp', 'tls']:
+                    tak_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    tak_socket.connect((config.tak_host, config.tak_port))
+                else:
+                    tak_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                print(f"✅ TAK {config.tak_protocol.upper()} connection established")
+            except Exception as e:
+                print(f"⚠️  TAK connection failed: {e}")
+                tak_socket = None
+            
+            # Setup ADS-B HTTP server in background thread
+            try:
+                from http.server import HTTPServer
+                adsb_server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
+                adsb_thread = threading.Thread(target=adsb_server.serve_forever, daemon=True)
+                adsb_thread.start()
+                print(f"✅ ADS-B server started on port {config.adsb_port}")
+            except Exception as e:
+                print(f"⚠️  ADS-B server failed: {e}")
+                adsb_server = None
+        
+        print(f"\n⚙️  Using {config.broadcast_mode.upper()} mode")
+        print(f"📡 Broadcasting to: {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
+        
+        if choice == '5':
+            print(f"\n🔌 Additional Services Active:")
+            if mqtt_client:
+                print(f"   • MQTT → {config.mqtt_broker}:{config.mqtt_port}")
+            if tak_socket:
+                print(f"   • TAK → {config.tak_host}:{config.tak_port}")
+            if adsb_server:
+                print(f"   • ADS-B → http://localhost:{config.adsb_port}/data/aircraft.json")
+        
+        print(f"\n✅ Your app should now show detections!")
+        print("\nPress Ctrl+C to stop\n")
+        
+        # Setup sockets
+        if config.broadcast_mode == 'multicast':
+            cot_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            status_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            ttl = struct.pack('b', 1)
+            cot_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            status_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            cot_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+            status_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+        else:
+            context, cot_sock, status_sock = setup_zmq()
+            cot_sock.bind(f"tcp://{config.zmq_host}:{config.cot_port}")
+            status_sock.bind(f"tcp://{config.zmq_host}:{config.status_port}")
+        
+        try:
+            counter = 0
+            while True:
+                counter += 1
+                timestamp = time.strftime('%H:%M:%S')
+                
+                if choice == '1':  # Complete Drone Scenario
+                    # Send drone
+                    drone_msg = generator.generate_drone_cot_with_track()
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
+                    else:
+                        cot_sock.send_string(drone_msg)
+                    
+                    time.sleep(0.1)
+                    
+                    # Send pilot
+                    pilot_msg = generator.generate_pilot_cot()
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
+                    else:
+                        cot_sock.send_string(pilot_msg)
+                    
+                    time.sleep(0.1)
+                    
+                    # Send home
+                    home_msg = generator.generate_home_cot()
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
+                    else:
+                        cot_sock.send_string(home_msg)
+                    
+                    time.sleep(0.1)
+                    
+                    # Send status
+                    status_msg = generator.generate_status_message()
+                    if config.broadcast_mode == 'multicast':
+                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
+                    else:
+                        status_sock.send_string(status_msg)
+                    
+                    print(f"[{timestamp}] Update #{counter}: ✓ Drone ✓ Pilot ✓ Home ✓ Status")
+                
+                elif choice == '2':  # FPV Detection Scenario
+                    if counter == 1:
+                        # Initial FPV detection
+                        fpv_init = generator.generate_fpv_detection_message()
+                        if config.broadcast_mode == 'multicast':
+                            cot_sock.sendto(fpv_init.encode(), (config.multicast_group, config.cot_port))
+                        else:
+                            cot_sock.send_string(fpv_init)
+                        print(f"[{timestamp}] FPV Detection: New signal detected!")
+                    else:
+                        # FPV updates
+                        fpv_update = generator.generate_fpv_update_message()
+                        if fpv_update:
+                            if config.broadcast_mode == 'multicast':
+                                cot_sock.sendto(fpv_update.encode(), (config.multicast_group, config.cot_port))
+                            else:
+                                cot_sock.send_string(fpv_update)
+                            print(f"[{timestamp}] FPV Update #{counter-1}: Signal strength updated")
+                
+                elif choice == '3':  # Mixed Scenario
+                    # Send drone
+                    drone_msg = generator.generate_drone_cot_with_track()
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
+                    else:
+                        cot_sock.send_string(drone_msg)
+                    
+                    time.sleep(0.1)
+                    
+                    # Send FPV
+                    if counter == 1:
+                        fpv_msg = generator.generate_fpv_detection_message()
+                    else:
+                        fpv_msg = generator.generate_fpv_update_message()
+                    
+                    if fpv_msg:
+                        if config.broadcast_mode == 'multicast':
+                            cot_sock.sendto(fpv_msg.encode(), (config.multicast_group, config.cot_port))
+                        else:
+                            cot_sock.send_string(fpv_msg)
+                    
+                    time.sleep(0.1)
+                    
+                    # Send status
+                    status_msg = generator.generate_status_message()
+                    if config.broadcast_mode == 'multicast':
+                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
+                    else:
+                        status_sock.send_string(status_msg)
+                    
+                    print(f"[{timestamp}] Update #{counter}: ✓ Drone ✓ FPV ✓ Status")
+                
+                elif choice == '4':  # Simulated Flight Path
+                    # All messages in sequence for realistic flight
+                    drone_msg = generator.generate_drone_cot_with_track()
+                    pilot_msg = generator.generate_pilot_cot()
+                    home_msg = generator.generate_home_cot()
+                    status_msg = generator.generate_status_message()
+                    
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
+                    else:
+                        cot_sock.send_string(drone_msg)
+                        time.sleep(0.05)
+                        cot_sock.send_string(pilot_msg)
+                        time.sleep(0.05)
+                        cot_sock.send_string(home_msg)
+                        time.sleep(0.05)
+                        status_sock.send_string(status_msg)
+                    
+                    # Extract position for display
+                    import re
+                    lat_match = re.search(r'lat="([^"]+)"', drone_msg)
+                    lon_match = re.search(r'lon="([^"]+)"', drone_msg)
+                    if lat_match and lon_match:
+                        print(f"[{timestamp}] Flight update #{counter}: Position ({lat_match.group(1)}, {lon_match.group(1)})")
+                    else:
+                        print(f"[{timestamp}] Flight update #{counter}: Complete message set sent")
+                
+                elif choice == '5':  # Everything At Once
+                    # 1. Send primary CoT messages (Drone, Pilot, Home, Status)
+                    drone_msg = generator.generate_drone_cot_with_track()
+                    pilot_msg = generator.generate_pilot_cot()
+                    home_msg = generator.generate_home_cot()
+                    status_msg = generator.generate_status_message()
+                    
+                    if config.broadcast_mode == 'multicast':
+                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
+                        time.sleep(0.05)
+                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
+                    else:
+                        cot_sock.send_string(drone_msg)
+                        time.sleep(0.05)
+                        cot_sock.send_string(pilot_msg)
+                        time.sleep(0.05)
+                        cot_sock.send_string(home_msg)
+                        time.sleep(0.05)
+                        status_sock.send_string(status_msg)
+                    
+                    # 2. Send FPV message
+                    if counter == 1:
+                        fpv_msg = generator.generate_fpv_detection_message()
+                    else:
+                        fpv_msg = generator.generate_fpv_update_message()
+                    
+                    if fpv_msg:
+                        time.sleep(0.05)
+                        if config.broadcast_mode == 'multicast':
+                            cot_sock.sendto(fpv_msg.encode(), (config.multicast_group, config.cot_port))
+                        else:
+                            cot_sock.send_string(fpv_msg)
+                    
+                    # 3. Publish to MQTT
+                    if mqtt_client:
+                        try:
+                            # Parse drone position from XML
+                            import re
+                            lat_match = re.search(r'lat="([^"]+)"', drone_msg)
+                            lon_match = re.search(r'lon="([^"]+)"', drone_msg)
+                            alt_match = re.search(r'hae="([^"]+)"', drone_msg)
+                            
+                            drone_data = {
+                                "mac": generator.random_mac(),
+                                "latitude": float(lat_match.group(1)) if lat_match else 37.25,
+                                "longitude": float(lon_match.group(1)) if lon_match else -115.75,
+                                "altitude": float(alt_match.group(1)) if alt_match else 100.0,
+                                "rssi": random.randint(-80, -40),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "manufacturer": "DJI",
+                                "uaType": "Helicopter"
+                            }
+                            
+                            mqtt_topic = f"{config.mqtt_base_topic}/drones/QUICKTEST_{counter}"
+                            mqtt_client.publish(mqtt_topic, json.dumps(drone_data), qos=1)
+                        except Exception as e:
+                            pass  # Silent fail for MQTT
+                    
+                    # 4. Send to TAK server
+                    if tak_socket:
+                        try:
+                            if config.tak_protocol in ['tcp', 'tls']:
+                                tak_socket.sendall(drone_msg.encode('utf-8'))
+                            else:
+                                tak_socket.sendto(drone_msg.encode('utf-8'), (config.tak_host, config.tak_port))
+                        except Exception as e:
+                            pass  # Silent fail for TAK
+                    
+                    # 5. ADS-B is handled by the background HTTP server
+                    # Extract position for display
+                    import re
+                    lat_match = re.search(r'lat="([^"]+)"', drone_msg)
+                    lon_match = re.search(r'lon="([^"]+)"', drone_msg)
+                    
+                    services = []
+                    services.append("CoT")
+                    if fpv_msg:
+                        services.append("FPV")
+                    if mqtt_client:
+                        services.append("MQTT")
+                    if tak_socket:
+                        services.append("TAK")
+                    if adsb_server:
+                        services.append("ADS-B")
+                    
+                    if lat_match and lon_match:
+                        print(f"[{timestamp}] Update #{counter}: {' + '.join(services)} → ({lat_match.group(1)}, {lon_match.group(1)})")
+                    else:
+                        print(f"[{timestamp}] Update #{counter}: {' + '.join(services)} sent")
+                
+                time.sleep(interval)
+                
+        except KeyboardInterrupt:
+            print("\n\n🛑 Test stopped")
+            
+            # Cleanup multicast/ZMQ
+            if config.broadcast_mode == 'multicast':
+                cot_sock.close()
+                status_sock.close()
+            else:
+                context.destroy()
+            
+            # Cleanup additional services
+            if mqtt_client:
+                try:
+                    mqtt_client.loop_stop()
+                    mqtt_client.disconnect()
+                    print("✅ MQTT disconnected")
+                except:
+                    pass
+            
+            if tak_socket:
+                try:
+                    tak_socket.close()
+                    print("✅ TAK connection closed")
+                except:
+                    pass
+            
+            if adsb_server:
+                try:
+                    adsb_server.shutdown()
+                    print("✅ ADS-B server stopped")
+                except:
+                    pass
+        
+        input("\nPress Enter to continue...")
+
 def main_menu():
     config = Config()
     generator = DroneMessageGenerator()
@@ -888,6 +1246,9 @@ def main_menu():
         print(f"  TAK: {config.tak_protocol.upper()}://{config.tak_host}:{config.tak_port}")
         print(f"  ADS-B: HTTP Port {config.adsb_port}")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        
+        print("\n🚀 QUICK TEST (No External Services Required)")
+        print("  X. Quick Test Mode - Test App Directly")
         
         print("\n📡 MULTICAST/ZMQ TESTS")
         print("  1. Multicast: DragonSync Drone CoT XML (with Track)")
@@ -921,6 +1282,11 @@ def main_menu():
         if choice == '0':
             print("\n👋 Goodbye!")
             break
+        
+        # Quick Test Mode
+        if choice == 'X':
+            quick_test_mode(config, generator)
+            continue
         
         # Configuration menus
         if choice == 'C':
