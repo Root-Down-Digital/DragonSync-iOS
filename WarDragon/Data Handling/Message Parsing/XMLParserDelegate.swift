@@ -272,6 +272,15 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     droneData["operator_protocol_version"] = protocolVersion
                 }
             }
+            
+            // Parse Auth Message if present
+            if let authMessage = message["Auth Message"] as? [String: Any] {
+                droneData["auth_type"] = authMessage["auth_type"]
+                droneData["auth_page"] = authMessage["page"]
+                droneData["auth_length"] = authMessage["length"]
+                droneData["auth_timestamp"] = authMessage["timestamp"]
+                droneData["auth_data"] = authMessage["auth_data"]
+            }
         }
         
         if let basicId = droneData["id"] as? String {
@@ -347,6 +356,13 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.trackSpeed   = track_speed
             message.originalRawString = originalRawString
             
+            // Parse Auth Message fields
+            message.authType = droneData["auth_type"] as? String
+            message.authPage = droneData["auth_page"] as? String
+            message.authLength = droneData["auth_length"] as? String
+            message.authTimestamp = droneData["auth_timestamp"] as? String
+            message.authData = droneData["auth_data"] as? String
+            
             // Parse new fields
             if let classificationInt = droneData["classification"] as? Int {
                 message.classification = String(classificationInt)
@@ -407,6 +423,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             let system = jsonData["System Message"] as? [String: Any]
             let selfId = jsonData["Self-ID Message"] as? [String: Any]
             let operatorID = jsonData["Operator ID Message"] as? [String: Any]
+            let authMsg = jsonData["Auth Message"] as? [String: Any]
             
             // Get MAC from all possible sources
             var mac = basicId["MAC"] as? String ?? ""
@@ -509,6 +526,13 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.index = String(index)
             message.runtime = String(runtime)
             message.originalRawString = originalRawString
+            
+            // Parse Auth Message fields
+            message.authType = authMsg?["auth_type"] as? String
+            message.authPage = authMsg?["page"] as? String
+            message.authLength = authMsg?["length"] as? String
+            message.authTimestamp = authMsg?["timestamp"] as? String
+            message.authData = authMsg?["auth_data"] as? String
             
             // Parse new fields
             if let classificationInt = system?["classification"] as? Int {
@@ -1120,8 +1144,8 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         var uaType: String?
         var operatorLat: Double?
         var operatorLon: Double?
-        var operatorAltGeo: Double?
-        var classification: Int?
+        let operatorAltGeo: Double? = nil  // Not currently parsed from remarks
+        let classification: Int? = nil      // Not currently parsed from remarks
         var manufacturer: String?
         var channel: Int?
         var phy: Int?

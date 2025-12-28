@@ -52,11 +52,11 @@ struct TAKServerSettingsView: View {
                             .tag(proto)
                         }
                     }
-                    .onChange(of: settings.takProtocol) { newProtocol in
+                    .onChange(of: settings.takProtocol) {
                         // Auto-adjust port when protocol changes
                         if settings.takPort == TAKProtocol.tcp.defaultPort ||
                            settings.takPort == TAKProtocol.tls.defaultPort {
-                            settings.takPort = newProtocol.defaultPort
+                            settings.takPort = settings.takProtocol.defaultPort
                         }
                     }
                 }
@@ -224,14 +224,14 @@ struct TAKServerSettingsView: View {
         Task {
             do {
                 let config = settings.takConfiguration
-                let client = await TAKClient(configuration: config)
+                let client = TAKClient(configuration: config)
                 
-                await client.connect()
+                client.connect()
                 
                 // Wait up to 5 seconds for connection
                 try await Task.sleep(nanoseconds: 5_000_000_000)
                 
-                let state = await client.state
+                let state = client.state
                 
                 await MainActor.run {
                     switch state {
@@ -247,7 +247,7 @@ struct TAKServerSettingsView: View {
                     isTesting = false
                 }
                 
-                await client.disconnect()
+                client.disconnect()
                 
             } catch {
                 await MainActor.run {

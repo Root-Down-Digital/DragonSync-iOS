@@ -322,7 +322,7 @@ class Settings: ObservableObject {
             takP12Password = newValue.p12Password ?? ""
             
             // Save certificate to keychain if provided
-            if let certData = newValue.p12CertificateData {
+            if newValue.p12CertificateData != nil {
                 try? newValue.saveP12ToKeychain()
             }
         }

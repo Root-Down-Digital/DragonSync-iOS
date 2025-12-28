@@ -60,8 +60,8 @@ struct RateLimitSettingsView: View {
                             .tag(preset as RateLimitPreset?)
                         }
                     }
-                    .onChange(of: selectedPreset) { preset in
-                        applyPreset(preset)
+                    .onChange(of: selectedPreset) { oldValue, newValue in
+                        applyPreset(newValue)
                     }
                     
                     Text("Select a preset or customize individual settings below")

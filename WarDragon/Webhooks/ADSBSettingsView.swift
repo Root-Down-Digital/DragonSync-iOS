@@ -207,35 +207,32 @@ struct ADSBSettingsView: View {
         aircraftCount = 0
         
         Task {
-            do {
-                let config = settings.adsbConfiguration
-                let client = await ADSBClient(configuration: config)
-                
-                await client.poll()
-                
-                let state = await client.state
-                let count = await client.aircraft.count
-                
-                await MainActor.run {
-                    switch state {
-                    case .connected:
-                        testResult = "✓ Connection successful!"
-                        aircraftCount = count
-                    case .connecting:
-                        testResult = "⏳ Connecting..."
-                    case .failed(let error):
-                        testResult = "✗ Connection failed: \(error.localizedDescription)"
-                    case .disconnected:
-                        testResult = "✗ Disconnected"
-                    }
-                    isTesting = false
+            let config = settings.adsbConfiguration
+            let client = ADSBClient(configuration: config)
+            
+            await client.poll()
+            
+            let state = client.state
+            let count = client.aircraft.count
+            
+            await MainActor.run {
+                switch state {
+                case .connected:
+                    testResult = "✓ Connection successful!"
+                    aircraftCount = count
+                case .connecting:
+                    testResult = "⏳ Connecting..."
+                case .failed(let error):
+                    testResult = "✗ Connection failed: \(error.localizedDescription)"
+                case .disconnected:
+                    testResult = "✗ Disconnected"
                 }
-                
-            } catch {
-                await MainActor.run {
-                    testResult = "✗ Test failed: \(error.localizedDescription)"
-                    isTesting = false
-                }
+                isTesting = false
+            }
+            
+            await MainActor.run {
+                testResult = "✗ Test completed"
+                isTesting = false
             }
         }
     }

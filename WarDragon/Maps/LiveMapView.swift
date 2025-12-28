@@ -140,12 +140,22 @@ struct LiveMapView: View {
     
     private func resetMapView() {
         userHasMovedMap = false
-        let validCoords = uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
+        
+        // Collect coordinates from both drones and aircraft
+        var validCoords: [CLLocationCoordinate2D] = []
+        
+        // Add drone coordinates
+        validCoords += uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
             guard let coord = drone.coordinate else { return nil }
             let hasValidLat = coord.latitude != 0
             let hasValidLon = coord.longitude != 0
             guard hasValidLat || hasValidLon else { return nil }
             return coord
+        }
+        
+        // Add aircraft coordinates
+        validCoords += cotViewModel.aircraftTracks.compactMap { aircraft -> CLLocationCoordinate2D? in
+            aircraft.coordinate
         }
         
         guard !validCoords.isEmpty else { return }
@@ -205,6 +215,47 @@ struct LiveMapView: View {
                     }
                 }
                 
+                // MARK: - Aircraft Annotations (ADS-B)
+                ForEach(cotViewModel.aircraftTracks) { aircraft in
+                    if let coordinate = aircraft.coordinate {
+                        Annotation(aircraft.displayName, coordinate: coordinate) {
+                            VStack(spacing: 2) {
+                                ZStack {
+                                    // Aircraft icon with rotation
+                                    Image(systemName: "airplane")
+                                        .resizable()
+                                        .frame(width: 24, height: 24)
+                                        .foregroundStyle(.green)
+                                        .rotationEffect(.degrees((aircraft.track ?? 0) - 90))
+                                        .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                }
+                                
+                                // Callsign/Hex label
+                                Text(aircraft.displayName)
+                                    .font(.caption2)
+                                    .bold()
+                                    .foregroundColor(.primary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.green.opacity(0.2))
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(4)
+                                
+                                // Altitude
+                                if let alt = aircraft.altitudeFeet {
+                                    Text("\(alt)ft")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(.ultraThinMaterial)
+                                        .cornerRadius(4)
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 ForEach(cotViewModel.alertRings, id: \.id) { ring in
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.yellow.opacity(0.1))
@@ -254,11 +305,26 @@ struct LiveMapView: View {
                 
                 Spacer()
                 let droneCount = uniqueDrones.count
+                let aircraftCount = cotViewModel.aircraftTracks.count
                 Button(action: { showDroneList.toggle() }) {
-                    Text("\(droneCount) Drones")
-                        .padding()
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(20)
+                    VStack(spacing: 4) {
+                        if droneCount > 0 {
+                            Text("\(droneCount) Drone\(droneCount == 1 ? "" : "s")")
+                                .font(.footnote)
+                        }
+                        if aircraftCount > 0 {
+                            Text("\(aircraftCount) Aircraft")
+                                .font(.footnote)
+                                .foregroundColor(.green)
+                        }
+                        if droneCount == 0 && aircraftCount == 0 {
+                            Text("No Targets")
+                                .font(.footnote)
+                        }
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(20)
                 }
                 .padding(.bottom)
             }
@@ -305,12 +371,21 @@ struct LiveMapView: View {
             updateFlightPathsIfNewData()
             
             if !userHasMovedMap && shouldUpdateMapView {
-                let validCoords = uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
+                // Collect coordinates from both drones and aircraft
+                var validCoords: [CLLocationCoordinate2D] = []
+                
+                // Add drone coordinates
+                validCoords += uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
                     guard let coord = drone.coordinate else { return nil }
                     let hasValidLat = coord.latitude != 0
                     let hasValidLon = coord.longitude != 0
                     guard hasValidLat || hasValidLon else { return nil }
                     return coord
+                }
+                
+                // Add aircraft coordinates
+                validCoords += cotViewModel.aircraftTracks.compactMap { aircraft -> CLLocationCoordinate2D? in
+                    aircraft.coordinate
                 }
                 
                 if !validCoords.isEmpty {

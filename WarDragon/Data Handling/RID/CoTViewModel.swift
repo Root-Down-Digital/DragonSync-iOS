@@ -57,6 +57,30 @@ class CoTViewModel: ObservableObject {
     private var adsbClient: ADSBClient?
     @Published var aircraftTracks: [Aircraft] = []
     
+    /// Unified detection statistics
+    struct DetectionStats {
+        let totalDrones: Int
+        let activeDrones: Int
+        let totalAircraft: Int
+        let activeAircraft: Int
+        
+        var totalDetections: Int { totalDrones + totalAircraft }
+        var activeDetections: Int { activeDrones + activeAircraft }
+        var hasDrones: Bool { totalDrones > 0 }
+        var hasAircraft: Bool { totalAircraft > 0 }
+        var hasAnyDetections: Bool { totalDetections > 0 }
+    }
+    
+    /// Get current detection statistics
+    var detectionStats: DetectionStats {
+        DetectionStats(
+            totalDrones: parsedMessages.count,
+            activeDrones: parsedMessages.filter { $0.isActive }.count,
+            totalAircraft: aircraftTracks.count,
+            activeAircraft: aircraftTracks.filter { !$0.isStale }.count
+        )
+    }
+    
     struct AlertRing: Identifiable {
             let id = UUID()
             let droneId: String
@@ -551,6 +575,8 @@ class CoTViewModel: ObservableObject {
             
             return dict
         }
+        
+
     }
     
     init(statusViewModel: StatusViewModel, spectrumViewModel: SpectrumData.SpectrumViewModel? = nil) {
@@ -1672,7 +1698,7 @@ class CoTViewModel: ObservableObject {
             self.updateAlertRing(for: updatedMessage)
             
             // Determine signal type and update sources
-            let signalType = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
+            _ = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
             
             // Handle CAA and location mapping
             if let mac = mac, !mac.isEmpty {
@@ -2509,7 +2535,7 @@ extension CoTViewModel {
             
             // Observe connection state
             mqttClient?.$state
-                .sink { [weak self] state in
+                .sink { state in
                     print("MQTT state: \(state)")
                 }
                 .store(in: &cancellables)
@@ -2530,7 +2556,7 @@ extension CoTViewModel {
             
             // Observe connection state
             takClient?.$state
-                .sink { [weak self] state in
+                .sink { state in
                     print("TAK state: \(state)")
                 }
                 .store(in: &cancellables)
@@ -2675,6 +2701,20 @@ extension CoTViewModel {
 }
 
 // MARK: - ADS-B Integration
+/// Aircraft tracking via ADS-B (Automatic Dependent Surveillance-Broadcast)
+/// 
+/// This section handles integration with readsb/dump1090 for tracking commercial and general aviation aircraft.
+/// Aircraft data is displayed in the unified Detections tab alongside drone detections.
+///
+/// Features:
+/// - Real-time aircraft position, altitude, speed, and heading tracking
+/// - Proximity alerts for low-flying aircraft
+/// - MQTT and TAK server integration for aircraft data
+/// - Rate-limited publishing to prevent system overload
+/// - Emergency aircraft detection and alerting
+/// - Signal quality monitoring
+///
+/// Configuration is done through Settings.shared.adsbConfiguration
 extension CoTViewModel {
     
     /// Setup ADS-B client and start polling
@@ -2684,6 +2724,7 @@ extension CoTViewModel {
             Task { @MainActor in
                 adsbClient?.stop()
                 adsbClient = nil
+                aircraftTracks.removeAll()
             }
             return
         }
@@ -2701,16 +2742,70 @@ extension CoTViewModel {
             
             // Observe connection state
             adsbClient?.$state
-                .sink { [weak self] state in
+                .sink { state in
                     print("ADS-B state: \(state)")
                 }
                 .store(in: &cancellables)
         }
     }
     
+    /// Get all active detections (drones + aircraft)
+    var allActiveDetections: Int {
+        let activeDrones = parsedMessages.filter { $0.isActive }.count
+        let activeAircraft = aircraftTracks.filter { !$0.isStale }.count
+        return activeDrones + activeAircraft
+    }
+    
+    /// Get total detection count
+    var totalDetections: Int {
+        return parsedMessages.count + aircraftTracks.count
+    }
+    
+    /// Check if we have any detections at all
+    var hasAnyDetections: Bool {
+        return !parsedMessages.isEmpty || !aircraftTracks.isEmpty
+    }
+    
+    /// Clear all aircraft tracks
+    func clearAircraftTracks() {
+        aircraftTracks.removeAll()
+    }
+    
+    /// Clear all drone detections
+    func clearDroneDetections() {
+        parsedMessages.removeAll()
+        droneSignatures.removeAll()
+        macIdHistory.removeAll()
+        macProcessing.removeAll()
+        alertRings.removeAll()
+    }
+    
+    /// Clear all detections (drones + aircraft)
+    func clearAllDetections() {
+        clearDroneDetections()
+        clearAircraftTracks()
+    }
+    
     /// Handle aircraft data updates
     private func handleAircraftUpdate(_ aircraft: [Aircraft]) {
-        aircraftTracks = aircraft
+        print("ADS-B: Received \(aircraft.count) aircraft tracks")
+        
+        // Update main aircraft array
+        DispatchQueue.main.async {
+            self.aircraftTracks = aircraft
+        }
+        
+        // Check for nearby aircraft if enabled
+        if Settings.shared.notificationsEnabled {
+            checkNearbyAircraft(aircraft)
+        }
+        
+        // Log first few aircraft for debugging
+        for (index, ac) in aircraft.prefix(3).enumerated() {
+            if let coord = ac.coordinate {
+                print("  Aircraft \(index + 1): \(ac.displayName) at \(coord.latitude), \(coord.longitude) - Alt: \(ac.altitudeFeet ?? 0)ft")
+            }
+        }
         
         // Publish to MQTT if enabled
         if Settings.shared.mqttEnabled {
@@ -2723,12 +2818,121 @@ extension CoTViewModel {
         }
     }
     
+    /// Check for nearby aircraft and send notifications
+    private func checkNearbyAircraft(_ aircraft: [Aircraft]) {
+        guard let userLocation = LocationManager.shared.userLocation else { return }
+        
+        let proximityThreshold: Double = 5000 // 5km in meters
+        let minAltitude: Double = 1000 // Only alert for low-flying aircraft below 1000ft
+        
+        for ac in aircraft {
+            guard let coord = ac.coordinate,
+                  let altitude = ac.altitudeFeet,
+                  altitude < Int(minAltitude) else { continue }
+            
+            let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            let distance = userLocation.distance(from: aircraftLocation)
+            
+            if distance <= proximityThreshold {
+                sendAircraftProximityNotification(for: ac, distance: distance)
+            }
+        }
+    }
+    
+    /// Send notification for nearby aircraft
+    private func sendAircraftProximityNotification(for aircraft: Aircraft, distance: Double) {
+        // Rate limiting
+        guard let lastTime = lastNotificationTime,
+              Date().timeIntervalSince(lastTime) >= 10 else { return }
+        
+        let content = UNMutableNotificationContent()
+        content.title = "Low Aircraft Detected"
+        content.body = "\(aircraft.displayName) - \(Int(distance))m away - Alt: \(aircraft.altitudeFeet ?? 0)ft"
+        content.sound = .default
+        
+        let request = UNNotificationRequest(
+            identifier: "aircraft-\(aircraft.hex)",
+            content: content,
+            trigger: nil
+        )
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("Aircraft notification failed: \(error)")
+            }
+        }
+        
+        lastNotificationTime = Date()
+        
+        // Also send webhook if enabled
+        if Settings.shared.webhooksEnabled {
+            sendAircraftWebhook(for: aircraft, distance: distance)
+        }
+    }
+    
+    /// Send webhook notification for aircraft
+    private func sendAircraftWebhook(for aircraft: Aircraft, distance: Double) {
+        var data: [String: Any] = [
+            "hex": aircraft.hex,
+            "callsign": aircraft.displayName,
+            "distance_meters": Int(distance),
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+        
+        if let coord = aircraft.coordinate {
+            data["latitude"] = coord.latitude
+            data["longitude"] = coord.longitude
+        }
+        
+        if let altitude = aircraft.altitudeFeet {
+            data["altitude_feet"] = altitude
+        }
+        
+        if let speed = aircraft.speedKnots {
+            data["speed_knots"] = speed
+        }
+        
+        if let track = aircraft.track {
+            data["track"] = track
+        }
+        
+        var metadata: [String: String] = [
+            "detection_type": "aircraft",
+            "source": "adsb"
+        ]
+        
+        if let squawk = aircraft.squawk {
+            metadata["squawk"] = squawk
+        }
+        
+        if aircraft.isEmergency {
+            metadata["emergency"] = "true"
+            metadata["emergency_type"] = aircraft.emergency ?? "unknown"
+        }
+        
+        WebhookManager.shared.sendWebhook(
+            event: .droneDetected, // Could add .aircraftDetected if available
+            data: data,
+            metadata: metadata
+        )
+    }
+    
     /// Publish aircraft to MQTT
     private func publishAircraftToMQTT(_ aircraft: [Aircraft]) {
         guard let mqttClient = mqttClient else { return }
         
         Task {
             for aircraft in aircraft {
+                // Rate limit per aircraft
+                guard RateLimiterManager.shared.shouldAllowDronePublish(for: aircraft.hex) else {
+                    continue
+                }
+                
+                // Global MQTT rate limit
+                guard RateLimiterManager.shared.shouldAllowMQTTPublish() else {
+                    break // Stop publishing if global limit hit
+                }
+                
                 do {
                     let topic = "\(Settings.shared.mqttBaseTopic)/aircraft/\(aircraft.hex)"
                     let message = aircraft.toMQTTMessage()
@@ -2748,6 +2952,16 @@ extension CoTViewModel {
         
         Task {
             for aircraft in aircraft {
+                // Rate limit per aircraft
+                guard RateLimiterManager.shared.shouldAllowDronePublish(for: aircraft.hex) else {
+                    continue
+                }
+                
+                // Global TAK rate limit
+                guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
+                    break // Stop publishing if global limit hit
+                }
+                
                 do {
                     let cotXML = aircraft.toCoTXML()
                     try await takClient.send(cotXML)

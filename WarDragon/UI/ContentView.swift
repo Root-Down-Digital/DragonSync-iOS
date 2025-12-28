@@ -19,6 +19,13 @@ struct ContentView: View {
     @State private var latestMessage: CoTViewModel.CoTMessage?
     @State private var selectedTab: Int
     @State private var showDeleteAllConfirmation = false
+    @State private var detectionMode: DetectionMode = .drones
+    
+    enum DetectionMode {
+        case drones
+        case aircraft
+        case both
+    }
     
     
     init() {
@@ -70,65 +77,85 @@ struct ContentView: View {
             
             NavigationStack {
                 VStack {
-                    ScrollViewReader { proxy in
-                        List(cotViewModel.parsedMessages) { item in
-                            MessageRow(message: item, cotViewModel: cotViewModel)
+                    // Mode picker when both drones and aircraft are available
+                    if hasDrones && hasAircraft {
+                        Picker("Detection Type", selection: $detectionMode) {
+                            Text("Drones").tag(DetectionMode.drones)
+                            Text("Aircraft").tag(DetectionMode.aircraft)
+                            Text("Both").tag(DetectionMode.both)
                         }
-                        .listStyle(.inset)
-                        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
-                            if !cotViewModel.parsedMessages.isEmpty {
-                                // DEBUG CODE
-//                                if let firstMessage = cotViewModel.parsedMessages.first {
-//                                    let timeSince = Date().timeIntervalSince(firstMessage.lastUpdated)
-//                                    //print("DEBUG: Message \(firstMessage.uid) - Last updated: \(timeSince)s ago - Active: \(firstMessage.isActive) - Color: \(firstMessage.statusColor)")
-//                                }
-                                cotViewModel.objectWillChange.send()
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                    }
+                    
+                    // Dynamic content based on mode
+                    switch detectionMode {
+                    case .drones:
+                        droneListContent
+                    case .aircraft:
+                        AircraftListView(cotViewModel: cotViewModel)
+                    case .both:
+                        // Show both in sections or tabs
+                        List {
+                            if hasDrones {
+                                Section("Drones (\(cotViewModel.parsedMessages.count))") {
+                                    ForEach(cotViewModel.parsedMessages) { item in
+                                        MessageRow(message: item, cotViewModel: cotViewModel)
+                                    }
+                                }
                             }
-                        }
-                        .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
-                            if oldMessages.count < newMessages.count {
-                                // Get the newest message
-                                if let latest = newMessages.last {
-                                    if !oldMessages.contains(where: { $0.id == latest.id }) {
-                                        latestMessage = latest
-                                        showAlert = false
-                                        withAnimation {
-                                            proxy.scrollTo(latest.id, anchor: .bottom)
-                                        }
+                            
+                            if hasAircraft {
+                                Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
+                                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                                        AircraftRow(aircraft: aircraft)
                                     }
                                 }
                             }
                         }
                     }
                 }
-                .navigationTitle("Detections")
+                .navigationTitle(navigationTitle)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            Button(action: {
-                                cotViewModel.parsedMessages.removeAll()
-                                cotViewModel.droneSignatures.removeAll()
-                                cotViewModel.macIdHistory.removeAll()
-                                cotViewModel.macProcessing.removeAll()
-                                cotViewModel.alertRings.removeAll()
-                            }) {
-                                Label("Clear All", systemImage: "trash")
+                            if detectionMode == .drones || detectionMode == .both {
+                                Button(action: {
+                                    cotViewModel.parsedMessages.removeAll()
+                                    cotViewModel.droneSignatures.removeAll()
+                                    cotViewModel.macIdHistory.removeAll()
+                                    cotViewModel.macProcessing.removeAll()
+                                    cotViewModel.alertRings.removeAll()
+                                }) {
+                                    Label("Clear Drones", systemImage: "trash")
+                                }
+                                
+                                Button(action: {
+                                    cotViewModel.parsedMessages.removeAll()
+                                    cotViewModel.droneSignatures.removeAll()
+                                    cotViewModel.alertRings.removeAll()
+                                }) {
+                                    Label("Stop Drone Tracking", systemImage: "eye.slash")
+                                }
                             }
                             
-                            // Add option to clear just active tracking but keep history
-                            Button(action: {
-                                cotViewModel.parsedMessages.removeAll()
-                                cotViewModel.droneSignatures.removeAll()
-                                cotViewModel.alertRings.removeAll()
-                            }) {
-                                Label("Stop All Tracking", systemImage: "eye.slash")
+                            if detectionMode == .aircraft || detectionMode == .both {
+                                Button(action: {
+                                    cotViewModel.aircraftTracks.removeAll()
+                                }) {
+                                    Label("Clear Aircraft", systemImage: "airplane")
+                                }
                             }
                             
-                            // Modified button - now shows confirmation
-                            Button(role: .destructive, action: {
-                                showDeleteAllConfirmation = true
-                            }) {
-                                Label("Delete All History", systemImage: "trash.fill")
+                            if detectionMode == .drones || detectionMode == .both {
+                                Divider()
+                                
+                                Button(role: .destructive, action: {
+                                    showDeleteAllConfirmation = true
+                                }) {
+                                    Label("Delete All History", systemImage: "trash.fill")
+                                }
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
@@ -142,7 +169,6 @@ struct ContentView: View {
                         Text("From: \(message.uid)\nType: \(message.type)\nLocation: \(message.lat), \(message.lon)")
                     }
                 }
-                // Add the confirmation alert
                 .alert("Delete All History", isPresented: $showDeleteAllConfirmation) {
                     Button("Delete", role: .destructive) {
                         droneStorage.deleteAllEncounters()
@@ -158,8 +184,9 @@ struct ContentView: View {
                 }
             }
             .tabItem {
-                Label("Drones", systemImage: "airplane.circle")
+                Label(tabLabel, systemImage: tabIcon)
             }
+            .badge(detectionBadgeCount)
             .tag(1)
             
             NavigationStack {
@@ -219,6 +246,112 @@ struct ContentView: View {
         .onChange(of: settings.connectionMode) {
             if settings.isListening {
                 // Handle switch when enabled, for now just do not allow
+            }
+        }
+        .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
+            updateDetectionMode()
+        }
+        .onChange(of: cotViewModel.aircraftTracks) { oldTracks, newTracks in
+            updateDetectionMode()
+        }
+        .onAppear {
+            updateDetectionMode()
+        }
+    }
+    
+    // MARK: - Helper Properties
+    
+    private var hasDrones: Bool {
+        !cotViewModel.parsedMessages.isEmpty
+    }
+    
+    private var hasAircraft: Bool {
+        !cotViewModel.aircraftTracks.isEmpty
+    }
+    
+    private var navigationTitle: String {
+        switch detectionMode {
+        case .drones:
+            return "Drones"
+        case .aircraft:
+            return "Aircraft"
+        case .both:
+            return "Detections"
+        }
+    }
+    
+    private var tabLabel: String {
+        if hasAircraft && !hasDrones {
+            return "Aircraft"
+        } else if hasDrones && !hasAircraft {
+            return "Drones"
+        } else if hasAircraft && hasDrones {
+            return "Detections"
+        } else {
+            return "Detections"
+        }
+    }
+    
+    private var tabIcon: String {
+        if hasAircraft && !hasDrones {
+            return "airplane"
+        } else if hasDrones && !hasAircraft {
+            return "airplane.circle"
+        } else if hasAircraft && hasDrones {
+            return "scope"
+        } else {
+            return "airplane.circle"
+        }
+    }
+    
+    private var detectionBadgeCount: Int {
+        let droneCount = cotViewModel.parsedMessages.count
+        let aircraftCount = cotViewModel.aircraftTracks.count
+        let total = droneCount + aircraftCount
+        return total > 0 ? total : 0
+    }
+    
+    // MARK: - Subviews
+    
+    private var droneListContent: some View {
+        ScrollViewReader { proxy in
+            List(cotViewModel.parsedMessages) { item in
+                MessageRow(message: item, cotViewModel: cotViewModel)
+            }
+            .listStyle(.inset)
+            .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
+                if !cotViewModel.parsedMessages.isEmpty {
+                    cotViewModel.objectWillChange.send()
+                }
+            }
+            .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
+                if oldMessages.count < newMessages.count {
+                    if let latest = newMessages.last {
+                        if !oldMessages.contains(where: { $0.id == latest.id }) {
+                            latestMessage = latest
+                            showAlert = false
+                            withAnimation {
+                                proxy.scrollTo(latest.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func updateDetectionMode() {
+        // Auto-switch mode based on what's being tracked
+        if hasAircraft && !hasDrones {
+            detectionMode = .aircraft
+        } else if hasDrones && !hasAircraft {
+            detectionMode = .drones
+        } else if hasAircraft && hasDrones {
+            // Keep current mode, but default to both if not set
+            if detectionMode != .both && detectionMode != .drones && detectionMode != .aircraft {
+                detectionMode = .both
             }
         }
     }

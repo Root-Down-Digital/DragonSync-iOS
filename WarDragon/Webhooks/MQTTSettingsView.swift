@@ -41,10 +41,10 @@ struct MQTTSettingsView: View {
                     }
                     
                     Toggle("Use TLS/SSL", isOn: $settings.mqttUseTLS)
-                        .onChange(of: settings.mqttUseTLS) { useTLS in
+                        .onChange(of: settings.mqttUseTLS) {
                             // Auto-adjust port
                             if settings.mqttPort == 1883 || settings.mqttPort == 8883 {
-                                settings.mqttPort = useTLS ? 8883 : 1883
+                                settings.mqttPort = settings.mqttUseTLS ? 8883 : 1883
                             }
                         }
                 }
@@ -241,14 +241,14 @@ struct MQTTSettingsView: View {
         Task {
             do {
                 let config = settings.mqttConfiguration
-                let client = await MQTTClient(configuration: config)
+                let client = MQTTClient(configuration: config)
                 
-                await client.connect()
+                client.connect()
                 
                 // Wait up to 5 seconds for connection
                 try await Task.sleep(nanoseconds: 5_000_000_000)
                 
-                let state = await client.state
+                let state = client.state
                 
                 await MainActor.run {
                     switch state {
@@ -277,7 +277,7 @@ struct MQTTSettingsView: View {
                     )
                 }
                 
-                await client.disconnect()
+                client.disconnect()
                 
             } catch {
                 await MainActor.run {
