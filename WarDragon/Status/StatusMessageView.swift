@@ -14,11 +14,13 @@ import CoreLocation
 enum StatusSheetType: Identifiable {
     case memory
     case map
+    case adsbHistory
     
     var id: String {
         switch self {
         case .memory: return "memory"
         case .map: return "map"
+        case .adsbHistory: return "adsbHistory"
         }
     }
 }
@@ -187,6 +189,8 @@ struct StatusMessageView: View {
                 MemoryDetailView(memory: message.systemStats.memory)
             case .map:
                 MapDetailView(coordinate: message.gpsData.coordinate)
+            case .adsbHistory:
+                ADSBHistoryView(statusViewModel: statusViewModel)
             }
         }
         .alert("Use Your Location for Status?", isPresented: $statusViewModel.showESP32LocationAlert) {
@@ -333,6 +337,44 @@ struct StatusMessageView: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            
+            // ADS-B History Quick Access
+            if !statusViewModel.adsbEncounterHistory.isEmpty {
+                Button(action: { activeSheet = .adsbHistory }) {
+                    HStack {
+                        Image(systemName: "airplane.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.blue)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ADS-B Encounter History")
+                                .font(.system(.subheadline, design: .monospaced))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                            
+                            Text("\(statusViewModel.adsbEncounterHistory.count) aircraft tracked")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
             }
             
             // Location and Map Section (Full Width)
@@ -558,6 +600,44 @@ struct StatusMessageView: View {
                     color: diskColor(diskUsagePercent),
                     isInteractive: false
                 )
+            }
+            
+            // ADS-B History Quick Access
+            if !statusViewModel.adsbEncounterHistory.isEmpty {
+                Button(action: { activeSheet = .adsbHistory }) {
+                    HStack {
+                        Image(systemName: "airplane.circle.fill")
+                            .font(.title3)
+                            .foregroundColor(.blue)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ADS-B Encounter History")
+                                .font(.system(.subheadline, design: .monospaced))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                            
+                            Text("\(statusViewModel.adsbEncounterHistory.count) aircraft tracked")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
             }
             
             // Map Preview
@@ -847,3 +927,241 @@ struct MapPoint: Identifiable {
     let id = UUID()
     let coordinate: CLLocationCoordinate2D
 }
+
+// MARK: - ADS-B History View
+struct ADSBHistoryView: View {
+    @ObservedObject var statusViewModel: StatusViewModel
+    @State private var searchText = ""
+    @State private var sortBy: SortOption = .lastSeen
+    @Environment(\.dismiss) private var dismiss
+    
+    enum SortOption: String, CaseIterable {
+        case lastSeen = "Last Seen"
+        case firstSeen = "First Seen"
+        case duration = "Duration"
+        case altitude = "Max Altitude"
+        case callsign = "Callsign"
+    }
+    
+    var filteredHistory: [StatusViewModel.ADSBEncounter] {
+        var history = statusViewModel.adsbEncounterHistory
+        
+        // Apply search filter
+        if !searchText.isEmpty {
+            history = history.filter { encounter in
+                encounter.displayName.localizedCaseInsensitiveContains(searchText) ||
+                encounter.id.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        
+        // Apply sorting
+        switch sortBy {
+        case .lastSeen:
+            return history.sorted { $0.lastSeen > $1.lastSeen }
+        case .firstSeen:
+            return history.sorted { $0.firstSeen > $1.firstSeen }
+        case .duration:
+            return history.sorted { $0.duration > $1.duration }
+        case .altitude:
+            return history.sorted { $0.maxAltitude > $1.maxAltitude }
+        case .callsign:
+            return history.sorted { $0.displayName < $1.displayName }
+        }
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Stats header
+                if !statusViewModel.adsbEncounterHistory.isEmpty {
+                    historyStatsHeader
+                        .padding()
+                        .background(Color(.secondarySystemBackground))
+                }
+                
+                // Main list
+                if statusViewModel.adsbEncounterHistory.isEmpty {
+                    emptyStateView
+                } else {
+                    List {
+                        ForEach(filteredHistory) { encounter in
+                            ADSBEncounterRow(encounter: encounter)
+                        }
+                    }
+                    .listStyle(.plain)
+                    .searchable(text: $searchText, prompt: "Search by callsign or ICAO")
+                }
+            }
+            .navigationTitle("ADS-B Encounter History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        ForEach(SortOption.allCases, id: \.self) { option in
+                            Button {
+                                sortBy = option
+                            } label: {
+                                HStack {
+                                    Text(option.rawValue)
+                                    if sortBy == option {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        Button(role: .destructive) {
+                            statusViewModel.clearADSBHistory()
+                        } label: {
+                            Label("Clear History", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Subviews
+    
+    private var historyStatsHeader: some View {
+        HStack(spacing: 20) {
+            VStack(spacing: 4) {
+                Text("\(statusViewModel.adsbEncounterHistory.count)")
+                    .font(.system(.title2, design: .monospaced))
+                    .fontWeight(.bold)
+                Text("Total")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            
+            Divider()
+                .frame(height: 40)
+            
+            VStack(spacing: 4) {
+                Text("\(recentCount)")
+                    .font(.system(.title2, design: .monospaced))
+                    .fontWeight(.bold)
+                    .foregroundColor(.green)
+                Text("Last Hour")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            
+            Divider()
+                .frame(height: 40)
+            
+            if let highest = highestAltitude {
+                VStack(spacing: 4) {
+                    Text("\(Int(highest))")
+                        .font(.system(.title2, design: .monospaced))
+                        .fontWeight(.bold)
+                        .foregroundColor(.blue)
+                    Text("Max Alt (ft)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "airplane.circle")
+                .font(.system(size: 60))
+                .foregroundColor(.secondary)
+            
+            Text("No Aircraft Encounters")
+                .font(.headline)
+            
+            Text("ADS-B aircraft encounters will appear here as they are detected")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Computed Properties
+    
+    private var recentCount: Int {
+        let oneHourAgo = Date().addingTimeInterval(-3600)
+        return statusViewModel.adsbEncounterHistory.filter { $0.lastSeen > oneHourAgo }.count
+    }
+    
+    private var highestAltitude: Double? {
+        statusViewModel.adsbEncounterHistory.map { $0.maxAltitude }.max()
+    }
+}
+
+// MARK: - ADS-B Encounter Row
+struct ADSBEncounterRow: View {
+    let encounter: StatusViewModel.ADSBEncounter
+    
+    private var timeAgo: String {
+        let interval = Date().timeIntervalSince(encounter.lastSeen)
+        if interval < 60 {
+            return "\(Int(interval))s ago"
+        } else if interval < 3600 {
+            return "\(Int(interval / 60))m ago"
+        } else if interval < 86400 {
+            return "\(Int(interval / 3600))h ago"
+        } else {
+            return "\(Int(interval / 86400))d ago"
+        }
+    }
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Aircraft icon
+            VStack {
+                Image(systemName: "airplane")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+            }
+            .frame(width: 40)
+            
+            // Main info
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(encounter.displayName)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    Text(timeAgo)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                
+                HStack(spacing: 12) {
+                    Label("\(Int(encounter.maxAltitude))ft", systemImage: "arrow.up")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    
+                    Label(encounter.formattedDuration, systemImage: "clock")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    
+                    Label("\(encounter.totalSightings)", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+

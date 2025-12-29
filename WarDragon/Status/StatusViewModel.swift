@@ -13,7 +13,82 @@ class StatusViewModel: ObservableObject {
     @Published var statusMessages: [StatusMessage] = []
     @Published var lastStatusMessageReceived: Date?
     @Published var showESP32LocationAlert = false
+    @Published var adsbEncounterHistory: [ADSBEncounter] = []
     private var locationManager = LocationManager.shared
+    
+    // MARK: - ADS-B Encounter Tracking
+    
+    /// Simple ADS-B encounter record for history
+    struct ADSBEncounter: Identifiable, Codable {
+        let id: String  // ICAO hex
+        let callsign: String
+        let firstSeen: Date
+        var lastSeen: Date
+        var maxAltitude: Double
+        var minAltitude: Double
+        var totalSightings: Int
+        
+        var displayName: String {
+            callsign.isEmpty ? id.uppercased() : callsign
+        }
+        
+        var duration: TimeInterval {
+            lastSeen.timeIntervalSince(firstSeen)
+        }
+        
+        var formattedDuration: String {
+            let interval = duration
+            if interval < 60 {
+                return "\(Int(interval))s"
+            } else if interval < 3600 {
+                return "\(Int(interval / 60))m"
+            } else {
+                return "\(Int(interval / 3600))h \(Int((interval.truncatingRemainder(dividingBy: 3600)) / 60))m"
+            }
+        }
+    }
+    
+    /// Track an aircraft encounter
+    func trackAircraft(hex: String, callsign: String?, altitude: Double?) {
+        let now = Date()
+        let cleanCallsign = callsign?.trimmingCharacters(in: .whitespaces) ?? ""
+        
+        if let index = adsbEncounterHistory.firstIndex(where: { $0.id == hex }) {
+            // Update existing encounter
+            var encounter = adsbEncounterHistory[index]
+            encounter.lastSeen = now
+            encounter.totalSightings += 1
+            
+            if let altitude = altitude {
+                encounter.maxAltitude = max(encounter.maxAltitude, altitude)
+                encounter.minAltitude = min(encounter.minAltitude, altitude)
+            }
+            
+            adsbEncounterHistory[index] = encounter
+        } else {
+            // Create new encounter
+            let encounter = ADSBEncounter(
+                id: hex,
+                callsign: cleanCallsign,
+                firstSeen: now,
+                lastSeen: now,
+                maxAltitude: altitude ?? 0,
+                minAltitude: altitude ?? 0,
+                totalSightings: 1
+            )
+            adsbEncounterHistory.append(encounter)
+        }
+        
+        // Keep only last 500 encounters to prevent memory issues
+        if adsbEncounterHistory.count > 500 {
+            adsbEncounterHistory.removeFirst(adsbEncounterHistory.count - 500)
+        }
+    }
+    
+    /// Clear ADS-B encounter history
+    func clearADSBHistory() {
+        adsbEncounterHistory.removeAll()
+    }
     
     // MARK: - Status Connection Logic
     

@@ -2947,6 +2947,15 @@ extension CoTViewModel {
         // Already on main thread from .receive(on: DispatchQueue.main)
         aircraftTracks = aircraft
         
+        // Track aircraft encounters in StatusViewModel
+        for ac in aircraft {
+            statusViewModel.trackAircraft(
+                hex: ac.hex,
+                callsign: ac.flight,
+                altitude: ac.altitude
+            )
+        }
+        
         // Keep aircraft separate from drone messages
         
         print("Updated aircraft tracks: \(aircraft.count) aircraft")

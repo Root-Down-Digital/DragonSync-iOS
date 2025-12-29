@@ -70,22 +70,41 @@ struct AircraftListView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                // Sort button with icon reflecting current sort
                 Menu {
-                    Picker("Sort By", selection: $sortBy) {
-                        ForEach(SortOption.allCases, id: \.self) { option in
-                            Text(option.rawValue).tag(option)
+                    ForEach(SortOption.allCases, id: \.self) { option in
+                        Button {
+                            sortBy = option
+                        } label: {
+                            HStack {
+                                Image(systemName: iconForSortOption(option))
+                                Text(option.rawValue)
+                                Spacer()
+                                if sortBy == option {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.accentColor)
+                                }
+                            }
                         }
                     }
-                    
-                    Button(action: {
-                        cotViewModel.aircraftTracks.removeAll()
-                    }) {
-                        Label("Clear All", systemImage: "trash")
-                    }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Label("Sort", systemImage: sortIcon)
+                        .labelStyle(.iconOnly)
                 }
+                .help("Sort aircraft")
+                
+                // Clear button
+                Button(action: {
+                    withAnimation {
+                        cotViewModel.clearAircraftTracks()
+                    }
+                }) {
+                    Label("Clear All", systemImage: "xmark.bin.fill")
+                        .labelStyle(.iconOnly)
+                }
+                .help("Clear all aircraft")
+                .disabled(cotViewModel.aircraftTracks.isEmpty)
             }
         }
     }
@@ -142,6 +161,34 @@ struct AircraftListView: View {
     
     private var highestAircraft: Int? {
         cotViewModel.aircraftTracks.compactMap { $0.altitudeFeet }.max()
+    }
+    
+    /// Icon that reflects the current sort option
+    private var sortIcon: String {
+        switch sortBy {
+        case .distance:
+            return "arrow.up.and.down.circle"
+        case .altitude:
+            return "arrow.up.arrow.down.circle"
+        case .speed:
+            return "speedometer"
+        case .callsign:
+            return "textformat.abc"
+        }
+    }
+    
+    /// Get icon for a specific sort option (for menu items)
+    private func iconForSortOption(_ option: SortOption) -> String {
+        switch option {
+        case .distance:
+            return "location.circle"
+        case .altitude:
+            return "arrow.up.right"
+        case .speed:
+            return "gauge.with.needle"
+        case .callsign:
+            return "textformat.abc.dottedunderline"
+        }
     }
 }
 
