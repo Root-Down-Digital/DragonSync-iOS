@@ -218,7 +218,7 @@ struct ADSBSettingsView: View {
             await MainActor.run {
                 switch state {
                 case .connected:
-                    testResult = "✓ Connection successful!"
+                    testResult = "✓ Test completed"
                     aircraftCount = count
                 case .connecting:
                     testResult = "⏳ Connecting..."
@@ -227,11 +227,6 @@ struct ADSBSettingsView: View {
                 case .disconnected:
                     testResult = "✗ Disconnected"
                 }
-                isTesting = false
-            }
-            
-            await MainActor.run {
-                testResult = "✗ Test completed"
                 isTesting = false
             }
         }

@@ -55,6 +55,7 @@ class CoTViewModel: ObservableObject {
     
     // MARK: - ADS-B Integration
     private var adsbClient: ADSBClient?
+    private var adsbCancellables = Set<AnyCancellable>()  // Separate cancellables for ADS-B to prevent interference
     @Published var aircraftTracks: [Aircraft] = []
     
     /// Unified detection statistics
@@ -623,8 +624,9 @@ class CoTViewModel: ObservableObject {
         
         restoreAlertRingsFromStorage()
         
-        // Observe ADS-B configuration changes
+        // Observe ADS-B configuration changes with debouncing to prevent rapid toggling issues
         NotificationCenter.default.publisher(for: .adsbSettingsChanged)
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
@@ -632,10 +634,11 @@ class CoTViewModel: ObservableObject {
                     if Settings.shared.adsbEnabled {
                         self.setupADSBClient()
                     } else {
+                        // Clean up properly when disabling
+                        self.adsbCancellables.removeAll()
                         self.adsbClient?.stop()
                         self.adsbClient = nil
                         self.aircraftTracks.removeAll()
-                        self.parsedMessages.removeAll { $0.uid.hasPrefix("aircraft-") }
                     }
                 }
             }
@@ -2843,29 +2846,44 @@ extension CoTViewModel {
         guard config.enabled && config.isValid else {
             print("DEBUG: ADS-B config not enabled or invalid, cleaning up")
             Task { @MainActor in
-                adsbClient?.stop()
-                adsbClient = nil
-                aircraftTracks.removeAll()
-                parsedMessages.removeAll { $0.uid.hasPrefix("aircraft-") }
+                // Cancel all subscriptions first to prevent memory leaks
+                self.adsbCancellables.removeAll()
+                
+                // Stop and clear client
+                self.adsbClient?.stop()
+                self.adsbClient = nil
+                
+                // Clear tracked aircraft
+                self.aircraftTracks.removeAll()
             }
             return
         }
         
         Task { @MainActor in
-            // Stop existing client
-            adsbClient?.stop()
+            // Cancel ALL previous ADS-B subscriptions first
+            self.adsbCancellables.removeAll()
+            
+            // Stop existing client if any
+            if let existingClient = self.adsbClient {
+                existingClient.stop()
+                self.adsbClient = nil
+            }
+            
+            // Small delay to ensure complete cleanup
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             
             // Create new client
             let client = ADSBClient(configuration: config)
-            adsbClient = client
+            self.adsbClient = client
             
-            // Observe aircraft updates BEFORE starting
+            // Observe aircraft updates
             client.$aircraft
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] aircraft in
-                    self?.handleAircraftUpdate(aircraft)
+                    guard let self = self else { return }
+                    self.handleAircraftUpdate(aircraft)
                 }
-                .store(in: &cancellables)
+                .store(in: &self.adsbCancellables)
             
             // Observe connection state
             client.$state
@@ -2873,11 +2891,16 @@ extension CoTViewModel {
                 .sink { state in
                     if case .failed(let error) = state {
                         print("ADS-B error: \(error.localizedDescription)")
+                        // Provide helpful message for connection errors
+                        if (error as NSError).code == -1004 || (error as NSError).code == -1003 {
+                            print("TIP: Make sure readsb/dump1090 is running at: \(config.readsbURL)")
+                            print("     You can test with: curl \(config.readsbURL)/data/aircraft.json")
+                        }
                     }
                 }
-                .store(in: &cancellables)
+                .store(in: &self.adsbCancellables)
             
-            // Start polling AFTER observations are set up
+            // Start polling AFTER observations are set up and cleanup is complete
             client.start()
         }
     }
@@ -2901,15 +2924,12 @@ extension CoTViewModel {
     func clearAircraftTracks() {
         // Clear from aircraftTracks array
         aircraftTracks.removeAll()
-        
-        // Clear aircraft from unified parsedMessages
-        parsedMessages.removeAll { $0.uid.hasPrefix("aircraft-") }
     }
     
     /// Clear all drone detections
     func clearDroneDetections() {
-        // Only remove drone messages, keep aircraft
-        parsedMessages.removeAll { !$0.uid.hasPrefix("aircraft-") && !$0.uid.hasPrefix("fpv-") }
+        // Remove all drone messages (including FPV detections)
+        parsedMessages.removeAll()
         droneSignatures.removeAll()
         macIdHistory.removeAll()
         macProcessing.removeAll()
@@ -2927,36 +2947,9 @@ extension CoTViewModel {
         // Already on main thread from .receive(on: DispatchQueue.main)
         aircraftTracks = aircraft
         
-        // Convert aircraft to unified CoTMessage format
-        for aircraft in aircraft {
-            let aircraftMessage = CoTMessage.from(aircraft: aircraft)
-            
-            // Update or add to parsedMessages
-            if let existingIndex = parsedMessages.firstIndex(where: { $0.uid == aircraftMessage.uid }) {
-                // Update existing aircraft message
-                var existing = parsedMessages[existingIndex]
-                existing.lat = aircraftMessage.lat
-                existing.lon = aircraftMessage.lon
-                existing.alt = aircraftMessage.alt
-                existing.speed = aircraftMessage.speed
-                existing.vspeed = aircraftMessage.vspeed
-                existing.trackCourse = aircraftMessage.trackCourse
-                existing.trackSpeed = aircraftMessage.trackSpeed
-                existing.rssi = aircraftMessage.rssi
-                existing.lastUpdated = aircraftMessage.lastUpdated
-                existing.op_status = aircraftMessage.op_status
-                parsedMessages[existingIndex] = existing
-            } else {
-                // New aircraft - add to parsedMessages
-                parsedMessages.append(aircraftMessage)
-            }
-        }
+        // Keep aircraft separate from drone messages
         
-        // Remove stale aircraft from parsedMessages
-        let currentAircraftUIDs = Set(aircraft.map { "aircraft-\($0.hex)" })
-        parsedMessages.removeAll { message in
-            message.uid.hasPrefix("aircraft-") && !currentAircraftUIDs.contains(message.uid)
-        }
+        print("Updated aircraft tracks: \(aircraft.count) aircraft")
         
         // Force UI update
         objectWillChange.send()

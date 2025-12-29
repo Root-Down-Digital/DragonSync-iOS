@@ -26,7 +26,43 @@ struct LiveMapView: View {
         let lat = Double(initialMessage.lat) ?? 0
         let lon = Double(initialMessage.lon) ?? 0
         
-        if lat == 0 && lon == 0,
+        // Try to fit all visible targets (drones + aircraft)
+        var allCoords: [CLLocationCoordinate2D] = []
+        
+        // Add drone coordinates
+        allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
+            guard let coord = message.coordinate else { return nil }
+            let hasValidCoord = coord.latitude != 0 || coord.longitude != 0
+            return hasValidCoord ? coord : nil
+        }
+        
+        // Add aircraft coordinates
+        allCoords += cotViewModel.aircraftTracks.compactMap { $0.coordinate }
+        
+        // If we have multiple targets, fit them all in view
+        if allCoords.count > 1 {
+            let latitudes = allCoords.map(\.latitude)
+            let longitudes = allCoords.map(\.longitude)
+            let minLat = latitudes.min()!
+            let maxLat = latitudes.max()!
+            let minLon = longitudes.min()!
+            let maxLon = longitudes.max()!
+            
+            let center = CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            )
+            
+            let span = MKCoordinateSpan(
+                latitudeDelta: max((maxLat - minLat) * 1.5, 0.01),
+                longitudeDelta: max((maxLon - minLon) * 1.5, 0.01)
+            )
+            
+            let region = MKCoordinateRegion(center: center, span: span)
+            _mapCameraPosition = State(initialValue: .region(region))
+        }
+        // Check for FPV detection with alert ring (single target)
+        else if lat == 0 && lon == 0,
            let ring = cotViewModel.alertRings.first(where: { $0.droneId == initialMessage.uid }) {
             let ringSpan = MKCoordinateSpan(
                 latitudeDelta: max(ring.radius / 250, 0.1),
@@ -34,11 +70,29 @@ struct LiveMapView: View {
             )
             let ringRegion = MKCoordinateRegion(center: ring.centerCoordinate, span: ringSpan)
             _mapCameraPosition = State(initialValue: .region(ringRegion))
-        } else {
+        }
+        // If we have valid coordinates for initial message, use them
+        else if lat != 0 || lon != 0 {
             let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             let span = MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
             let region = MKCoordinateRegion(center: coordinate, span: span)
             _mapCameraPosition = State(initialValue: .region(region))
+        }
+        // If we have a single aircraft, use its location
+        else if let firstAircraft = cotViewModel.aircraftTracks.first,
+                let coord = firstAircraft.coordinate {
+            let span = MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+            let region = MKCoordinateRegion(center: coord, span: span)
+            _mapCameraPosition = State(initialValue: .region(region))
+        }
+        // Default fallback
+        else {
+            _mapCameraPosition = State(initialValue: .region(
+                MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                    span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                )
+            ))
         }
     }
     
@@ -256,7 +310,26 @@ struct LiveMapView: View {
                     }
                 }
                 
-                ForEach(cotViewModel.alertRings, id: \.id) { ring in
+                // Only show alert rings for encrypted/FPV drones (zero coordinates)
+                // Don't show them if we're only viewing aircraft
+                ForEach(cotViewModel.alertRings.filter { ring in
+                    // Only show alert rings if there are actual drones (not just aircraft)
+                    let hasDrones = !uniqueDrones.isEmpty
+                    guard hasDrones else { return false }
+                    
+                    // Check if this ring belongs to an actual drone/FPV detection in parsedMessages
+                    return cotViewModel.parsedMessages.contains { message in
+                        // Match ring to message, accounting for ID suffixes like "-highest", "-lowest", "-median"
+                        let baseRingId = ring.droneId.components(separatedBy: "-").dropLast().joined(separator: "-")
+                        let baseMessageId = message.uid
+                        
+                        // Only show if it matches AND the message has zero coordinates (encrypted/FPV)
+                        let isMatch = ring.droneId == baseMessageId || baseRingId == baseMessageId
+                        let hasZeroCoords = (Double(message.lat) ?? 0) == 0 && (Double(message.lon) ?? 0) == 0
+                        
+                        return isMatch && hasZeroCoords
+                    }
+                }, id: \.id) { ring in
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.yellow.opacity(0.1))
                         .stroke(.yellow, lineWidth: 2)
@@ -290,17 +363,19 @@ struct LiveMapView: View {
             )
             
             VStack {
-                if userHasMovedMap {
-                    HStack {
-                        Spacer()
-                        Button(action: resetMapView) {
-                            Image(systemName: "arrow.counterclockwise")
-                                .padding(8)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(8)
-                        }
-                        .padding()
+                // Fit to View button - always visible
+                HStack {
+                    Spacer()
+                    Button(action: resetMapView) {
+                        Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
                     }
+                    .padding(.top)
+                    .padding(.trailing)
                 }
                 
                 Spacer()
@@ -331,13 +406,39 @@ struct LiveMapView: View {
         }
         .sheet(isPresented: $showDroneList) {
             NavigationView {
-                List(uniqueDrones) { message in
-                    let destination = createDroneDetailView(for: message)
-                    NavigationLink(destination: destination) {
-                        DroneListRowView(message: message, cotViewModel: cotViewModel)
+                List {
+                    if !uniqueDrones.isEmpty {
+                        Section("Drones (\(uniqueDrones.count))") {
+                            ForEach(uniqueDrones) { message in
+                                let destination = createDroneDetailView(for: message)
+                                NavigationLink(destination: destination) {
+                                    DroneListRowView(message: message, cotViewModel: cotViewModel)
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !cotViewModel.aircraftTracks.isEmpty {
+                        Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
+                            ForEach(cotViewModel.aircraftTracks) { aircraft in
+                                NavigationLink {
+                                    AircraftDetailContent(aircraft: aircraft)
+                                } label: {
+                                    AircraftRow(aircraft: aircraft)
+                                }
+                            }
+                        }
+                    }
+                    
+                    if uniqueDrones.isEmpty && cotViewModel.aircraftTracks.isEmpty {
+                        Section {
+                            Text("No active targets")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
                     }
                 }
-                .navigationTitle("Active Drones")
+                .navigationTitle("Active Targets")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -347,7 +448,7 @@ struct LiveMapView: View {
                     }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showDroneDetail) {
             if let drone = selectedDrone {

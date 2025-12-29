@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import CoreLocation
 
 
 struct DashboardView: View {
@@ -23,6 +24,11 @@ struct DashboardView: View {
                 
                 // Active Drones Card
                 DronesOverviewCard(cotViewModel: cotViewModel)
+                
+                // ADS-B Aircraft Card (if enabled)
+                if Settings.shared.adsbEnabled {
+                    AircraftOverviewCard(cotViewModel: cotViewModel)
+                }
                 
                 // SDR Status Card
                 SDRStatusCard(
@@ -472,6 +478,42 @@ struct WarningsCard: View {
             ))
         }
         
+        // ADS-B Aircraft Warnings (if enabled)
+        if Settings.shared.adsbEnabled {
+            // Emergency aircraft
+            let emergencyAircraft = cotViewModel.aircraftTracks.filter { $0.isEmergency }
+            if !emergencyAircraft.isEmpty {
+                warnings.append(SystemWarning(
+                    id: "aircraft_emergency",
+                    title: "Emergency Aircraft",
+                    detail: "\(emergencyAircraft.count) aircraft",
+                    severity: .high
+                ))
+            }
+            
+            // Low-flying aircraft nearby
+            if let userLocation = LocationManager.shared.userLocation {
+                let lowNearby = cotViewModel.aircraftTracks.filter { aircraft in
+                    guard let coord = aircraft.coordinate,
+                          let alt = aircraft.altitudeFeet,
+                          alt < 1000 else { return false }
+                    
+                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let distance = userLocation.distance(from: aircraftLocation)
+                    return distance <= 5000 // Within 5km
+                }
+                
+                if !lowNearby.isEmpty {
+                    warnings.append(SystemWarning(
+                        id: "low_aircraft",
+                        title: "Low-Flying Aircraft Nearby",
+                        detail: "\(lowNearby.count) aircraft",
+                        severity: .medium
+                    ))
+                }
+            }
+        }
+        
         return warnings
     }
     
@@ -507,6 +549,181 @@ struct StatBox: View {
         .padding(.vertical, 8)
         .background(color.opacity(0.1))
         .cornerRadius(8)
+    }
+}
+
+struct AircraftOverviewCard: View {
+    @ObservedObject var cotViewModel: CoTViewModel
+    
+    private var activeAircraft: [Aircraft] {
+        cotViewModel.aircraftTracks.filter { !$0.isStale }
+    }
+    
+    private var nearbyAircraft: [Aircraft] {
+        guard let userLocation = LocationManager.shared.userLocation else { return [] }
+        
+        return activeAircraft.filter { aircraft in
+            guard let coord = aircraft.coordinate else { return false }
+            let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            let distance = userLocation.distance(from: aircraftLocation)
+            return distance <= 10000 // Within 10km
+        }
+    }
+    
+    private var lowFlying: [Aircraft] {
+        activeAircraft.filter { aircraft in
+            guard let alt = aircraft.altitudeFeet else { return false }
+            return alt < 2000 // Below 2000ft
+        }
+    }
+    
+    private var emergencyAircraft: [Aircraft] {
+        activeAircraft.filter { $0.isEmergency }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            HStack {
+                Image(systemName: "airplane.departure")
+                    .foregroundColor(.cyan)
+                Text("ADS-B AIRCRAFT")
+                    .font(.appHeadline)
+                Spacer()
+                Text("\(activeAircraft.count)")
+                    .font(.system(.title2, design: .monospaced))
+                    .foregroundColor(.cyan)
+            }
+            
+            // Stats boxes
+            HStack(spacing: 12) {
+                StatBox(
+                    title: "TRACKED",
+                    value: "\(cotViewModel.aircraftTracks.count)",
+                    icon: "antenna.radiowaves.left.and.right",
+                    color: .cyan
+                )
+                
+                StatBox(
+                    title: "NEARBY",
+                    value: "\(nearbyAircraft.count)",
+                    icon: "location.fill",
+                    color: .blue
+                )
+                
+                StatBox(
+                    title: "LOW ALT",
+                    value: "\(lowFlying.count)",
+                    icon: "arrow.down.circle",
+                    color: lowFlying.isEmpty ? .gray : .orange
+                )
+                
+                if !emergencyAircraft.isEmpty {
+                    StatBox(
+                        title: "EMERGENCY",
+                        value: "\(emergencyAircraft.count)",
+                        icon: "exclamationmark.triangle.fill",
+                        color: .red
+                    )
+                }
+            }
+            
+            // Recent aircraft list
+            if !recentAircraft.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Divider()
+                    
+                    Text("RECENT AIRCRAFT")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .padding(.bottom, 4)
+                    
+                    ForEach(recentAircraft) { aircraft in
+                        AircraftDashRow(aircraft: aircraft)
+                    }
+                }
+            } else {
+                VStack(spacing: 4) {
+                    Divider()
+                    Text("No aircraft detected")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 8)
+                }
+            }
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+    
+    private var recentAircraft: [Aircraft] {
+        Array(activeAircraft.sorted { $0.lastSeen > $1.lastSeen }.prefix(5))
+    }
+}
+
+struct AircraftDashRow: View {
+    let aircraft: Aircraft
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // Signal quality indicator
+            Circle()
+                .fill(signalColor)
+                .frame(width: 8, height: 8)
+            
+            // Callsign/Hex
+            Text(aircraft.displayName)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+            
+            Spacer()
+            
+            // Altitude
+            if let alt = aircraft.altitudeFeet {
+                HStack(spacing: 2) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                    Text("\(alt)ft")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Speed
+            if let speed = aircraft.speedKnots {
+                HStack(spacing: 2) {
+                    Image(systemName: "speedometer")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                    Text("\(speed)kts")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Emergency indicator
+            if aircraft.isEmergency {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color(UIColor.tertiarySystemBackground))
+        .cornerRadius(6)
+    }
+    
+    private var signalColor: Color {
+        switch aircraft.signalQuality {
+        case .excellent: return .green
+        case .good: return .blue
+        case .fair: return .yellow
+        case .poor: return .red
+        case .unknown: return .gray
+        }
     }
 }
 
@@ -555,4 +772,51 @@ struct SystemWarning: Identifiable {
             case performance
         }
 }
+
+// MARK: - Circular Gauge Component
+struct CircularGauge: View {
+    let value: Double
+    let maxValue: Double
+    let title: String
+    let unit: String
+    let color: Color
+    
+    private var percentage: Double {
+        min(max(value / maxValue, 0), 1)
+    }
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                // Background circle
+                Circle()
+                    .stroke(Color.gray.opacity(0.2), lineWidth: 6)
+                
+                // Progress circle
+                Circle()
+                    .trim(from: 0, to: CGFloat(percentage))
+                    .stroke(color, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut, value: percentage)
+                
+                // Value text
+                VStack(spacing: 2) {
+                    Text("\(Int(value))")
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.bold)
+                    Text(unit)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 60, height: 60)
+            
+            Text(title)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 

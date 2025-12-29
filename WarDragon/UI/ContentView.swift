@@ -8,6 +8,7 @@
 import SwiftUI
 import Network
 import UserNotifications
+import CoreLocation
 
 struct ContentView: View {
     @StateObject private var statusViewModel = StatusViewModel()
@@ -20,6 +21,7 @@ struct ContentView: View {
     @State private var selectedTab: Int
     @State private var showDeleteAllConfirmation = false
     @State private var detectionMode: DetectionMode = .drones
+    @State private var showUnifiedMap = false
     
     enum DetectionMode {
         case drones
@@ -62,191 +64,20 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack {
-                DashboardView(
-                    statusViewModel: statusViewModel,
-                    cotViewModel: cotViewModel,
-                    spectrumViewModel: spectrumViewModel
-                )
-                .navigationTitle("Dashboard")
-            }
-            .tabItem {
-                Label("Dashboard", systemImage: "gauge")
-            }
-            .tag(0)
-            
-            NavigationStack {
-                VStack {
-                    // Mode picker when both drones and aircraft are available
-                    if hasDrones && hasAircraft {
-                        Picker("Detection Type", selection: $detectionMode) {
-                            Text("Drones").tag(DetectionMode.drones)
-                            Text("Aircraft").tag(DetectionMode.aircraft)
-                            Text("Both").tag(DetectionMode.both)
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                    }
-                    
-                    // Dynamic content based on mode
-                    switch detectionMode {
-                    case .drones:
-                        droneListContent
-                    case .aircraft:
-                        AircraftListView(cotViewModel: cotViewModel)
-                    case .both:
-                        // Show both in sections or tabs
-                        List {
-                            if hasDrones {
-                                Section("Drones (\(cotViewModel.parsedMessages.count))") {
-                                    ForEach(cotViewModel.parsedMessages) { item in
-                                        MessageRow(message: item, cotViewModel: cotViewModel)
-                                    }
-                                }
-                            }
-                            
-                            if hasAircraft {
-                                Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
-                                    ForEach(cotViewModel.aircraftTracks) { aircraft in
-                                        AircraftRow(aircraft: aircraft)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .navigationTitle(navigationTitle)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            if detectionMode == .drones || detectionMode == .both {
-                                Button(action: {
-                                    cotViewModel.parsedMessages.removeAll()
-                                    cotViewModel.droneSignatures.removeAll()
-                                    cotViewModel.macIdHistory.removeAll()
-                                    cotViewModel.macProcessing.removeAll()
-                                    cotViewModel.alertRings.removeAll()
-                                }) {
-                                    Label("Clear Drones", systemImage: "trash")
-                                }
-                                
-                                Button(action: {
-                                    cotViewModel.parsedMessages.removeAll()
-                                    cotViewModel.droneSignatures.removeAll()
-                                    cotViewModel.alertRings.removeAll()
-                                }) {
-                                    Label("Stop Drone Tracking", systemImage: "eye.slash")
-                                }
-                            }
-                            
-                            if detectionMode == .aircraft || detectionMode == .both {
-                                Button(action: {
-                                    cotViewModel.aircraftTracks.removeAll()
-                                }) {
-                                    Label("Clear Aircraft", systemImage: "airplane")
-                                }
-                            }
-                            
-                            if detectionMode == .drones || detectionMode == .both {
-                                Divider()
-                                
-                                Button(role: .destructive, action: {
-                                    showDeleteAllConfirmation = true
-                                }) {
-                                    Label("Delete All History", systemImage: "trash.fill")
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                    }
-                }
-                .alert("New Message", isPresented: $showAlert) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    if let message = latestMessage {
-                        Text("From: \(message.uid)\nType: \(message.type)\nLocation: \(message.lat), \(message.lon)")
-                    }
-                }
-                .alert("Delete All History", isPresented: $showDeleteAllConfirmation) {
-                    Button("Delete", role: .destructive) {
-                        droneStorage.deleteAllEncounters()
-                        cotViewModel.parsedMessages.removeAll()
-                        cotViewModel.droneSignatures.removeAll()
-                        cotViewModel.macIdHistory.removeAll()
-                        cotViewModel.macProcessing.removeAll()
-                        cotViewModel.alertRings.removeAll()
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("This will permanently delete all stored drone encounters and detection history. This action cannot be undone.")
-                }
-            }
-            .tabItem {
-                Label(tabLabel, systemImage: tabIcon)
-            }
-            .badge(detectionBadgeCount)
-            .tag(1)
-            
-            NavigationStack {
-                StatusListView(statusViewModel: statusViewModel)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(action: { statusViewModel.statusMessages.removeAll() }) {
-                                Image(systemName: "trash")
-                            }
-                        }
-                    }
-            }
-            .tabItem {
-                Label("Status", systemImage: "server.rack")
-            }
-            .tag(2)
-            
-            NavigationStack {
-                SettingsView(cotHandler: cotViewModel)
-            }
-            .tabItem {
-                Label("Settings", systemImage: "gear")
-            }
-            .tag(3)
-            NavigationStack {
-                StoredEncountersView(cotViewModel: cotViewModel)
-            }
-            .tabItem {
-                Label("History", systemImage: "clock.arrow.circlepath")
-            }
-            .tag(4)
-            // Spectrum not implemented this branch
-//            NavigationStack {
-//                SpectrumView(viewModel: spectrumViewModel)
-//                    .navigationTitle("Spectrum")
-//            }
-//            .tabItem {
-//                Label("Spectrum", systemImage: "waveform")
-//            }
-//            .tag(4)
+            dashboardTab
+            detectionsTab
+            statusTab
+            settingsTab
+            historyTab
         }
-        
         .onChange(of: settings.isListening) {
-            if settings.isListening {
-                cotViewModel.startListening()
-            } else {
-                cotViewModel.stopListening()
-            }
+            handleListeningChange()
         }
         .onChange(of: selectedTab) { oldValue, newValue in
-            if newValue != 3 { // Spectrum tab
-                // Spectrum not implemented this branch
-            } else if settings.isListening {
-                // Spectrum not implemented this branch
-            }
+            handleTabChange(from: oldValue, to: newValue)
         }
         .onChange(of: settings.connectionMode) {
-            if settings.isListening {
-                // Handle switch when enabled, for now just do not allow
-            }
+            handleConnectionModeChange()
         }
         .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
             updateDetectionMode()
@@ -257,6 +88,282 @@ struct ContentView: View {
         .onAppear {
             updateDetectionMode()
         }
+    }
+    
+    // MARK: - Tab Views
+    
+    private var dashboardTab: some View {
+        NavigationStack {
+            DashboardView(
+                statusViewModel: statusViewModel,
+                cotViewModel: cotViewModel,
+                spectrumViewModel: spectrumViewModel
+            )
+            .navigationTitle("Dashboard")
+        }
+        .tabItem {
+            Label("Dashboard", systemImage: "gauge")
+        }
+        .tag(0)
+    }
+    
+    private var detectionsTab: some View {
+        NavigationStack {
+            VStack {
+                detectionModePicker
+                detectionContent
+            }
+            .navigationTitle(navigationTitle)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    mapButton
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    detectionsMenu
+                }
+            }
+            .alert("New Message", isPresented: $showAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                newMessageAlertContent
+            }
+            .alert("Delete All History", isPresented: $showDeleteAllConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteAllHistory()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete all stored drone encounters and detection history. This action cannot be undone.")
+            }
+            .sheet(isPresented: $showUnifiedMap) {
+                unifiedMapSheet
+            }
+        }
+        .tabItem {
+            Label(tabLabel, systemImage: tabIcon)
+        }
+        .badge(detectionBadgeCount)
+        .tag(1)
+    }
+    
+    private var statusTab: some View {
+        NavigationStack {
+            StatusListView(statusViewModel: statusViewModel)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: { statusViewModel.statusMessages.removeAll() }) {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+        }
+        .tabItem {
+            Label("Status", systemImage: "server.rack")
+        }
+        .tag(2)
+    }
+    
+    private var settingsTab: some View {
+        NavigationStack {
+            SettingsView(cotHandler: cotViewModel)
+        }
+        .tabItem {
+            Label("Settings", systemImage: "gear")
+        }
+        .tag(3)
+    }
+    
+    private var historyTab: some View {
+        NavigationStack {
+            StoredEncountersView(cotViewModel: cotViewModel)
+        }
+        .tabItem {
+            Label("History", systemImage: "clock.arrow.circlepath")
+        }
+        .tag(4)
+    }
+    
+    // MARK: - Detections Tab Components
+    
+    @ViewBuilder
+    private var detectionModePicker: some View {
+        if hasDrones && hasAircraft {
+            Picker("Detection Type", selection: $detectionMode) {
+                Text("Drones").tag(DetectionMode.drones)
+                Text("Aircraft").tag(DetectionMode.aircraft)
+                Text("Both").tag(DetectionMode.both)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+    }
+    
+    @ViewBuilder
+    private var detectionContent: some View {
+        switch detectionMode {
+        case .drones:
+            droneListContent
+        case .aircraft:
+            AircraftListView(cotViewModel: cotViewModel)
+        case .both:
+            bothDetectionsList
+        }
+    }
+    
+    private var bothDetectionsList: some View {
+        List {
+            if hasDrones {
+                Section("Drones (\(cotViewModel.parsedMessages.count))") {
+                    ForEach(cotViewModel.parsedMessages) { item in
+                        NavigationLink {
+                            DroneDetailView(
+                                message: item,
+                                flightPath: getValidFlightPath(for: item.uid),
+                                cotViewModel: cotViewModel
+                            )
+                        } label: {
+                            MessageRow(message: item, cotViewModel: cotViewModel)
+                        }
+                    }
+                }
+            }
+            
+            if hasAircraft {
+                Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
+                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                        AircraftRow(aircraft: aircraft)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
+        guard let encounter = DroneStorageManager.shared.encounters[uid] else {
+            return []
+        }
+        return encounter.flightPath.map { point in
+            CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+        }
+    }
+    
+    @ViewBuilder
+    private var mapButton: some View {
+        if hasDrones || hasAircraft {
+            Button(action: {
+                showUnifiedMap = true
+            }) {
+                Label("Map View", systemImage: "map")
+            }
+        }
+    }
+    
+    private var detectionsMenu: some View {
+        Menu {
+            if detectionMode == .drones || detectionMode == .both {
+                droneMenuItems
+            }
+            
+            if detectionMode == .aircraft || detectionMode == .both {
+                aircraftMenuItems
+            }
+            
+            if detectionMode == .drones || detectionMode == .both {
+                Divider()
+                deleteHistoryButton
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+    }
+    
+    @ViewBuilder
+    private var droneMenuItems: some View {
+        Button(action: {
+            clearDrones()
+        }) {
+            Label("Clear Drones", systemImage: "trash")
+        }
+        
+        Button(action: {
+            stopDroneTracking()
+        }) {
+            Label("Stop Drone Tracking", systemImage: "eye.slash")
+        }
+    }
+    
+    @ViewBuilder
+    private var aircraftMenuItems: some View {
+        Button(action: {
+            cotViewModel.aircraftTracks.removeAll()
+        }) {
+            Label("Clear Aircraft", systemImage: "airplane")
+        }
+    }
+    
+    @ViewBuilder
+    private var deleteHistoryButton: some View {
+        Button(role: .destructive, action: {
+            showDeleteAllConfirmation = true
+        }) {
+            Label("Delete All History", systemImage: "trash.fill")
+        }
+    }
+    
+    @ViewBuilder
+    private var newMessageAlertContent: some View {
+        if let message = latestMessage {
+            Text("From: \(message.uid)\nType: \(message.type)\nLocation: \(message.lat), \(message.lon)")
+        }
+    }
+    
+    private var unifiedMapSheet: some View {
+        NavigationStack {
+            LiveMapView(cotViewModel: cotViewModel, initialMessage: getInitialMessageForMap())
+                .navigationTitle("Unified Map")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            showUnifiedMap = false
+                        }
+                    }
+                }
+        }
+    }
+    
+    private func getInitialMessageForMap() -> CoTViewModel.CoTMessage {
+        // Try to use the first drone if available
+        if let firstDrone = cotViewModel.parsedMessages.first {
+            return firstDrone
+        }
+        
+        // Otherwise try to use the first aircraft's position
+        if let firstAircraft = cotViewModel.aircraftTracks.first,
+           let coord = firstAircraft.coordinate {
+            return CoTViewModel.CoTMessage(
+                uid: "aircraft-init",
+                type: "a-f-A",
+                lat: String(coord.latitude),
+                lon: String(coord.longitude),
+                homeLat: "0.0",
+                homeLon: "0.0",
+                speed: "0.0",
+                vspeed: "0.0",
+                alt: String(firstAircraft.altitude ?? 0),
+                pilotLat: "0.0",
+                pilotLon: "0.0",
+                description: "Aircraft",
+                selfIDText: "",
+                uaType: .aeroplane,
+                idType: "system",
+                rawMessage: [:]
+            )
+        }
+        
+        // Fall back to dummy message
+        return createDummyMessage()
     }
     
     // MARK: - Helper Properties
@@ -316,7 +423,15 @@ struct ContentView: View {
     private var droneListContent: some View {
         ScrollViewReader { proxy in
             List(cotViewModel.parsedMessages) { item in
-                MessageRow(message: item, cotViewModel: cotViewModel)
+                NavigationLink {
+                    DroneDetailView(
+                        message: item,
+                        flightPath: getValidFlightPath(for: item.uid),
+                        cotViewModel: cotViewModel
+                    )
+                } label: {
+                    MessageRow(message: item, cotViewModel: cotViewModel)
+                }
             }
             .listStyle(.inset)
             .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
@@ -342,6 +457,28 @@ struct ContentView: View {
     
     // MARK: - Helper Methods
     
+    private func handleListeningChange() {
+        if settings.isListening {
+            cotViewModel.startListening()
+        } else {
+            cotViewModel.stopListening()
+        }
+    }
+    
+    private func handleTabChange(from oldValue: Int, to newValue: Int) {
+        if newValue != 3 { // Spectrum tab
+            // Spectrum not implemented this branch
+        } else if settings.isListening {
+            // Spectrum not implemented this branch
+        }
+    }
+    
+    private func handleConnectionModeChange() {
+        if settings.isListening {
+            // Handle switch when enabled, for now just do not allow
+        }
+    }
+    
     private func updateDetectionMode() {
         // Auto-switch mode based on what's being tracked
         if hasAircraft && !hasDrones {
@@ -354,6 +491,50 @@ struct ContentView: View {
                 detectionMode = .both
             }
         }
+    }
+    
+    private func clearDrones() {
+        cotViewModel.parsedMessages.removeAll()
+        cotViewModel.droneSignatures.removeAll()
+        cotViewModel.macIdHistory.removeAll()
+        cotViewModel.macProcessing.removeAll()
+        cotViewModel.alertRings.removeAll()
+    }
+    
+    private func stopDroneTracking() {
+        cotViewModel.parsedMessages.removeAll()
+        cotViewModel.droneSignatures.removeAll()
+        cotViewModel.alertRings.removeAll()
+    }
+    
+    private func deleteAllHistory() {
+        droneStorage.deleteAllEncounters()
+        cotViewModel.parsedMessages.removeAll()
+        cotViewModel.droneSignatures.removeAll()
+        cotViewModel.macIdHistory.removeAll()
+        cotViewModel.macProcessing.removeAll()
+        cotViewModel.alertRings.removeAll()
+    }
+    
+    private func createDummyMessage() -> CoTViewModel.CoTMessage {
+        CoTViewModel.CoTMessage(
+            uid: "map-init",
+            type: "a-f-A",
+            lat: "0.0",
+            lon: "0.0",
+            homeLat: "0.0",
+            homeLon: "0.0",
+            speed: "0.0",
+            vspeed: "0.0",
+            alt: "0.0",
+            pilotLat: "0.0",
+            pilotLon: "0.0",
+            description: "Map",
+            selfIDText: "",
+            uaType: .helicopter,
+            idType: "system",
+            rawMessage: [:]
+        )
     }
     
     

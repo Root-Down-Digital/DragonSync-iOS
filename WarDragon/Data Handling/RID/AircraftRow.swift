@@ -10,12 +10,11 @@ import MapKit
 
 struct AircraftRow: View {
     let aircraft: Aircraft
-    @State private var showingDetail = false
     
     var body: some View {
-        Button(action: {
-            showingDetail = true
-        }) {
+        NavigationLink {
+            AircraftDetailContent(aircraft: aircraft)
+        } label: {
             HStack(spacing: 12) {
                 // Status indicator
                 Circle()
@@ -118,10 +117,6 @@ struct AircraftRow: View {
             }
             .padding(.vertical, 8)
         }
-        .buttonStyle(PlainButtonStyle())
-        .sheet(isPresented: $showingDetail) {
-            AircraftDetailView(aircraft: aircraft)
-        }
     }
     
     // MARK: - Computed Properties
@@ -182,139 +177,149 @@ struct AircraftRow: View {
 
 // MARK: - Aircraft Detail View
 
+struct AircraftDetailContent: View {
+    let aircraft: Aircraft
+    @State private var showOnMap = false
+    
+    var body: some View {
+        List {
+            // Header section with map
+            Section {
+                if let coord = aircraft.coordinate {
+                    Map(position: .constant(.region(MKCoordinateRegion(
+                        center: coord,
+                        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                    )))) {
+                        Annotation(aircraft.displayName, coordinate: coord) {
+                            Image(systemName: "airplane")
+                                .foregroundColor(.blue)
+                                .padding(8)
+                                .background(Circle().fill(.white))
+                                .shadow(radius: 2)
+                        }
+                    }
+                    .frame(height: 200)
+                    .listRowInsets(EdgeInsets())
+                }
+            }
+            
+            // Identity section
+            Section("Identity") {
+                DetailRow(label: "ICAO", value: aircraft.hex.uppercased())
+                if let callsign = aircraft.flight?.trimmingCharacters(in: .whitespaces) {
+                    DetailRow(label: "Callsign", value: callsign)
+                }
+                if let squawk = aircraft.squawk {
+                    DetailRow(label: "Squawk", value: squawk)
+                }
+                if let category = aircraft.category {
+                    DetailRow(label: "Category", value: category)
+                }
+            }
+            
+            // Position section
+            if let coord = aircraft.coordinate {
+                Section("Position") {
+                    DetailRow(label: "Latitude", value: String(format: "%.6f°", coord.latitude))
+                    DetailRow(label: "Longitude", value: String(format: "%.6f°", coord.longitude))
+                    
+                    if let alt = aircraft.altitudeFeet {
+                        DetailRow(label: "Altitude (Baro)", value: "\(alt) ft")
+                    }
+                    if let altGeom = aircraft.altitudeGeom {
+                        DetailRow(label: "Altitude (GNSS)", value: "\(Int(altGeom)) ft")
+                    }
+                    
+                    DetailRow(label: "On Ground", value: aircraft.isOnGround ? "Yes" : "No")
+                }
+            }
+            
+            // Velocity section
+            Section("Velocity") {
+                if let speed = aircraft.speedKnots {
+                    DetailRow(label: "Ground Speed", value: "\(speed) kts")
+                }
+                if let track = aircraft.track {
+                    DetailRow(label: "Track", value: String(format: "%.1f°", track))
+                }
+                if let vr = aircraft.verticalRate {
+                    DetailRow(label: "Vertical Rate", value: "\(vr) ft/min")
+                }
+                if let ias = aircraft.ias {
+                    DetailRow(label: "IAS", value: "\(ias) kts")
+                }
+                if let tas = aircraft.tas {
+                    DetailRow(label: "TAS", value: "\(tas) kts")
+                }
+            }
+            
+            // Signal section
+            Section("Signal Quality") {
+                if let rssi = aircraft.rssi {
+                    DetailRow(label: "RSSI", value: String(format: "%.1f dBFS", rssi))
+                }
+                if let messages = aircraft.messages {
+                    DetailRow(label: "Messages", value: "\(messages)")
+                }
+                if let seen = aircraft.seen {
+                    DetailRow(label: "Last Seen", value: String(format: "%.1f sec ago", seen))
+                }
+                if let seenPos = aircraft.seenPos {
+                    DetailRow(label: "Last Position", value: String(format: "%.1f sec ago", seenPos))
+                }
+            }
+            
+            // Accuracy section
+            if aircraft.nacp != nil || aircraft.nacv != nil || aircraft.sil != nil {
+                Section("Accuracy") {
+                    if let nacp = aircraft.nacp {
+                        DetailRow(label: "NAC-P", value: "\(nacp)")
+                    }
+                    if let nacv = aircraft.nacv {
+                        DetailRow(label: "NAC-V", value: "\(nacv)")
+                    }
+                    if let sil = aircraft.sil {
+                        DetailRow(label: "SIL", value: "\(sil)")
+                    }
+                    if let silType = aircraft.silType {
+                        DetailRow(label: "SIL Type", value: silType)
+                    }
+                }
+            }
+            
+            // Emergency status
+            if aircraft.isEmergency {
+                Section("Status") {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                        Text("Emergency: \(aircraft.emergency ?? "Unknown")")
+                            .foregroundColor(.red)
+                            .font(.headline)
+                    }
+                }
+            }
+        }
+        .navigationTitle(aircraft.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// Legacy wrapper for backwards compatibility
 struct AircraftDetailView: View {
     let aircraft: Aircraft
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationStack {
-            List {
-                // Header section with map
-                Section {
-                    if let coord = aircraft.coordinate {
-                        Map(position: .constant(.region(MKCoordinateRegion(
-                            center: coord,
-                            span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
-                        )))) {
-                            Annotation(aircraft.displayName, coordinate: coord) {
-                                Image(systemName: "airplane")
-                                    .foregroundColor(.blue)
-                                    .padding(8)
-                                    .background(Circle().fill(.white))
-                                    .shadow(radius: 2)
-                            }
-                        }
-                        .frame(height: 200)
-                        .listRowInsets(EdgeInsets())
-                    }
-                }
-                
-                // Identity section
-                Section("Identity") {
-                    DetailRow(label: "ICAO", value: aircraft.hex.uppercased())
-                    if let callsign = aircraft.flight?.trimmingCharacters(in: .whitespaces) {
-                        DetailRow(label: "Callsign", value: callsign)
-                    }
-                    if let squawk = aircraft.squawk {
-                        DetailRow(label: "Squawk", value: squawk)
-                    }
-                    if let category = aircraft.category {
-                        DetailRow(label: "Category", value: category)
-                    }
-                }
-                
-                // Position section
-                if let coord = aircraft.coordinate {
-                    Section("Position") {
-                        DetailRow(label: "Latitude", value: String(format: "%.6f°", coord.latitude))
-                        DetailRow(label: "Longitude", value: String(format: "%.6f°", coord.longitude))
-                        
-                        if let alt = aircraft.altitudeFeet {
-                            DetailRow(label: "Altitude (Baro)", value: "\(alt) ft")
-                        }
-                        if let altGeom = aircraft.altitudeGeom {
-                            DetailRow(label: "Altitude (GNSS)", value: "\(Int(altGeom)) ft")
-                        }
-                        
-                        DetailRow(label: "On Ground", value: aircraft.isOnGround ? "Yes" : "No")
-                    }
-                }
-                
-                // Velocity section
-                Section("Velocity") {
-                    if let speed = aircraft.speedKnots {
-                        DetailRow(label: "Ground Speed", value: "\(speed) kts")
-                    }
-                    if let track = aircraft.track {
-                        DetailRow(label: "Track", value: String(format: "%.1f°", track))
-                    }
-                    if let vr = aircraft.verticalRate {
-                        DetailRow(label: "Vertical Rate", value: "\(vr) ft/min")
-                    }
-                    if let ias = aircraft.ias {
-                        DetailRow(label: "IAS", value: "\(ias) kts")
-                    }
-                    if let tas = aircraft.tas {
-                        DetailRow(label: "TAS", value: "\(tas) kts")
-                    }
-                }
-                
-                // Signal section
-                Section("Signal Quality") {
-                    if let rssi = aircraft.rssi {
-                        DetailRow(label: "RSSI", value: String(format: "%.1f dBFS", rssi))
-                    }
-                    if let messages = aircraft.messages {
-                        DetailRow(label: "Messages", value: "\(messages)")
-                    }
-                    if let seen = aircraft.seen {
-                        DetailRow(label: "Last Seen", value: String(format: "%.1f sec ago", seen))
-                    }
-                    if let seenPos = aircraft.seenPos {
-                        DetailRow(label: "Last Position", value: String(format: "%.1f sec ago", seenPos))
-                    }
-                }
-                
-                // Accuracy section
-                if aircraft.nacp != nil || aircraft.nacv != nil || aircraft.sil != nil {
-                    Section("Accuracy") {
-                        if let nacp = aircraft.nacp {
-                            DetailRow(label: "NAC-P", value: "\(nacp)")
-                        }
-                        if let nacv = aircraft.nacv {
-                            DetailRow(label: "NAC-V", value: "\(nacv)")
-                        }
-                        if let sil = aircraft.sil {
-                            DetailRow(label: "SIL", value: "\(sil)")
-                        }
-                        if let silType = aircraft.silType {
-                            DetailRow(label: "SIL Type", value: silType)
+            AircraftDetailContent(aircraft: aircraft)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            dismiss()
                         }
                     }
                 }
-                
-                // Emergency status
-                if aircraft.isEmergency {
-                    Section("Status") {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                            Text("Emergency: \(aircraft.emergency ?? "Unknown")")
-                                .foregroundColor(.red)
-                                .font(.headline)
-                        }
-                    }
-                }
-            }
-            .navigationTitle(aircraft.displayName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
         }
     }
 }

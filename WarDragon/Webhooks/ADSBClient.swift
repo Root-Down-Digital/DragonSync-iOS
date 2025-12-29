@@ -107,9 +107,9 @@ class ADSBClient: ObservableObject {
     }
     
     deinit {
-        // Cancel polling timer
+        // Must invalidate timer synchronously to prevent retain cycle
+        // Timer must be invalidated before object is deallocated
         pollTimer?.invalidate()
-        pollTimer = nil
     }
     
     // MARK: - Public Methods
@@ -122,37 +122,60 @@ class ADSBClient: ObservableObject {
             return
         }
         
+        // Stop any existing timer first to prevent duplicates
+        if let existingTimer = pollTimer {
+            existingTimer.invalidate()
+            pollTimer = nil
+        }
+        
+        // Don't start if already connecting or connected
         guard state == .disconnected || state == .failed(ADSBError.connectionFailed) else {
-            logger.debug("Already started")
+            logger.debug("Already started (state: \(String(describing: self.state)))")
             return
         }
         
         state = .connecting
         consecutiveErrors = 0
         
-        // Start polling timer
-        pollTimer = Timer.scheduledTimer(
-            withTimeInterval: configuration.pollInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor in
-                await self?.poll()
-            }
-        }
+        logger.info("Starting ADS-B polling (interval: \(self.configuration.pollInterval)s)")
         
-        // Poll immediately
+        // Poll immediately first
         Task {
             await poll()
+            
+            // Then start the repeating timer on main thread
+            await MainActor.run {
+                self.pollTimer = Timer.scheduledTimer(
+                    withTimeInterval: self.configuration.pollInterval,
+                    repeats: true
+                ) { [weak self] _ in
+                    Task { @MainActor in
+                        await self?.poll()
+                    }
+                }
+                
+                // Ensure timer runs even during UI updates
+                if let timer = self.pollTimer {
+                    RunLoop.main.add(timer, forMode: .common)
+                }
+                
+                self.logger.info("ADS-B polling timer started successfully")
+            }
         }
-        
-        logger.info("Started ADS-B polling (interval: \(self.configuration.pollInterval)s)")
     }
     
     /// Stop polling
     func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        // Invalidate timer on main thread to prevent retain cycles
+        if let timer = pollTimer {
+            timer.invalidate()
+            pollTimer = nil
+        }
+        
+        // Clear state
         state = .disconnected
+        consecutiveErrors = 0
+        
         logger.info("Stopped ADS-B polling")
     }
     
@@ -206,12 +229,23 @@ class ADSBClient: ObservableObject {
             consecutiveErrors += 1
             lastError = error
             
-            logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription)")
+            // Check if it's a connection error (server not running)
+            let isConnectionError = (error as NSError).code == -1004 || (error as NSError).code == -1003
             
+            if isConnectionError {
+                logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
+            } else {
+                logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription)")
+            }
+            
+            // Only stop after max consecutive errors
             if consecutiveErrors >= maxConsecutiveErrors {
                 state = .failed(error)
                 stop()
-                logger.error("Max consecutive errors reached, stopping polling")
+                logger.error("Max consecutive errors reached, stopped polling. Check that readsb is running at: \(url.absoluteString)")
+            } else if consecutiveErrors == 1 {
+                // On first error, update state but keep polling
+                state = .failed(error)
             }
         }
     }
