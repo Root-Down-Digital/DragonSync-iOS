@@ -93,7 +93,8 @@ class ADSBClient: ObservableObject {
     private var pollTimer: Timer?
     private var session: URLSession
     private var consecutiveErrors: Int = 0
-    private let maxConsecutiveErrors = 5
+    private let maxConsecutiveErrors = 10
+    private var isInitialConnection = true
     
     // MARK: - Initialization
     
@@ -108,7 +109,6 @@ class ADSBClient: ObservableObject {
     
     deinit {
         // Must invalidate timer synchronously to prevent retain cycle
-        // Timer must be invalidated before object is deallocated
         pollTimer?.invalidate()
     }
     
@@ -136,6 +136,7 @@ class ADSBClient: ObservableObject {
         
         state = .connecting
         consecutiveErrors = 0
+        isInitialConnection = true  // Reset flag when starting
         
         logger.info("Starting ADS-B polling (interval: \(self.configuration.pollInterval)s)")
         
@@ -222,6 +223,7 @@ class ADSBClient: ObservableObject {
             lastUpdate = Date()
             state = .connected
             consecutiveErrors = 0
+            isInitialConnection = false  // Successfully connected
             
             logger.debug("Polled \(filteredAircraft.count) aircraft (\(readsbResponse.messages) messages)")
             
@@ -230,10 +232,15 @@ class ADSBClient: ObservableObject {
             lastError = error
             
             // Check if it's a connection error (server not running)
-            let isConnectionError = (error as NSError).code == -1004 || (error as NSError).code == -1003
+            let isConnectionError = (error as NSError).code == -1004 || (error as NSError).code == -1003 || (error as NSError).code == -1001
             
             if isConnectionError {
-                logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
+                // During initial connection, be less noisy with warnings
+                if isInitialConnection && consecutiveErrors <= 3 {
+                    logger.debug("Initial connection attempt \(self.consecutiveErrors): server not ready yet")
+                } else {
+                    logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
+                }
             } else {
                 logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription)")
             }

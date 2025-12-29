@@ -591,7 +591,13 @@ class CoTViewModel: ObservableObject {
         // Setup MQTT and TAK clients
         setupMQTTClient()
         setupTAKClient()
-        setupADSBClient()
+        
+        // Delay ADS-B setup to give the server time to be ready
+        // This prevents timeouts when app launches before readsb is fully running
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            self.setupADSBClient()
+        }
         
         // Register for application lifecycle notifications
         NotificationCenter.default.addObserver(
