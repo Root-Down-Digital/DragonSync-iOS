@@ -62,9 +62,15 @@ struct ADSBConfiguration: Codable, Equatable {
     /// Full URL for aircraft data endpoint
     var aircraftDataURL: URL? {
         // readsb provides data at /data/aircraft.json
-        guard var components = URLComponents(string: readsbURL) else { return nil }
-        components.path = "/data/aircraft.json"
-        return components.url
+        // First, ensure the base URL is valid
+        guard let baseURL = URL(string: readsbURL) else {
+            print("DEBUG: Failed to create URL from readsbURL: '\(readsbURL)'")
+            return nil
+        }
+        
+        // Append the path to the base URL
+        let finalURL = baseURL.appendingPathComponent("data").appendingPathComponent("aircraft.json")
+        return finalURL
     }
 }
 

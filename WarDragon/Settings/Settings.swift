@@ -440,34 +440,52 @@ class Settings: ObservableObject {
     
     // MARK: - ADS-B Settings
     @AppStorage("adsbEnabled") var adsbEnabled = false {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     @AppStorage("adsbReadsbURL") var adsbReadsbURL: String = "http://localhost:8080" {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     @AppStorage("adsbPollInterval") var adsbPollInterval: Double = 2.0 {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     @AppStorage("adsbMaxDistance") var adsbMaxDistance: Double = 0 {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     @AppStorage("adsbMinAltitude") var adsbMinAltitude: Double = 0 {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     @AppStorage("adsbMaxAltitude") var adsbMaxAltitude: Double = 50000 {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
     }
     
     var adsbConfiguration: ADSBConfiguration {
         get {
             ADSBConfiguration(
                 enabled: adsbEnabled,
-                readsbURL: adsbReadsbURL,
+                readsbURL: adsbReadsbURL.trimmingCharacters(in: .whitespacesAndNewlines),
                 pollInterval: adsbPollInterval,
                 maxDistance: adsbMaxDistance > 0 ? adsbMaxDistance : nil,
                 minAltitude: adsbMinAltitude > 0 ? adsbMinAltitude : nil,
@@ -687,3 +705,8 @@ class Settings: ObservableObject {
         objectWillChange.send()
     }
 }
+// MARK: - Notification Names
+extension Notification.Name {
+    static let adsbSettingsChanged = Notification.Name("adsbSettingsChanged")
+}
+
