@@ -242,17 +242,31 @@ extension DroneEncounter {
 
 //MARK: - Storage Manager
 
+@MainActor
 class DroneStorageManager: ObservableObject {
     static let shared = DroneStorageManager()
     var cotViewModel: CoTViewModel?
+    
+    // Reference to SwiftData manager
+    private let swiftDataManager = SwiftDataStorageManager.shared
+    
+    // Published encounters dictionary for backward compatibility
     @Published private(set) var encounters: [String: DroneEncounter] = [:]
     
     init() {
+        // Migration will happen automatically in WarDragonApp
+        // Load from SwiftData or fallback to UserDefaults
         loadFromStorage()
         updateProximityPointsWithCorrectRadius()
     }
     
-    func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
+    nonisolated func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
+        Task { @MainActor in
+            await saveEncounterAsync(message, monitorStatus: monitorStatus)
+        }
+    }
+    
+    private func saveEncounterAsync(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) async {
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
         let droneId = message.uid
@@ -464,7 +478,12 @@ class DroneStorageManager: ObservableObject {
         targetEncounter.lastSeen = Date()
         
         encounters[targetId] = targetEncounter
-        saveToStorage()
+        
+        // Save to SwiftData via manager
+        swiftDataManager.saveEncounter(message, monitorStatus: monitorStatus)
+        
+        // Update in-memory cache
+        updateInMemoryCache()
         
         print("Saved encounter \(targetId) - \(targetEncounter.flightPath.count) total points")
     }
@@ -482,22 +501,17 @@ class DroneStorageManager: ObservableObject {
     }
 
     func markAsDoNotTrack(id: String) {
-        // Generate all possible ID variants
-        let baseId = id.replacingOccurrences(of: "drone-", with: "")
-        let possibleIds = [
-            id,
-            "drone-\(id)",
-            baseId,
-            "drone-\(baseId)"
-        ]
+        // Mark in SwiftData
+        swiftDataManager.markAsDoNotTrack(id: id)
         
-        // Mark all possible ID variants as "do not track"
+        // Update in-memory cache
+        let baseId = id.replacingOccurrences(of: "drone-", with: "")
+        let possibleIds = [id, "drone-\(id)", baseId, "drone-\(baseId)"]
+        
         for possibleId in possibleIds {
             if var encounter = encounters[possibleId] {
                 encounter.metadata["doNotTrack"] = "true"
                 encounters[possibleId] = encounter
-            } else {
-                print("No encounter with that ID to untrack: \(possibleIds)")
             }
         }
         print("Marked as do not track: \(possibleIds)")
@@ -506,48 +520,69 @@ class DroneStorageManager: ObservableObject {
     //MARK: - Storage Functions/CRUD
     
     func updateDroneInfo(id: String, name: String, trustStatus: DroneSignature.UserDefinedInfo.TrustStatus) {
+        // Update SwiftData
+        swiftDataManager.updateDroneInfo(id: id, name: name, trustStatus: trustStatus)
+        
+        // Update in-memory cache
         if var encounter = encounters[id] {
             encounter.metadata["customName"] = name
             encounter.metadata["trustStatus"] = trustStatus.rawValue
             encounters[id] = encounter
-            saveToStorage()
             objectWillChange.send()
-            
-            // Notify CoTViewModel to update its parsedMessages array
-            NotificationCenter.default.post(
-                name: Notification.Name("DroneInfoUpdated"),
-                object: nil,
-                userInfo: ["droneId": id, "customName": name, "trustStatus": trustStatus.rawValue]
-            )
         }
+        
+        // Notify CoTViewModel to update its parsedMessages array
+        NotificationCenter.default.post(
+            name: Notification.Name("DroneInfoUpdated"),
+            object: nil,
+            userInfo: ["droneId": id, "customName": name, "trustStatus": trustStatus.rawValue]
+        )
     }
     
     func deleteEncounter(id: String) {
+        // Delete from SwiftData
+        swiftDataManager.deleteEncounter(id: id)
+        
+        // Delete from in-memory cache
         encounters.removeValue(forKey: id)
-        UserDefaults.standard.set(try? JSONEncoder().encode(encounters), forKey: "DroneEncounters")
-        saveToStorage()
+        objectWillChange.send()
     }
     
     func deleteAllEncounters() {
+        // Delete from SwiftData
+        swiftDataManager.deleteAllEncounters()
+        
+        // Clear in-memory cache
         encounters.removeAll()
-        UserDefaults.standard.removeObject(forKey: "DroneEncounters")
-        saveToStorage() // Optional, but ensures clean state
+        objectWillChange.send()
     }
     
     func saveToStorage() {
-        if let data = try? JSONEncoder().encode(encounters) {
-            UserDefaults.standard.set(data, forKey: "DroneEncounters")
-            print(" \(encounters.count) encounters in storage")
-        } else {
-            print("Failed to encode encounters")
-        }
+        // This now delegates to SwiftData manager
+        // The SwiftData manager handles all persistence
+        // Kept for backward compatibility but does nothing
     }
     
     func loadFromStorage() {
-        if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
-           let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
-            encounters = loaded
+        // Try to load from SwiftData first
+        updateInMemoryCache()
+        
+        // Fallback to UserDefaults if SwiftData is empty (pre-migration)
+        if encounters.isEmpty {
+            if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
+               let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
+                encounters = loaded
+                print("⚠️ Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
+            }
+        } else {
+            print("✅ Loaded \(encounters.count) encounters from SwiftData")
         }
+    }
+    
+    private func updateInMemoryCache() {
+        // Get all encounters from SwiftData
+        let stored = swiftDataManager.fetchAllEncounters()
+        encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacy()) })
     }
     
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
@@ -653,66 +688,13 @@ class DroneStorageManager: ObservableObject {
     }
     
     func exportToCSV() -> String {
-        var csv = DroneEncounter.csvHeaders() + "\n"
-        
-        for encounter in encounters.values {
-            csv += encounter.toCSVRow() + "\n"
-        }
-        
-        return csv
+        // Use SwiftData manager for export
+        return swiftDataManager.exportToCSV()
     }
     
     func shareCSV(from viewController: UIViewController? = nil) {
-        // Build CSV content using our existing functions
-        var csvContent = DroneEncounter.csvHeaders() + "\n"
-        let sortedEncounters = encounters.values.sorted { $0.lastSeen > $1.lastSeen }
-        
-        for encounter in sortedEncounters {
-            csvContent += encounter.toCSVRow() + "\n"
-        }
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd_HHmmss"
-        let timestamp = dateFormatter.string(from: Date()).replacingOccurrences(of: ":", with: "_")
-        let filename = "drone_encounters_\(timestamp).csv"
-        
-        // Create a temporary file URL to store the CSV data
-        let tempDirectory = FileManager.default.temporaryDirectory
-        let fileURL = tempDirectory.appendingPathComponent(filename)
-        
-        // Write CSV data to the file
-        do {
-            try csvContent.write(to: fileURL, atomically: true, encoding: .utf8)
-        } catch {
-            print("Failed to write CSV data to file: \(error)")
-            return
-        }
-        
-        let csvDataItem = CSVDataItem(fileURL: fileURL, filename: filename)
-        
-        let activityVC = UIActivityViewController(
-            activityItems: [csvDataItem],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
-            
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                activityVC.popoverPresentationController?.sourceView = window
-                activityVC.popoverPresentationController?.sourceRect = CGRect(
-                    x: window.bounds.midX,
-                    y: window.bounds.midY,
-                    width: 0,
-                    height: 0
-                )
-                activityVC.popoverPresentationController?.permittedArrowDirections = []
-            }
-            
-            DispatchQueue.main.async {
-                window.rootViewController?.present(activityVC, animated: true)
-            }
-        }
+        // Delegate to SwiftData manager
+        swiftDataManager.shareCSV(from: viewController)
     }
     
     class CSVDataItem: NSObject, UIActivityItemSource {

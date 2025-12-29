@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import BackgroundTasks
 import UserNotifications
 
@@ -19,7 +20,66 @@ extension Font {
 @main
 struct WarDragonApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    var body: some Scene { WindowGroup { ContentView() } }
+    
+    // SwiftData model container
+    let modelContainer: ModelContainer = {
+        let schema = Schema([
+            StoredDroneEncounter.self,
+            StoredFlightPoint.self,
+            StoredSignature.self,
+            StoredADSBEncounter.self
+        ])
+        
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            allowsSave: true
+        )
+        
+        do {
+            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
+    }()
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .modelContainer(modelContainer)
+                .task {
+                    // Perform migration on first launch
+                    await performMigrationIfNeeded()
+                }
+        }
+    }
+    
+    @MainActor
+    private func performMigrationIfNeeded() async {
+        let context = modelContainer.mainContext
+        let migrationManager = DataMigrationManager.shared
+        
+        guard migrationManager.needsMigration else {
+            return
+        }
+        
+        do {
+            // Create backup first
+            let backupURL = try migrationManager.createBackup()
+            print("✅ Backup created at: \(backupURL.path)")
+            
+            // Perform migration
+            try await migrationManager.migrate(modelContext: context)
+            print("✅ Migration completed successfully")
+            
+            // Optional: Clean up after successful migration
+            // Uncomment this after verifying migration works:
+            // migrationManager.cleanupLegacyData()
+        } catch {
+            print("❌ Migration failed: \(error)")
+            // App can still run with UserDefaults fallback
+        }
+    }
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {

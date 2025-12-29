@@ -13,7 +13,7 @@ import UIKit
 import SwiftUI
 import Combine
 
-class CoTViewModel: ObservableObject {
+class CoTViewModel: ObservableObject, @unchecked Sendable {
     @Published var parsedMessages: [CoTMessage] = []
     @Published var droneSignatures: [DroneSignature] = []
     @Published var randomMacIdHistory: [String: Set<String>] = [:]
@@ -345,27 +345,10 @@ class CoTViewModel: ObservableObject {
                 return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
             }
               
-              // If no track data, calculate from last two known positions
-              guard let encounter = DroneStorageManager.shared.encounters[uid],
-                    encounter.flightPath.count >= 2,
-                    let currentPoint = encounter.flightPath.last,
-                    let previousPoint = encounter.flightPath.dropLast().last else {
-                  return 0.0
-              }
-              
-              // Calculate heading using coordinates
-              let lat1 = previousPoint.latitude * .pi / 180
-              let lon1 = previousPoint.longitude * .pi / 180
-              let lat2 = currentPoint.latitude * .pi / 180
-              let lon2 = currentPoint.longitude * .pi / 180
-              
-              let dLon = lon2 - lon1
-              let y = sin(dLon) * cos(lat2)
-              let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
-              var heading = atan2(y, x) * 180 / .pi
-              heading = (heading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
-              
-              return heading
+              // If no track data, try to calculate from last two known positions
+              // This requires synchronous access, so we'll return 0 if we can't access
+              // The proper solution is to calculate heading when message is received
+              return 0.0
         }
 
 
@@ -397,7 +380,9 @@ class CoTViewModel: ObservableObject {
         
         // Data store
         func saveToStorage() {
-            DroneStorageManager.shared.saveEncounter(self)
+            Task { @MainActor in
+                DroneStorageManager.shared.saveEncounter(self)
+            }
         }
         
         var formattedAltitude: String? {
@@ -586,17 +571,19 @@ class CoTViewModel: ObservableObject {
     init(statusViewModel: StatusViewModel, spectrumViewModel: SpectrumData.SpectrumViewModel? = nil) {
         self.statusViewModel = statusViewModel
         self.spectrumViewModel = spectrumViewModel
-        self.checkPermissions()
         
         // Setup MQTT and TAK clients
-        setupMQTTClient()
-        setupTAKClient()
-        
-        // Delay ADS-B setup to give the server time to be ready
-        // This prevents timeouts when app launches before readsb is fully running
         Task { @MainActor in
+            self.checkPermissions()
+            self.setupMQTTClient()
+            self.setupTAKClient()
+            
+            // Delay ADS-B setup to give the server time to be ready
+            // This prevents timeouts when app launches before readsb is fully running
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
             self.setupADSBClient()
+            
+            self.restoreAlertRingsFromStorage()
         }
         
         // Register for application lifecycle notifications
@@ -628,8 +615,6 @@ class CoTViewModel: ObservableObject {
             object: nil
         )
         
-        restoreAlertRingsFromStorage()
-        
         // Observe ADS-B configuration changes with debouncing to prevent rapid toggling issues
         NotificationCenter.default.publisher(for: .adsbSettingsChanged)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
@@ -654,7 +639,9 @@ class CoTViewModel: ObservableObject {
     
     @objc private func handleAppDidEnterBackground() {
         isInBackground = true
-        prepareForBackgroundExpiry()
+        Task { @MainActor in
+            prepareForBackgroundExpiry()
+        }
     }
 
     @objc private func handleAppWillEnterForeground() {
@@ -679,12 +666,11 @@ class CoTViewModel: ObservableObject {
         }
         
         // Find and update the message in parsedMessages
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            
+        Task { @MainActor in
             if let index = self.parsedMessages.firstIndex(where: { $0.uid == droneId }) {
                 // Get fresh encounter data from storage
-                if let encounter = DroneStorageManager.shared.encounters[droneId] {
+                let encounters = DroneStorageManager.shared.encounters
+                if let encounter = encounters[droneId] {
                     let updatedMessage = self.parsedMessages[index]
                     
                     // Update the metadata from storage
@@ -925,7 +911,7 @@ class CoTViewModel: ObservableObject {
         )
     }
     
-    private func isDeviceBlocked(_ message: CoTMessage) -> Bool {
+    private func isDeviceBlocked(_ message: CoTMessage) async -> Bool {
         let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
         let fpvID = message.uid.hasPrefix("fpv-") ? message.uid : "fpv-\(message.uid)"
         
@@ -938,9 +924,14 @@ class CoTViewModel: ObservableObject {
             message.uid.replacingOccurrences(of: "drone-", with: "")
         ]
         
+        // Get encounters on MainActor
+        let encounters = await MainActor.run {
+            DroneStorageManager.shared.encounters
+        }
+        
         // Check each possible ID format
         for id in possibleIds {
-            if let encounter = DroneStorageManager.shared.encounters[id],
+            if let encounter = encounters[id],
                encounter.metadata["doNotTrack"] == "true" {
                 print("BLOCKED message with ID \(id) - marked as do not track")
                 return true
@@ -948,13 +939,13 @@ class CoTViewModel: ObservableObject {
             
             // Also check the "drone-" and fpv- prefixed version
             let droneFormatId = id.hasPrefix("drone-") ? id : "drone-\(id)"
-            if let encounter = DroneStorageManager.shared.encounters[droneFormatId],
+            if let encounter = encounters[droneFormatId],
                encounter.metadata["doNotTrack"] == "true" {
                 print("BLOCKED message with drone ID \(droneFormatId) - marked as do not track")
                 return true
             }
             let fpvFormatId = id.hasPrefix("fpv-") ? id : "fpv-\(id)"
-            if let encounter = DroneStorageManager.shared.encounters[fpvID],
+            if let encounter = encounters[fpvID],
                encounter.metadata["doNotTrack"] == "true" {
                 print(" BLOCKED message with drone ID \(fpvFormatId) - marked as do not track")
                 return true
@@ -979,8 +970,8 @@ class CoTViewModel: ObservableObject {
                         // Handle FPV Detection in array
                         if let fpvDetection = messageObj["FPV Detection"] as? [String: Any] {
                             let fpvMessage = createFPVDetectionMessage(fpvDetection)
-                            DispatchQueue.main.async {
-                                self.updateMessage(fpvMessage)
+                            Task { @MainActor in
+                                await self.updateMessage(fpvMessage)
                                 if Settings.shared.webhooksEnabled {
                                     self.sendFPVWebhookNotification(for: fpvMessage)
                                 }
@@ -1011,8 +1002,8 @@ class CoTViewModel: ObservableObject {
                 // Handle single FPV Detection object
                 if let fpvDetection = jsonObject["FPV Detection"] as? [String: Any] {
                     let fpvMessage = createFPVDetectionMessage(fpvDetection)
-                    DispatchQueue.main.async {
-                        self.updateMessage(fpvMessage)
+                    Task { @MainActor in
+                        await self.updateMessage(fpvMessage)
                         if Settings.shared.webhooksEnabled {
                             self.sendFPVWebhookNotification(for: fpvMessage)
                         }
@@ -1234,104 +1225,109 @@ class CoTViewModel: ObservableObject {
     
     // Make RSSI rings for history encounters in storage
     func restoreAlertRingsFromStorage() {
-        print("Restoring alert rings from storage...")
-        
-        // Clear existing alert rings
-        alertRings.removeAll()
-        
-        // Restore alert rings for FPV and encrypted signals from storage
-        for (droneId, encounter) in DroneStorageManager.shared.encounters {
-            // Only process encounters that have proximity points
-            guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
+        Task { @MainActor in
+            print("Restoring alert rings from storage...")
             
-            // Get all proximity points with RSSI data
-            let proximityPoints = encounter.flightPath.filter {
-                $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0
+            // Clear existing alert rings
+            alertRings.removeAll()
+            
+            // Get encounters from storage
+            let encounters = DroneStorageManager.shared.encounters
+            
+            // Restore alert rings for FPV and encrypted signals from storage
+            for (droneId, encounter) in encounters {
+                // Only process encounters that have proximity points
+                guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
+                
+                // Get all proximity points with RSSI data
+                let proximityPoints = encounter.flightPath.filter {
+                    $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0
+                }
+                
+                guard !proximityPoints.isEmpty else { continue }
+                
+                // For FPV detections, show highest, lowest, and median RSSI
+                var ringsToAdd: [AlertRing] = []
+                
+                if encounter.metadata["isFPVDetection"] == "true" || droneId.hasPrefix("fpv-") {
+                    // Sort proximity points by RSSI
+                    let sortedPoints = proximityPoints.sorted {
+                        ($0.proximityRssi ?? 0) < ($1.proximityRssi ?? 0)
+                    }
+                    
+                    // Get lowest RSSI (weakest signal)
+                    if let lowestPoint = sortedPoints.first {
+                        let radius = calculateRadiusForPoint(lowestPoint, isFPV: true)
+                        ringsToAdd.append(AlertRing(
+                            droneId: "\(droneId)-lowest",
+                            centerCoordinate: CLLocationCoordinate2D(
+                                latitude: lowestPoint.latitude,
+                                longitude: lowestPoint.longitude
+                            ),
+                            radius: radius,
+                            rssi: Int(lowestPoint.proximityRssi!)
+                        ))
+                    }
+                    
+                    // Get highest RSSI (strongest signal)
+                    if sortedPoints.count > 1, let highestPoint = sortedPoints.last {
+                        let radius = calculateRadiusForPoint(highestPoint, isFPV: true)
+                        ringsToAdd.append(AlertRing(
+                            droneId: "\(droneId)-highest",
+                            centerCoordinate: CLLocationCoordinate2D(
+                                latitude: highestPoint.latitude,
+                                longitude: highestPoint.longitude
+                            ),
+                            radius: radius,
+                            rssi: Int(highestPoint.proximityRssi!)
+                        ))
+                    }
+                    
+                    // Get median RSSI (middle signal)
+                    if sortedPoints.count > 2 {
+                        let medianIndex = sortedPoints.count / 2
+                        let medianPoint = sortedPoints[medianIndex]
+                        let radius = calculateRadiusForPoint(medianPoint, isFPV: true)
+                        ringsToAdd.append(AlertRing(
+                            droneId: "\(droneId)-median",
+                            centerCoordinate: CLLocationCoordinate2D(
+                                latitude: medianPoint.latitude,
+                                longitude: medianPoint.longitude
+                            ),
+                            radius: radius,
+                            rssi: Int(medianPoint.proximityRssi!)
+                        ))
+                    }
+                    
+                    print("FPV Detection \(droneId): Found \(proximityPoints.count) detections, showing \(ringsToAdd.count) rings (highest/lowest/median)")
+                    
+                } else {
+                    // For regular drones, show up to 3 most recent proximity points
+                    let recentPoints = Array(proximityPoints.suffix(3))
+                    
+                    for point in recentPoints {
+                        let radius = calculateRadiusForPoint(point, isFPV: false)
+                        ringsToAdd.append(AlertRing(
+                            droneId: droneId,
+                            centerCoordinate: CLLocationCoordinate2D(
+                                latitude: point.latitude,
+                                longitude: point.longitude
+                            ),
+                            radius: radius,
+                            rssi: Int(point.proximityRssi!)
+                        ))
+                    }
+                }
+                
+                // Add rings to the collection
+                for ring in ringsToAdd {
+                    alertRings.append(ring)
+                    print("Restored alert ring for \(ring.droneId): radius \(Int(ring.radius))m, RSSI: \(ring.rssi)")
+                }
             }
             
-            guard !proximityPoints.isEmpty else { continue }
-            
-            // For FPV detections, show highest, lowest, and median RSSI
-            var ringsToAdd: [AlertRing] = []
-            
-            if encounter.metadata["isFPVDetection"] == "true" || droneId.hasPrefix("fpv-") {
-                // Sort proximity points by RSSI
-                let sortedPoints = proximityPoints.sorted {
-                    ($0.proximityRssi ?? 0) < ($1.proximityRssi ?? 0)
-                }
-                
-                // Get lowest RSSI (weakest signal)
-                if let lowestPoint = sortedPoints.first {
-                    let radius = calculateRadiusForPoint(lowestPoint, isFPV: true)
-                    ringsToAdd.append(AlertRing(
-                        droneId: "\(droneId)-lowest",
-                        centerCoordinate: CLLocationCoordinate2D(
-                            latitude: lowestPoint.latitude,
-                            longitude: lowestPoint.longitude
-                        ),
-                        radius: radius,
-                        rssi: Int(lowestPoint.proximityRssi!)
-                    ))
-                }
-                
-                // Get highest RSSI (strongest signal)
-                if sortedPoints.count > 1, let highestPoint = sortedPoints.last {
-                    let radius = calculateRadiusForPoint(highestPoint, isFPV: true)
-                    ringsToAdd.append(AlertRing(
-                        droneId: "\(droneId)-highest",
-                        centerCoordinate: CLLocationCoordinate2D(
-                            latitude: highestPoint.latitude,
-                            longitude: highestPoint.longitude
-                        ),
-                        radius: radius,
-                        rssi: Int(highestPoint.proximityRssi!)
-                    ))
-                }
-                
-                // Get median RSSI (middle signal)
-                if sortedPoints.count > 2 {
-                    let medianIndex = sortedPoints.count / 2
-                    let medianPoint = sortedPoints[medianIndex]
-                    let radius = calculateRadiusForPoint(medianPoint, isFPV: true)
-                    ringsToAdd.append(AlertRing(
-                        droneId: "\(droneId)-median",
-                        centerCoordinate: CLLocationCoordinate2D(
-                            latitude: medianPoint.latitude,
-                            longitude: medianPoint.longitude
-                        ),
-                        radius: radius,
-                        rssi: Int(medianPoint.proximityRssi!)
-                    ))
-                }
-                
-                print("FPV Detection \(droneId): Found \(proximityPoints.count) detections, showing \(ringsToAdd.count) rings (highest/lowest/median)")
-                
-            } else {
-                // For regular drones, show up to 3 most recent proximity points
-                let recentPoints = Array(proximityPoints.suffix(3))
-                
-                for point in recentPoints {
-                    let radius = calculateRadiusForPoint(point, isFPV: false)
-                    ringsToAdd.append(AlertRing(
-                        droneId: droneId,
-                        centerCoordinate: CLLocationCoordinate2D(
-                            latitude: point.latitude,
-                            longitude: point.longitude
-                        ),
-                        radius: radius,
-                        rssi: Int(point.proximityRssi!)
-                    ))
-                }
-            }
-            
-            // Add rings to the collection
-            for ring in ringsToAdd {
-                alertRings.append(ring)
-                print("Restored alert ring for \(ring.droneId): radius \(Int(ring.radius))m, RSSI: \(ring.rssi)")
-            }
+            print("Restored \(alertRings.count) alert rings from storage")
         }
-        
-        print("Restored \(alertRings.count) alert rings from storage")
     }
 
     // MARK: - Helper function to calculate radius for a proximity point
@@ -1480,14 +1476,14 @@ class CoTViewModel: ObservableObject {
         }
         
         // Update UI with appropriate message type
-        DispatchQueue.main.async {
+        Task { @MainActor in
             if message.contains("<remarks>CPU Usage:"),
                let statusMessage = parser.statusMessage {
                 // Status message path
                 self.updateStatusMessage(statusMessage)
             } else if let cotMessage = parser.cotMessage {
                 // Drone message path
-                self.updateMessage(cotMessage)
+                await self.updateMessage(cotMessage)
             }
         }
     }
@@ -1516,26 +1512,26 @@ class CoTViewModel: ObservableObject {
             
             // Adaptive throttling based on app state
             let now = Date()
-            let throttleInterval = isInBackground ?
+            let throttleInterval = self.isInBackground ?
                 Settings.shared.backgroundMessageIntervalSeconds :
                 Settings.shared.messageProcessingIntervalSeconds
                 
             if now.timeIntervalSince(self.lastProcessTime) < throttleInterval {
                 // In background mode, buffer messages instead of dropping them
-                if isInBackground {
-                    backgroundBufferLock.lock()
-                    backgroundMessageBuffer.append(data)
+                if self.isInBackground {
+                    self.backgroundBufferLock.lock()
+                    self.backgroundMessageBuffer.append(data)
                     // Keep only last 50 messages to prevent memory issues
-                    if backgroundMessageBuffer.count > 50 {
-                        backgroundMessageBuffer.removeFirst(backgroundMessageBuffer.count - 50)
+                    if self.backgroundMessageBuffer.count > 50 {
+                        self.backgroundMessageBuffer.removeFirst(self.backgroundMessageBuffer.count - 50)
                     }
-                    backgroundBufferLock.unlock()
+                    self.backgroundBufferLock.unlock()
                 }
                 return
             }
             self.lastProcessTime = now
             
-            processIncomingMessage(data)
+            self.processIncomingMessage(data)
         }
     }
 
@@ -1560,6 +1556,7 @@ class CoTViewModel: ObservableObject {
     }
     
     // Check connection status without heavy processing
+    @MainActor
     func checkConnectionStatus() {
         // Just verify that connections are still responsive
         if !isListeningCot && Settings.shared.isListening {
@@ -1567,6 +1564,7 @@ class CoTViewModel: ObservableObject {
         }
     }
     
+    @MainActor
     func prepareForBackgroundExpiry() {
         // Record state for potential resumption
         let wasListening = isListeningCot
@@ -1603,14 +1601,16 @@ class CoTViewModel: ObservableObject {
             backgroundMaintenanceTimer?.invalidate()
             
             // Set a timer to periodically check status
-            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] timer in
-                guard let self = self, self.isListeningCot else {
-                    timer.invalidate()
-                    self?.backgroundMaintenanceTimer = nil
-                    return
+            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { @Sendable [weak self] timer in
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.isListeningCot else {
+                        timer.invalidate()
+                        self?.backgroundMaintenanceTimer = nil
+                        return
+                    }
+                    print("Background maintenance check: \(Date())")
+                    self.verifyZMQSubscription()
                 }
-                print("Background maintenance check: \(Date())")
-                self.verifyZMQSubscription()
             }
         }
         print("WarDragon background preparation complete")
@@ -1672,7 +1672,7 @@ class CoTViewModel: ObservableObject {
         }
     }
     
-    private func updateMessage(_ message: CoTMessage) {
+    private func updateMessage(_ message: CoTMessage) async {
         
         // Uncomment this to disallow zero-coordinate entries
         //        guard let coordinate = message.coordinate,
@@ -1681,132 +1681,132 @@ class CoTViewModel: ObservableObject {
         //        }
         
         
-        if isDeviceBlocked(message) {
+        if await isDeviceBlocked(message) {
             print("UNTRACKED: Dropping message for \(message.uid)")
             return
         }
         
         // Special handling for FPV messages - don't convert to drone- format
-            if message.isFPVDetection {
-                DispatchQueue.main.async {
-                    // Check if this is a new FPV detection
-                    if let existingIndex = self.parsedMessages.firstIndex(where: { $0.uid == message.uid }) {
-                        var existingMessage = self.parsedMessages[existingIndex]
-                        
-                        // Update FPV fields
-                        existingMessage.fpvRSSI = message.fpvRSSI
-                        existingMessage.rssi = message.rssi
-                        existingMessage.fpvTimestamp = message.fpvTimestamp
-                        existingMessage.lastUpdated = Date()
-                        existingMessage.signalSources = message.signalSources
-                        
-                        self.parsedMessages[existingIndex] = existingMessage
-                        self.updateAlertRing(for: existingMessage)
-                    } else {
-                        // New FPV detection
-                        var fpvMessage = message
-                        fpvMessage.lastUpdated = Date()
-                        self.parsedMessages.append(fpvMessage)
-                        self.updateAlertRing(for: fpvMessage)
-                        self.sendNotification(for: fpvMessage)
-                        
-                        // Publish to MQTT and TAK
-                        self.publishDroneToMQTT(fpvMessage)
-                        if let cotXML = self.generateCoTXML(from: fpvMessage) {
-                            self.publishCoTToTAK(cotXML)
-                        }
-                    }
-                    
-                    // Save to storage
-                    let currentMonitorStatus = self.statusViewModel.statusMessages.last
-                    DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+        if message.isFPVDetection {
+            // Check if this is a new FPV detection
+            if let existingIndex = self.parsedMessages.firstIndex(where: { $0.uid == message.uid }) {
+                var existingMessage = self.parsedMessages[existingIndex]
+                
+                // Update FPV fields
+                existingMessage.fpvRSSI = message.fpvRSSI
+                existingMessage.rssi = message.rssi
+                existingMessage.fpvTimestamp = message.fpvTimestamp
+                existingMessage.lastUpdated = Date()
+                existingMessage.signalSources = message.signalSources
+                
+                self.parsedMessages[existingIndex] = existingMessage
+                self.updateAlertRing(for: existingMessage)
+            } else {
+                // New FPV detection
+                var fpvMessage = message
+                fpvMessage.lastUpdated = Date()
+                self.parsedMessages.append(fpvMessage)
+                self.updateAlertRing(for: fpvMessage)
+                self.sendNotification(for: fpvMessage)
+                
+                // Publish to MQTT and TAK
+                self.publishDroneToMQTT(fpvMessage)
+                if let cotXML = self.generateCoTXML(from: fpvMessage) {
+                    self.publishCoTToTAK(cotXML)
                 }
-                return
             }
+            
+            // Save to storage
+            Task { @MainActor in
+                let currentMonitorStatus = self.statusViewModel.statusMessages.last
+                DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+            }
+            
+            return
+        }
             
             // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
             let extractedId = extractNumericId(from: message.uid)
         
         // Check if this is a pilot or home message that should be associated with a drone
         if message.uid.hasPrefix("pilot-") {
-            updatePilotLocation(for: extractedId, message: message)
+            await updatePilotLocation(for: extractedId, message: message)
             return // Don't create lone message for pilot or home
         }
         
         if message.uid.hasPrefix("home-") {
-            updateHomeLocation(for: extractedId, message: message)
+            await updateHomeLocation(for: extractedId, message: message)
             return
         }
-
-        DispatchQueue.main.async {
-            
-            let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
-            var mac: String? = nil
-            if let basicIdMac = (message.rawMessage["Basic ID"] as? [String: Any])?["MAC"] as? String {
-                mac = basicIdMac
-            } else if let auxAdvMac = (message.rawMessage["AUX_ADV_IND"] as? [String: Any])?["addr"] as? String {
-                mac = auxAdvMac
-            } else {
-                mac = message.mac
-            }
-            
-            let trackSpeed = message.trackSpeed ?? "0.0"
-            let trackCourse = message.trackCourse ?? "0.0"
-            
-            // Prepare updated message
-            var updatedMessage = message
-            updatedMessage.uid = droneId
-            
-            // CoT XML Track data
-            updatedMessage.trackSpeed = trackSpeed
-            updatedMessage.trackCourse = trackCourse
-            
-            // Update alert ring if zero coordinate drone
-            self.updateAlertRing(for: updatedMessage)
-            
-            // Determine signal type and update sources
-            _ = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
-            
-            // Handle CAA and location mapping
-            if let mac = mac, !mac.isEmpty {
-                // Update the MAC-to-CAA mapping without changing the primary ID
-                if message.idType.contains("CAA") {
-                    if let mac = message.mac {
-                        // Find existing message with same MAC and update its CAA registration
-                        if let existingIndex = self.parsedMessages.firstIndex(where: { $0.mac == mac }) {
-                            var existingMessage = self.parsedMessages[existingIndex]
-                            existingMessage.caaRegistration = message.caaRegistration ?? message.id
-                            // Keep the original ID type if it's a serial number
-                            if existingMessage.idType.contains("Serial") {
-                                // Don't overwrite serial number ID type with CAA
-                                existingMessage.idType = existingMessage.idType
-                            } else {
-                                existingMessage.idType = "CAA Assigned Registration ID"
-                            }
-                            self.parsedMessages[existingIndex] = existingMessage
-                            print("Updated CAA registration for existing drone with MAC: \(mac)")
+        
+        let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
+        var mac: String? = nil
+        if let basicIdMac = (message.rawMessage["Basic ID"] as? [String: Any])?["MAC"] as? String {
+            mac = basicIdMac
+        } else if let auxAdvMac = (message.rawMessage["AUX_ADV_IND"] as? [String: Any])?["addr"] as? String {
+            mac = auxAdvMac
+        } else {
+            mac = message.mac
+        }
+        
+        let trackSpeed = message.trackSpeed ?? "0.0"
+        let trackCourse = message.trackCourse ?? "0.0"
+        
+        // Prepare updated message
+        var updatedMessage = message
+        updatedMessage.uid = droneId
+        
+        // CoT XML Track data
+        updatedMessage.trackSpeed = trackSpeed
+        updatedMessage.trackCourse = trackCourse
+        
+        // Update alert ring if zero coordinate drone
+        self.updateAlertRing(for: updatedMessage)
+        
+        // Determine signal type and update sources
+        _ = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
+        
+        // Handle CAA and location mapping
+        if let mac = mac, !mac.isEmpty {
+            // Update the MAC-to-CAA mapping without changing the primary ID
+            if message.idType.contains("CAA") {
+                if let mac = message.mac {
+                    // Find existing message with same MAC and update its CAA registration
+                    if let existingIndex = self.parsedMessages.firstIndex(where: { $0.mac == mac }) {
+                        var existingMessage = self.parsedMessages[existingIndex]
+                        existingMessage.caaRegistration = message.caaRegistration ?? message.id
+                        // Keep the original ID type if it's a serial number
+                        if !existingMessage.idType.contains("Serial") {
+                            existingMessage.idType = "CAA Assigned Registration ID"
                         }
+                        self.parsedMessages[existingIndex] = existingMessage
+                        print("Updated CAA registration for existing drone with MAC: \(mac)")
                     }
-                    // Don't process CAA as a standalone message
-                    return
                 }
-            }
-            
-            // Generate signature and handle spoof detection
-            guard let signature = self.signatureGenerator.createSignature(from: updatedMessage.toDictionary()) else {
-                if message.idType.contains("CAA") {
-                    self.handleCAAMessage(updatedMessage)
-                }
+                // Don't process CAA as a standalone message
                 return
             }
+        }
+        
+        // Generate signature and handle spoof detection
+        guard let signature = self.signatureGenerator.createSignature(from: updatedMessage.toDictionary()) else {
+            if message.idType.contains("CAA") {
+                self.handleCAAMessage(updatedMessage)
+            }
+            return
+        }
+        
+        // Update tracking data
+        self.updateDroneSignaturesAndEncounters(signature, message: updatedMessage)
+        self.updateMACHistory(droneId: droneId, mac: mac)
+        
+        // Spoof detection
+        if Settings.shared.spoofDetectionEnabled {
+            let monitorStatus = await MainActor.run {
+                self.statusViewModel.statusMessages.last
+            }
             
-            // Update tracking data
-            self.updateDroneSignaturesAndEncounters(signature, message: updatedMessage)
-            self.updateMACHistory(droneId: droneId, mac: mac)
-            
-            // Spoof detection
-            if Settings.shared.spoofDetectionEnabled,
-               let monitorStatus = self.statusViewModel.statusMessages.last {
+            if let monitorStatus = monitorStatus {
                 if let spoofResult = self.signatureGenerator.detectSpoof(signature, fromMonitor: monitorStatus) {
                     updatedMessage.isSpoofed = spoofResult.isSpoofed
                     updatedMessage.spoofingDetails = spoofResult
@@ -1818,10 +1818,10 @@ class CoTViewModel: ObservableObject {
                 )
                 self.signatureGenerator.updateMonitorLocation(monitorLoc)
             }
-            
-            // Final update
-            self.updateParsedMessages(updatedMessage: updatedMessage, signature: signature)
         }
+        
+        // Final update
+        self.updateParsedMessages(updatedMessage: updatedMessage, signature: signature)
     }
     
     private func extractNumericId(from uid: String) -> String {
@@ -1831,38 +1831,42 @@ class CoTViewModel: ObservableObject {
         return uid
     }
     
-    private func updatePilotLocation(for droneId: String, message: CoTMessage) {
-        let targetUid = "drone-\(droneId)"
-        
-        // Find existing drone message and update pilot location
-        if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
-            var updatedMessage = parsedMessages[index]
-            updatedMessage.pilotLat = message.lat
-            updatedMessage.pilotLon = message.lon
-            parsedMessages[index] = updatedMessage
+    private func updatePilotLocation(for droneId: String, message: CoTMessage) async {
+        await MainActor.run {
+            let targetUid = "drone-\(droneId)"
             
-            // Also update in storage
+            // Find existing drone message and update pilot location
+            if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
+                var updatedMessage = parsedMessages[index]
+                updatedMessage.pilotLat = message.lat
+                updatedMessage.pilotLon = message.lon
+                parsedMessages[index] = updatedMessage
+            }
+            
+            // Also update in storage (MainActor isolated)
             DroneStorageManager.shared.updatePilotLocation(
-                droneId: targetUid,
+                droneId: "drone-\(droneId)",
                 latitude: Double(message.lat) ?? 0.0,
                 longitude: Double(message.lon) ?? 0.0
             )
         }
     }
     
-    private func updateHomeLocation(for droneId: String, message: CoTMessage) {
-        let targetUid = "drone-\(droneId)"
-        
-        // Find existing drone message and update home location
-        if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
-            var updatedMessage = parsedMessages[index]
-            updatedMessage.homeLat = message.lat
-            updatedMessage.homeLon = message.lon
-            parsedMessages[index] = updatedMessage
+    private func updateHomeLocation(for droneId: String, message: CoTMessage) async {
+        await MainActor.run {
+            let targetUid = "drone-\(droneId)"
             
-            // Also update in storage
+            // Find existing drone message and update home location
+            if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
+                var updatedMessage = parsedMessages[index]
+                updatedMessage.homeLat = message.lat
+                updatedMessage.homeLon = message.lon
+                parsedMessages[index] = updatedMessage
+            }
+            
+            // Also update in storage (MainActor isolated)
             DroneStorageManager.shared.updateHomeLocation(
-                droneId: targetUid,
+                droneId: "drone-\(droneId)",
                 latitude: Double(message.lat) ?? 0.0,
                 longitude: Double(message.lon) ?? 0.0
             )
@@ -2021,25 +2025,27 @@ class CoTViewModel: ObservableObject {
         }
         
         // Update encounters storage with enhanced history preservation
-        let encounters = DroneStorageManager.shared.encounters
-        let currentMonitorStatus = self.statusViewModel.statusMessages.last
-        
-        // Save with complete history preservation
-        DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
-        
-        if encounters[signature.primaryId.id] != nil {
-            let existing = encounters[signature.primaryId.id]!
-            let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
-            existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
-            existing.flightPath.last?.altitude != signature.position.altitude
+        Task { @MainActor in
+            let encounters = DroneStorageManager.shared.encounters
+            let currentMonitorStatus = self.statusViewModel.statusMessages.last
             
-            if hasNewPosition {
-                print("📍 Added new position to existing encounter: \(signature.primaryId.id)")
+            // Save with complete history preservation
+            DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+            
+            if encounters[signature.primaryId.id] != nil {
+                let existing = encounters[signature.primaryId.id]!
+                let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
+                existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
+                existing.flightPath.last?.altitude != signature.position.altitude
+                
+                if hasNewPosition {
+                    print("📍 Added new position to existing encounter: \(signature.primaryId.id)")
+                } else {
+                    print("📍 Updated existing encounter data: \(signature.primaryId.id)")
+                }
             } else {
-                print("📍 Updated existing encounter data: \(signature.primaryId.id)")
+                print("📍 Created new encounter: \(signature.primaryId.id)")
             }
-        } else {
-            print("📍 Created new encounter: \(signature.primaryId.id)")
         }
     }
     
@@ -2050,57 +2056,59 @@ class CoTViewModel: ObservableObject {
         // Check if we have a drone with zero coordinates but valid RSSI
         if (latValue == 0 && lonValue == 0) && message.rssi != nil && message.rssi != 0 {
             
-            var monitorLocation: CLLocationCoordinate2D?
-            
             // First try status message location
-            if let monitorStatus = statusViewModel.statusMessages.last {
-                let statusLat = monitorStatus.gpsData.latitude
-                let statusLon = monitorStatus.gpsData.longitude
+            Task { @MainActor in
+                var monitorLocation: CLLocationCoordinate2D?
                 
-                // If status has valid coordinates, use them
-                if statusLat != 0.0 || statusLon != 0.0 {
-                    monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
-                }
-            }
-            
-            // If no valid status location, use user location directly
-            if monitorLocation == nil,
-               let userLocation = LocationManager.shared.userLocation {
-                monitorLocation = userLocation.coordinate
-            }
-            
-            // Create alert ring with valid monitor location
-            if let location = monitorLocation {
-                let distance: Double
-                let rssiValue = Double(message.rssi!)
-                
-                // Handle different RSSI scales for FPV vs regular drones
-                if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
-                    // FPV uses higher signal values (1000-3500 range) from raw RX5808 SPI RSSI pin
-                    distance = calculateFPVDistance(fpvRSSI)
-                } else if rssiValue > 1000 {
-                    // MDN-style values
-                    distance = calculateFPVDistance(rssiValue)
-                } else {
-                    // Standard dBm values
-                    let signatureGenerator = DroneSignatureGenerator()
-                    distance = signatureGenerator.calculateDistance(rssiValue)
+                if let monitorStatus = self.statusViewModel.statusMessages.last {
+                    let statusLat = monitorStatus.gpsData.latitude
+                    let statusLon = monitorStatus.gpsData.longitude
+                    
+                    // If status has valid coordinates, use them
+                    if statusLat != 0.0 || statusLon != 0.0 {
+                        monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
+                    }
                 }
                 
-                if let index = alertRings.firstIndex(where: { $0.droneId == message.uid }) {
-                    alertRings[index] = AlertRing(
-                        droneId: message.uid,
-                        centerCoordinate: location,
-                        radius: distance,
-                        rssi: message.rssi!
-                    )
-                } else {
-                    alertRings.append(AlertRing(
-                        droneId: message.uid,
-                        centerCoordinate: location,
-                        radius: distance,
-                        rssi: message.rssi!
-                    ))
+                // If no valid status location, use user location directly
+                if monitorLocation == nil,
+                   let userLocation = LocationManager.shared.userLocation {
+                    monitorLocation = userLocation.coordinate
+                }
+                
+                // Create alert ring with valid monitor location
+                if let location = monitorLocation {
+                    let distance: Double
+                    let rssiValue = Double(message.rssi!)
+                    
+                    // Handle different RSSI scales for FPV vs regular drones
+                    if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                        // FPV uses higher signal values (1000-3500 range) from raw RX5808 SPI RSSI pin
+                        distance = self.calculateFPVDistance(fpvRSSI)
+                    } else if rssiValue > 1000 {
+                        // MDN-style values
+                        distance = self.calculateFPVDistance(rssiValue)
+                    } else {
+                        // Standard dBm values
+                        let signatureGenerator = DroneSignatureGenerator()
+                        distance = signatureGenerator.calculateDistance(rssiValue)
+                    }
+                    
+                    if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
+                        self.alertRings[index] = AlertRing(
+                            droneId: message.uid,
+                            centerCoordinate: location,
+                            radius: distance,
+                            rssi: message.rssi!
+                        )
+                    } else {
+                        self.alertRings.append(AlertRing(
+                            droneId: message.uid,
+                            centerCoordinate: location,
+                            radius: distance,
+                            rssi: message.rssi!
+                        ))
+                    }
                 }
             }
         } else {
@@ -2139,30 +2147,32 @@ class CoTViewModel: ObservableObject {
         }
         
         // Create a new alert ring for the consolidated message
-        if let monitorStatus = statusViewModel.statusMessages.last {
-            let monitorLocation = CLLocationCoordinate2D(
-                latitude: monitorStatus.gpsData.latitude,
-                longitude: monitorStatus.gpsData.longitude
-            )
-            
-            // Calculate radius based on strongest signal
-            let rssiValue = Double(consolidated.rssi ?? 0)
-            let distance: Double
-            
-            if rssiValue > 1000 {
-                distance = calculateFPVDistance(rssiValue)
-            } else {
-                distance = DroneSignatureGenerator().calculateDistance(rssiValue)
+        Task { @MainActor in
+            if let monitorStatus = self.statusViewModel.statusMessages.last {
+                let monitorLocation = CLLocationCoordinate2D(
+                    latitude: monitorStatus.gpsData.latitude,
+                    longitude: monitorStatus.gpsData.longitude
+                )
+                
+                // Calculate radius based on strongest signal
+                let rssiValue = Double(consolidated.rssi ?? 0)
+                let distance: Double
+                
+                if rssiValue > 1000 {
+                    distance = self.calculateFPVDistance(rssiValue)
+                } else {
+                    distance = DroneSignatureGenerator().calculateDistance(rssiValue)
+                }
+                
+                let newRing = AlertRing(
+                    droneId: consolidated.uid,
+                    centerCoordinate: monitorLocation,
+                    radius: distance,
+                    rssi: consolidated.rssi ?? 0
+                )
+                
+                self.alertRings.append(newRing)
             }
-            
-            let newRing = AlertRing(
-                droneId: consolidated.uid,
-                centerCoordinate: monitorLocation,
-                radius: distance,
-                rssi: consolidated.rssi ?? 0
-            )
-            
-            alertRings.append(newRing)
         }
     }
     
@@ -2351,7 +2361,9 @@ class CoTViewModel: ObservableObject {
     private func sendStatusNotification(for message: StatusViewModel.StatusMessage) {
         guard Settings.shared.notificationsEnabled else { return }
         // Don't send here - let StatusViewModel handle it through checkSystemThresholds
-        statusViewModel.checkSystemThresholds()
+        Task { @MainActor in
+            statusViewModel.checkSystemThresholds()
+        }
     }
     
     func stopListening() {
@@ -2751,9 +2763,10 @@ extension CoTViewModel {
     func publishSystemStatusToMQTT() {
         guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
         
-        Task {
+        Task { @MainActor in
+            let systemMessage = createMQTTSystemMessage(dronesTracked: droneSignatures.count)
+            
             do {
-                let systemMessage = createMQTTSystemMessage(dronesTracked: droneSignatures.count)
                 try await mqttClient.publishSystemStatus(systemMessage)
             } catch {
                 print("MQTT system status failed: \(error)")
@@ -2762,6 +2775,7 @@ extension CoTViewModel {
     }
     
     /// Create MQTT system status message
+    @MainActor
     private func createMQTTSystemMessage(dronesTracked: Int) -> MQTTSystemMessage {
         // Get latest status message if available
         guard let latestStatus = statusViewModel.statusMessages.last else {
@@ -2949,6 +2963,7 @@ extension CoTViewModel {
     }
     
     /// Handle aircraft data updates
+    @MainActor
     private func handleAircraftUpdate(_ aircraft: [Aircraft]) {
         // Already on main thread from .receive(on: DispatchQueue.main)
         aircraftTracks = aircraft
@@ -2987,21 +3002,23 @@ extension CoTViewModel {
     
     /// Check for nearby aircraft and send notifications
     private func checkNearbyAircraft(_ aircraft: [Aircraft]) {
-        guard let userLocation = LocationManager.shared.userLocation else { return }
-        
-        let proximityThreshold: Double = 5000 // 5km in meters
-        let minAltitude: Double = 1000 // Only alert for low-flying aircraft below 1000ft
-        
-        for ac in aircraft {
-            guard let coord = ac.coordinate,
-                  let altitude = ac.altitudeFeet,
-                  altitude < Int(minAltitude) else { continue }
+        Task { @MainActor in
+            guard let userLocation = LocationManager.shared.userLocation else { return }
             
-            let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-            let distance = userLocation.distance(from: aircraftLocation)
+            let proximityThreshold: Double = 5000 // 5km in meters
+            let minAltitude: Double = 1000 // Only alert for low-flying aircraft below 1000ft
             
-            if distance <= proximityThreshold {
-                sendAircraftProximityNotification(for: ac, distance: distance)
+            for ac in aircraft {
+                guard let coord = ac.coordinate,
+                      let altitude = ac.altitudeFeet,
+                      altitude < Int(minAltitude) else { continue }
+                
+                let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                let distance = userLocation.distance(from: aircraftLocation)
+                
+                if distance <= proximityThreshold {
+                    self.sendAircraftProximityNotification(for: ac, distance: distance)
+                }
             }
         }
     }

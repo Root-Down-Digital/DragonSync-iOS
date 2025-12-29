@@ -169,7 +169,7 @@ enum MulticastDrain {
                     NotificationCenter.default.post(name: .init("BackgroundMulticastData"), object: d)
                 }
             }
-            g.start(queue: .global(qos: .utility))
+            g.start(queue: DispatchQueue.global(qos: .utility))
             grp = g
         } catch { }
     }

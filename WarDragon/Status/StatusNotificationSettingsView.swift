@@ -9,7 +9,7 @@
 import SwiftUI
 
 struct StatusNotificationSettingsView: View {
-    @StateObject private var settings = Settings.shared
+    @ObservedObject private var settings = Settings.shared
     
     var body: some View {
         Form {

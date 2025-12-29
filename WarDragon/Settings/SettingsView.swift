@@ -26,7 +26,7 @@ struct SettingsView: View {
                 
                 Picker("Mode", selection: .init(
                     get: { settings.connectionMode },
-                    set: { settings.updateConnection(mode: $0) }
+                    set: { (mode: ConnectionMode) in settings.updateConnection(mode: mode) }
                 )) {
                     ForEach(ConnectionMode.allCases, id: \.self) { mode in
                         HStack {

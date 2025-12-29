@@ -28,6 +28,12 @@ enum ConnectionMode: String, Codable, CaseIterable {
 class Settings: ObservableObject {
     static let shared = Settings()
     
+    private init() {
+        // Migrate sensitive data from UserDefaults to Keychain on first launch
+        KeychainManager.migrateSensitiveData()
+        UIApplication.shared.isIdleTimerDisabled = keepScreenOn
+    }
+    
     
     
     @AppStorage("connectionMode") var connectionMode: ConnectionMode = .multicast {
@@ -294,9 +300,19 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
     
-    // P12 password stored in UserDefaults (not ideal but matches webhook pattern)
-    @AppStorage("takP12Password") private var takP12Password: String = "" {
-        didSet { objectWillChange.send() }
+    // P12 password stored securely in Keychain
+    var takP12Password: String {
+        get {
+            (try? KeychainManager.shared.loadString(forKey: "takP12Password")) ?? ""
+        }
+        set {
+            if newValue.isEmpty {
+                try? KeychainManager.shared.delete(key: "takP12Password")
+            } else {
+                try? KeychainManager.shared.save(newValue, forKey: "takP12Password")
+            }
+            objectWillChange.send()
+        }
     }
     
     var takConfiguration: TAKConfiguration {
@@ -353,8 +369,19 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
     
-    @AppStorage("mqttPassword") var mqttPassword: String = "" {
-        didSet { objectWillChange.send() }
+    // MQTT password stored securely in Keychain
+    var mqttPassword: String {
+        get {
+            (try? KeychainManager.shared.loadString(forKey: "mqttPassword")) ?? ""
+        }
+        set {
+            if newValue.isEmpty {
+                try? KeychainManager.shared.delete(key: "mqttPassword")
+            } else {
+                try? KeychainManager.shared.save(newValue, forKey: "mqttPassword")
+            }
+            objectWillChange.send()
+        }
     }
     
     @AppStorage("mqttBaseTopic") var mqttBaseTopic: String = "wardragon" {
@@ -581,11 +608,6 @@ class Settings: ObservableObject {
     }
     
     //MARK: - Connection
-    
-    private init() {
-        toggleListening(false)
-        UIApplication.shared.isIdleTimerDisabled = keepScreenOn
-    }
     
     func updateConnection(mode: ConnectionMode, host: String? = nil, isZmqHost: Bool = false) {
         if let host = host {

@@ -6,11 +6,13 @@
 //
 
 import SwiftUI
+import SwiftData
 import Network
 import UserNotifications
 import CoreLocation
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var statusViewModel = StatusViewModel()
     @StateObject private var spectrumViewModel = SpectrumData.SpectrumViewModel()
     @StateObject private var droneStorage = DroneStorageManager.shared
@@ -29,7 +31,6 @@ struct ContentView: View {
         case both
     }
     
-    
     init() {
         // Create temporary non-StateObject instances for initialization
         let statusVM = StatusViewModel()
@@ -39,26 +40,6 @@ struct ContentView: View {
         self._statusViewModel = StateObject(wrappedValue: statusVM)
         self._cotViewModel = StateObject(wrappedValue: cotVM)
         self._selectedTab = State(initialValue: Settings.shared.isListening ? 0 : 3)
-        
-        
-        // Add lightweight connection check listener
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("LightweightConnectionCheck"),
-            object: nil,
-            queue: .main
-        ) { [weak cotVM] _ in
-            cotVM?.checkConnectionStatus()
-        }
-        
-        // Add notification for background task expiry
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("BackgroundTaskExpiring"),
-            object: nil,
-            queue: .main
-        ) { [weak cotVM] _ in
-            // Perform urgent cleanup when background task is about to expire
-            cotVM?.prepareForBackgroundExpiry()
-        }
     }
     
 
@@ -86,7 +67,37 @@ struct ContentView: View {
             updateDetectionMode()
         }
         .onAppear {
+            // Inject ModelContext into storage managers
+            SwiftDataStorageManager.shared.modelContext = modelContext
+            statusViewModel.modelContext = modelContext
+            
+            // Load data from SwiftData
+            statusViewModel.loadADSBEncounters()
+            
             updateDetectionMode()
+            
+            // Setup notification observers for background connection management
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("LightweightConnectionCheck"),
+                object: nil,
+                queue: .main
+            ) { [weak cotViewModel] _ in
+                guard let cotViewModel = cotViewModel else { return }
+                MainActor.assumeIsolated {
+                    cotViewModel.checkConnectionStatus()
+                }
+            }
+            
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("BackgroundTaskExpiring"),
+                object: nil,
+                queue: .main
+            ) { [weak cotViewModel] _ in
+                guard let cotViewModel = cotViewModel else { return }
+                MainActor.assumeIsolated {
+                    cotViewModel.prepareForBackgroundExpiry()
+                }
+            }
         }
     }
     

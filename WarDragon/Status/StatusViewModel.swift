@@ -8,13 +8,18 @@
 import Foundation
 import CoreLocation
 import SwiftUI
+import SwiftData
 
+@MainActor
 class StatusViewModel: ObservableObject {
     @Published var statusMessages: [StatusMessage] = []
     @Published var lastStatusMessageReceived: Date?
     @Published var showESP32LocationAlert = false
     @Published var adsbEncounterHistory: [ADSBEncounter] = []
     private var locationManager = LocationManager.shared
+    
+    // Reference to model context for SwiftData
+    var modelContext: ModelContext?
     
     // MARK: - ADS-B Encounter Tracking
     
@@ -65,6 +70,23 @@ class StatusViewModel: ObservableObject {
             }
             
             adsbEncounterHistory[index] = encounter
+            
+            // Update in SwiftData
+            if let context = modelContext {
+                let predicate = #Predicate<StoredADSBEncounter> { stored in
+                    stored.id == hex
+                }
+                let descriptor = FetchDescriptor(predicate: predicate)
+                if let stored = try? context.fetch(descriptor).first {
+                    stored.lastSeen = now
+                    stored.totalSightings += 1
+                    if let altitude = altitude {
+                        stored.maxAltitude = max(stored.maxAltitude, altitude)
+                        stored.minAltitude = min(stored.minAltitude, altitude)
+                    }
+                    try? context.save()
+                }
+            }
         } else {
             // Create new encounter
             let encounter = ADSBEncounter(
@@ -77,6 +99,21 @@ class StatusViewModel: ObservableObject {
                 totalSightings: 1
             )
             adsbEncounterHistory.append(encounter)
+            
+            // Save to SwiftData
+            if let context = modelContext {
+                let stored = StoredADSBEncounter(
+                    id: hex,
+                    callsign: cleanCallsign,
+                    firstSeen: now,
+                    lastSeen: now,
+                    maxAltitude: altitude ?? 0,
+                    minAltitude: altitude ?? 0,
+                    totalSightings: 1
+                )
+                context.insert(stored)
+                try? context.save()
+            }
         }
         
         // Keep only last 500 encounters to prevent memory issues
@@ -88,6 +125,28 @@ class StatusViewModel: ObservableObject {
     /// Clear ADS-B encounter history
     func clearADSBHistory() {
         adsbEncounterHistory.removeAll()
+        
+        // Clear from SwiftData too
+        if let context = modelContext {
+            let descriptor = FetchDescriptor<StoredADSBEncounter>()
+            if let all = try? context.fetch(descriptor) {
+                all.forEach { context.delete($0) }
+                try? context.save()
+            }
+        }
+    }
+    
+    /// Load ADS-B encounters from SwiftData
+    func loadADSBEncounters() {
+        guard let context = modelContext else { return }
+        
+        let descriptor = FetchDescriptor<StoredADSBEncounter>(
+            sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
+        )
+        
+        if let stored = try? context.fetch(descriptor) {
+            adsbEncounterHistory = stored.map { $0.toLegacy() }
+        }
     }
     
     // MARK: - Status Connection Logic
@@ -342,13 +401,13 @@ extension StatusViewModel {
         if Settings.shared.webhooksEnabled && Settings.shared.enabledWebhookEvents.contains(.systemAlert) {
             let event: WebhookEvent
             if title.contains("Temperature") {
-                event = .temperatureAlert
+                event = WebhookEvent.temperatureAlert
             } else if title.contains("Memory") {
-                event = .memoryAlert
+                event = WebhookEvent.memoryAlert
             } else if title.contains("CPU") {
-                event = .cpuAlert
+                event = WebhookEvent.cpuAlert
             } else {
-                event = .systemAlert
+                event = WebhookEvent.systemAlert
             }
             
             var data: [String: Any] = [
