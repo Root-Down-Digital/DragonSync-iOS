@@ -71,6 +71,12 @@ struct ContentView: View {
             SwiftDataStorageManager.shared.modelContext = modelContext
             statusViewModel.modelContext = modelContext
             
+            // Reload encounters from SwiftData now that ModelContext is set
+            // This is important because DroneStorageManager.init() runs before
+            // ModelContext is available, so we load here instead
+            droneStorage.loadFromStorage()
+            droneStorage.updateProximityPointsWithCorrectRadius()
+            
             // Load data from SwiftData
             statusViewModel.loadADSBEncounters()
             

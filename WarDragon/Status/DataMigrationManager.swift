@@ -24,17 +24,62 @@ class DataMigrationManager {
     var needsMigration: Bool {
         let completed = UserDefaults.standard.bool(forKey: migrationCompletedKey)
         let version = UserDefaults.standard.integer(forKey: migrationVersionKey)
-        return !completed || version < currentMigrationVersion
+        let needed = !completed || version < currentMigrationVersion
+        
+        if needed {
+            logger.info("Migration needed: completed=\(completed), version=\(version), current=\(self.currentMigrationVersion)")
+        } else {
+            logger.debug("Migration already completed: version=\(version)")
+        }
+        
+        return needed
+    }
+    
+    /// Get current migration status (for debugging/settings)
+    var migrationStatus: String {
+        let completed = UserDefaults.standard.bool(forKey: migrationCompletedKey)
+        let version = UserDefaults.standard.integer(forKey: migrationVersionKey)
+        
+        if !completed {
+            return "Not migrated"
+        } else if version < currentMigrationVersion {
+            return "Needs update (v\(version) → v\(currentMigrationVersion))"
+        } else {
+            return "Completed (v\(version))"
+        }
     }
     
     /// Perform full migration from UserDefaults to SwiftData
     func migrate(modelContext: ModelContext) async throws {
-        guard needsMigration else {
-            logger.info("Migration not needed")
-            return
+        // Check if migration flag is set
+        if !needsMigration {
+            logger.info("Migration flag indicates completion - verifying data...")
+            
+            // Verify SwiftData actually has data
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            let count = try modelContext.fetchCount(descriptor)
+            
+            // Check if UserDefaults has data that SwiftData doesn't
+            if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
+               let legacyEncounters = try? JSONDecoder().decode([String: DroneEncounter].self, from: data),
+               !legacyEncounters.isEmpty && count == 0 {
+                logger.warning("⚠️ Migration marked complete but SwiftData is empty while UserDefaults has \(legacyEncounters.count) encounters")
+                logger.warning("🔄 Re-running migration to fix data inconsistency...")
+                
+                // Reset migration flag to force re-migration
+                UserDefaults.standard.set(false, forKey: migrationCompletedKey)
+                UserDefaults.standard.synchronize()
+            } else {
+                if count > 0 {
+                    logger.info("✅ Data verification passed - SwiftData has \(count) encounters")
+                } else {
+                    logger.info("✅ Data verification passed - both SwiftData and UserDefaults are empty (clean state)")
+                }
+                return
+            }
         }
         
-        logger.info("Starting data migration...")
+        logger.info("Starting data migration (version \(self.currentMigrationVersion))...")
         
         do {
             // Migrate drone encounters
@@ -43,13 +88,16 @@ class DataMigrationManager {
             // Migrate ADS-B encounters
             try await migrateADSBEncounters(modelContext: modelContext)
             
-            // Mark migration as complete
+            // CRITICAL: Mark migration as complete BEFORE returning
+            // This ensures we don't re-run migration even if there was no data
             UserDefaults.standard.set(true, forKey: migrationCompletedKey)
             UserDefaults.standard.set(currentMigrationVersion, forKey: migrationVersionKey)
+            UserDefaults.standard.synchronize() // Force immediate save
             
-            logger.info("Migration completed successfully")
+            logger.info("✅ Migration completed successfully - will not run again")
         } catch {
-            logger.error("Migration failed: \(error.localizedDescription)")
+            logger.error("❌ Migration failed: \(error.localizedDescription)")
+            // Don't mark as complete if migration failed - will retry next launch
             throw MigrationError.migrationFailed(error)
         }
     }
@@ -162,17 +210,36 @@ class DataMigrationManager {
         logger.warning("Rolling back migration...")
         UserDefaults.standard.set(false, forKey: migrationCompletedKey)
         UserDefaults.standard.set(0, forKey: migrationVersionKey)
+        UserDefaults.standard.synchronize()
+        logger.info("Migration rolled back - will run again on next launch")
+    }
+    
+    /// Force mark migration as complete (for troubleshooting)
+    func forceComplete() {
+        logger.warning("Force marking migration as complete...")
+        UserDefaults.standard.set(true, forKey: migrationCompletedKey)
+        UserDefaults.standard.set(currentMigrationVersion, forKey: migrationVersionKey)
+        UserDefaults.standard.synchronize()
+        logger.info("Migration marked complete")
     }
     
     /// Export all data as JSON backup before migration
     func createBackup() throws -> URL {
         logger.info("Creating data backup...")
         
-        let backupData: [String: Any] = [
+        var backupData: [String: Any] = [
             "timestamp": Date().timeIntervalSince1970,
-            "droneEncounters": UserDefaults.standard.data(forKey: "DroneEncounters") as Any,
             "migrationVersion": currentMigrationVersion
         ]
+        
+        // Safely handle potentially nil data
+        if let encountersData = UserDefaults.standard.data(forKey: "DroneEncounters") {
+            // Convert data to base64 string for safe JSON serialization
+            backupData["droneEncounters"] = encountersData.base64EncodedString()
+        } else {
+            backupData["droneEncounters"] = NSNull()
+            logger.info("No drone encounters data found to backup")
+        }
         
         let jsonData = try JSONSerialization.data(withJSONObject: backupData, options: .prettyPrinted)
         

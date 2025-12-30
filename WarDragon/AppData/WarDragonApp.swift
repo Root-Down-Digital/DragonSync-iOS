@@ -48,7 +48,7 @@ struct WarDragonApp: App {
             ContentView()
                 .modelContainer(modelContainer)
                 .task {
-                    // Perform migration on first launch
+                    // Perform migration after view appears
                     await performMigrationIfNeeded()
                 }
         }
@@ -59,25 +59,36 @@ struct WarDragonApp: App {
         let context = modelContainer.mainContext
         let migrationManager = DataMigrationManager.shared
         
+        // Always log the migration status for debugging
+        print("📊 Migration Status: \(migrationManager.migrationStatus)")
+        
         guard migrationManager.needsMigration else {
+            print("ℹ️ No migration needed - skipping")
             return
         }
         
+        print("🔄 Starting data migration (first run)...")
+        
         do {
-            // Create backup first
-            let backupURL = try migrationManager.createBackup()
-            print("✅ Backup created at: \(backupURL.path)")
+            // Create backup first (non-fatal if it fails)
+            do {
+                let backupURL = try migrationManager.createBackup()
+                print("✅ Backup created at: \(backupURL.path)")
+            } catch {
+                print("⚠️ Backup failed (non-fatal): \(error.localizedDescription)")
+            }
             
             // Perform migration
             try await migrationManager.migrate(modelContext: context)
-            print("✅ Migration completed successfully")
+            print("✅ Migration completed successfully - will not run again")
+            print("📊 New Migration Status: \(migrationManager.migrationStatus)")
             
-            // Optional: Clean up after successful migration
-            // Uncomment this after verifying migration works:
-            // migrationManager.cleanupLegacyData()
+            // Force DroneStorageManager to reload from SwiftData
+            DroneStorageManager.shared.loadFromStorage()
         } catch {
-            print("❌ Migration failed: \(error)")
-            // App can still run with UserDefaults fallback
+            print("❌ Migration failed: \(error.localizedDescription)")
+            print("   App will continue using UserDefaults fallback")
+            print("   Migration will be retried on next launch")
         }
     }
 }

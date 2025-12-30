@@ -255,9 +255,8 @@ class DroneStorageManager: ObservableObject {
     
     init() {
         // Migration will happen automatically in WarDragonApp
-        // Load from SwiftData or fallback to UserDefaults
-        loadFromStorage()
-        updateProximityPointsWithCorrectRadius()
+        // Don't load here - wait for ModelContext to be set in ContentView.onAppear()
+        // loadFromStorage() will be called after ModelContext is injected
     }
     
     nonisolated func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
@@ -564,18 +563,30 @@ class DroneStorageManager: ObservableObject {
     }
     
     func loadFromStorage() {
+        // Check if SwiftData manager has a ModelContext
+        if SwiftDataStorageManager.shared.modelContext == nil {
+            print("⚠️ SwiftDataStorageManager.modelContext is nil - will fallback to UserDefaults")
+        }
+        
         // Try to load from SwiftData first
         updateInMemoryCache()
+        
+        // Log what we loaded
+        let swiftDataCount = encounters.count
+        print("📊 Loaded \(swiftDataCount) encounters from SwiftData")
         
         // Fallback to UserDefaults if SwiftData is empty (pre-migration)
         if encounters.isEmpty {
             if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
                let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
                 encounters = loaded
-                print("⚠️ Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
+                print("⚠️ SwiftData empty - Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
+                print("💡 Migration may not have completed yet or data needs to be migrated")
+            } else {
+                print("✅ No encounters found in either SwiftData or UserDefaults (fresh install)")
             }
         } else {
-            print("✅ Loaded \(encounters.count) encounters from SwiftData")
+            print("✅ Using \(encounters.count) encounters from SwiftData (migration complete)")
         }
     }
     
