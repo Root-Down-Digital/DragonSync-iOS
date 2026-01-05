@@ -46,15 +46,43 @@ struct StoredEncountersView: View {
     
     var body: some View {
         List {
-            ForEach(sortedEncounters) { encounter in
-                NavigationLink(destination: EncounterDetailView(encounter: encounter)
-                    .environmentObject(cotViewModel)) {
-                        EncounterRow(encounter: encounter)
+            // MARK: - Aircraft History Section
+            Section {
+                NavigationLink(destination: ADSBHistoryChartView()) {
+                    HStack {
+                        Image(systemName: "airplane.circle.fill")
+                            .foregroundStyle(.blue)
+                            .font(.title2)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Aircraft History")
+                                .font(.appHeadline)
+                            Text("View all tracked aircraft with charts")
+                                .font(.appCaption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chart.bar.xaxis")
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, 4)
+                }
             }
-            .onDelete { indexSet in
-                for index in indexSet {
-                    storage.deleteEncounter(id: sortedEncounters[index].id)
+            
+            // MARK: - Drone Encounters Section
+            Section {
+                ForEach(sortedEncounters) { encounter in
+                    NavigationLink(destination: EncounterDetailView(encounter: encounter)
+                        .environmentObject(cotViewModel)) {
+                            EncounterRow(encounter: encounter)
+                        }
+                }
+                .onDelete { indexSet in
+                    for index in indexSet {
+                        storage.deleteEncounter(id: sortedEncounters[index].id)
+                    }
                 }
             }
         }

@@ -214,19 +214,9 @@ final class StoredADSBEncounter {
 extension StoredDroneEncounter {
     /// Convert old DroneEncounter to new SwiftData model
     static func from(legacy encounter: DroneEncounter, context: ModelContext) -> StoredDroneEncounter {
-        let stored = StoredDroneEncounter(
-            id: encounter.id,
-            firstSeen: encounter.firstSeen,
-            lastSeen: encounter.lastSeen,
-            customName: encounter.customName,
-            trustStatusRaw: encounter.trustStatus.rawValue,
-            metadata: encounter.metadata,
-            macAddresses: Array(encounter.macHistory)
-        )
-        
-        // Add flight points
-        for point in encounter.flightPath {
-            let storedPoint = StoredFlightPoint(
+        // Build flight points array BEFORE creating the model
+        let flightPoints = encounter.flightPath.map { point in
+            StoredFlightPoint(
                 latitude: point.latitude,
                 longitude: point.longitude,
                 altitude: point.altitude,
@@ -237,20 +227,31 @@ extension StoredDroneEncounter {
                 proximityRssi: point.proximityRssi,
                 proximityRadius: point.proximityRadius
             )
-            stored.flightPoints.append(storedPoint)
         }
         
-        // Add signatures
-        for sig in encounter.signatures {
-            let storedSig = StoredSignature(
+        // Build signatures array BEFORE creating the model
+        let signatures = encounter.signatures.map { sig in
+            StoredSignature(
                 timestamp: sig.timestamp,
                 rssi: sig.rssi,
                 speed: sig.speed,
                 height: sig.height,
                 mac: sig.mac
             )
-            stored.signatures.append(storedSig)
         }
+        
+        // Create the stored encounter with all data at once
+        let stored = StoredDroneEncounter(
+            id: encounter.id,
+            firstSeen: encounter.firstSeen,
+            lastSeen: encounter.lastSeen,
+            customName: encounter.customName,
+            trustStatusRaw: encounter.trustStatus.rawValue,
+            metadata: encounter.metadata,
+            macAddresses: Array(encounter.macHistory),
+            flightPoints: flightPoints,
+            signatures: signatures
+        )
         
         return stored
     }

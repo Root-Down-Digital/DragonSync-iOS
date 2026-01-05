@@ -34,6 +34,7 @@ enum ADSBConnectionState: Equatable {
 struct ADSBConfiguration: Codable, Equatable {
     var enabled: Bool
     var readsbURL: String  // e.g., "http://192.168.1.100:8080"
+    var dataPath: String   // e.g., "/data/aircraft.json" - must end in .json
     var pollInterval: TimeInterval  // Seconds between polls
     var maxDistance: Double?  // Maximum distance in km (optional filter)
     var minAltitude: Double?  // Minimum altitude in feet (optional filter)
@@ -42,6 +43,7 @@ struct ADSBConfiguration: Codable, Equatable {
     init(
         enabled: Bool = false,
         readsbURL: String = "http://localhost:8080",
+        dataPath: String = "/data/aircraft.json",
         pollInterval: TimeInterval = 2.0,
         maxDistance: Double? = nil,
         minAltitude: Double? = nil,
@@ -49,6 +51,7 @@ struct ADSBConfiguration: Codable, Equatable {
     ) {
         self.enabled = enabled
         self.readsbURL = readsbURL
+        self.dataPath = dataPath
         self.pollInterval = pollInterval
         self.maxDistance = maxDistance
         self.minAltitude = minAltitude
@@ -56,20 +59,25 @@ struct ADSBConfiguration: Codable, Equatable {
     }
     
     var isValid: Bool {
-        !readsbURL.isEmpty && pollInterval > 0
+        !readsbURL.isEmpty && pollInterval > 0 && dataPath.hasSuffix(".json")
     }
     
     /// Full URL for aircraft data endpoint
     var aircraftDataURL: URL? {
-        // readsb provides data at /data/aircraft.json
         // First, ensure the base URL is valid
         guard let baseURL = URL(string: readsbURL) else {
             print("DEBUG: Failed to create URL from readsbURL: '\(readsbURL)'")
             return nil
         }
         
-        // Append the path to the base URL
-        let finalURL = baseURL.appendingPathComponent("data").appendingPathComponent("aircraft.json")
+        // Ensure data path ends with .json
+        guard dataPath.hasSuffix(".json") else {
+            print("DEBUG: Data path must end with .json: '\(dataPath)'")
+            return nil
+        }
+        
+        // Combine base URL with the data path
+        let finalURL = baseURL.appendingPathComponent(dataPath)
         return finalURL
     }
 }

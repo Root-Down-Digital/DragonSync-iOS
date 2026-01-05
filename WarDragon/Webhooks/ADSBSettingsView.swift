@@ -25,10 +25,32 @@ struct ADSBSettingsView: View {
             
             if settings.adsbEnabled {
                 Section("Readsb Configuration") {
-                    TextField("Readsb URL", text: $settings.adsbReadsbURL)
-                        .textContentType(.URL)
-                        .autocapitalization(.none)
-                        .keyboardType(.URL)
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("Base URL", text: $settings.adsbReadsbURL, prompt: Text("http://192.168.1.100:8080"))
+                            .textContentType(.URL)
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+                        
+                        Text("Server address without path")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("Data Path", text: $settings.adsbDataPath, prompt: Text("/data/aircraft.json"))
+                            .autocapitalization(.none)
+                            .keyboardType(.URL)
+                        
+                        if !settings.adsbDataPath.hasSuffix(".json") {
+                            Text("⚠️ Path must end with .json")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        } else {
+                            Text("Endpoint path (must end with .json)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -40,9 +62,15 @@ struct ADSBSettingsView: View {
                         Slider(value: $settings.adsbPollInterval, in: 0.5...10, step: 0.5)
                     }
                     
-                    Text("Full URL: \(settings.adsbReadsbURL)/data/aircraft.json")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if let fullURL = settings.adsbConfiguration.aircraftDataURL {
+                        Text("Full URL: \(fullURL.absoluteString)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("Invalid URL configuration")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
                 }
                 
                 Section("Filters") {
@@ -132,6 +160,45 @@ struct ADSBSettingsView: View {
                 
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
+                        Label("Common Endpoints", systemImage: "list.bullet")
+                            .font(.headline)
+                        
+                        Group {
+                            Text("Standard readsb/dump1090:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("  /data/aircraft.json")
+                                .font(.caption)
+                                .fontDesign(.monospaced)
+                            
+                            Text("Tar1090:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("  /data/aircraft.json")
+                                .font(.caption)
+                                .fontDesign(.monospaced)
+                            
+                            Text("Custom JSON endpoints:")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("  /api/v1/aircraft.json")
+                                .font(.caption)
+                                .fontDesign(.monospaced)
+                            Text("  /adsb/live.json")
+                                .font(.caption)
+                                .fontDesign(.monospaced)
+                            Text("  /custom/path/data.json")
+                                .font(.caption)
+                                .fontDesign(.monospaced)
+                        }
+                    }
+                    .foregroundColor(.secondary)
+                } header: {
+                    Text("Endpoint Examples")
+                }
+                
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
                         Label("Quick Setup", systemImage: "lightbulb")
                             .font(.headline)
                         
@@ -147,9 +214,12 @@ struct ADSBSettingsView: View {
                             .font(.caption)
                             .fontDesign(.monospaced)
                         
-                        Text("3. Enter readsb URL above:")
+                        Text("3. Enter base URL and data path above:")
                             .font(.caption)
-                        Text("   http://your-pi-ip:8080")
+                        Text("   Base: http://your-pi-ip:8080")
+                            .font(.caption)
+                            .fontDesign(.monospaced)
+                        Text("   Path: /data/aircraft.json")
                             .font(.caption)
                             .fontDesign(.monospaced)
                         
@@ -162,13 +232,13 @@ struct ADSBSettingsView: View {
                         Text("Compatible with:")
                             .font(.caption)
                             .fontWeight(.medium)
-                        Text("• readsb")
+                        Text("• readsb - /data/aircraft.json")
                             .font(.caption)
-                        Text("• dump1090")
+                        Text("• dump1090 - /data/aircraft.json")
                             .font(.caption)
-                        Text("• tar1090")
+                        Text("• tar1090 - /data/aircraft.json")
                             .font(.caption)
-                        Text("• Any service providing aircraft.json")
+                        Text("• Custom endpoints (must end with .json)")
                             .font(.caption)
                     }
                     .foregroundColor(.secondary)

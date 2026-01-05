@@ -489,6 +489,13 @@ class Settings: ObservableObject {
         }
     }
     
+    @AppStorage("adsbDataPath") var adsbDataPath: String = "/data/aircraft.json" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
+    }
+    
     @AppStorage("adsbPollInterval") var adsbPollInterval: Double = 2.0 {
         didSet {
             objectWillChange.send()
@@ -522,6 +529,7 @@ class Settings: ObservableObject {
             ADSBConfiguration(
                 enabled: adsbEnabled,
                 readsbURL: adsbReadsbURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                dataPath: adsbDataPath.trimmingCharacters(in: .whitespacesAndNewlines),
                 pollInterval: adsbPollInterval,
                 maxDistance: adsbMaxDistance > 0 ? adsbMaxDistance : nil,
                 minAltitude: adsbMinAltitude > 0 ? adsbMinAltitude : nil,
@@ -531,6 +539,7 @@ class Settings: ObservableObject {
         set {
             adsbEnabled = newValue.enabled
             adsbReadsbURL = newValue.readsbURL
+            adsbDataPath = newValue.dataPath
             adsbPollInterval = newValue.pollInterval
             adsbMaxDistance = newValue.maxDistance ?? 0
             adsbMinAltitude = newValue.minAltitude ?? 0

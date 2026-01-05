@@ -391,6 +391,27 @@ struct SettingsView: View {
                 }
             }
             
+            Section("Data Management") {
+                NavigationLink {
+                    DatabaseManagementView()
+                } label: {
+                    HStack {
+                        Image(systemName: "cylinder.split.1x2.fill")
+                            .foregroundColor(.blue)
+                        VStack(alignment: .leading) {
+                            Text("Database Management")
+                            Text("Backup, restore, and repair")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            
             Section("About") {
                 HStack {
                     Text("Version")

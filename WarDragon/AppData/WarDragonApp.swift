@@ -21,7 +21,7 @@ extension Font {
 struct WarDragonApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
-    // SwiftData model container
+    // SwiftData model container with recovery
     let modelContainer: ModelContainer = {
         let schema = Schema([
             StoredDroneEncounter.self,
@@ -39,7 +39,41 @@ struct WarDragonApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            print("⚠️ SwiftData initialization failed: \(error.localizedDescription)")
+            print("   Attempting recovery by resetting SwiftData store...")
+            
+            // Try to delete corrupted store and recreate
+            do {
+                let fileManager = FileManager.default
+                let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                let storeURL = appSupportURL.appendingPathComponent("default.store")
+                
+                // Remove corrupted store files
+                if fileManager.fileExists(atPath: storeURL.path) {
+                    try fileManager.removeItem(at: storeURL)
+                    print("   Removed corrupted store file")
+                }
+                
+                // Also remove WAL and SHM files if they exist
+                let walURL = appSupportURL.appendingPathComponent("default.store-wal")
+                let shmURL = appSupportURL.appendingPathComponent("default.store-shm")
+                try? fileManager.removeItem(at: walURL)
+                try? fileManager.removeItem(at: shmURL)
+                
+                // Try creating container again
+                let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+                print("✅ Successfully recovered SwiftData store")
+                
+                // Reset migration flag so data gets re-migrated
+                UserDefaults.standard.set(false, forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
+                UserDefaults.standard.set(0, forKey: "DataMigration_Version")
+                print("   Migration will run on next launch to restore your data")
+                
+                return container
+            } catch {
+                print("❌ Recovery failed: \(error.localizedDescription)")
+                fatalError("Could not create or recover ModelContainer. This should never happen. Error: \(error)")
+            }
         }
     }()
     
@@ -58,37 +92,93 @@ struct WarDragonApp: App {
     private func performMigrationIfNeeded() async {
         let context = modelContainer.mainContext
         let migrationManager = DataMigrationManager.shared
-        
-        // Always log the migration status for debugging
-        print("📊 Migration Status: \(migrationManager.migrationStatus)")
+        print("Migration Status: \(migrationManager.migrationStatus)")
         
         guard migrationManager.needsMigration else {
-            print("No migration needed - skipping")
+            print("✅ No migration needed - data already in SwiftData")
+            DroneStorageManager.shared.loadFromStorage()
             return
         }
         
         print("🔄 Starting data migration (first run)...")
+        print("   This is a one-time process to migrate your data to the new storage system")
         
         do {
-            // Create backup first (non-fatal if it fails)
-            do {
-                let backupURL = try migrationManager.createBackup()
-                print("✅ Backup created at: \(backupURL.path)")
-            } catch {
-                print("⚠️ Backup failed (non-fatal): \(error.localizedDescription)")
+            // Only create backup if one doesn't already exist
+            let existingBackups = (try? migrationManager.listBackupFiles()) ?? []
+            let hasLegacyBackup = existingBackups.contains { $0.lastPathComponent.hasPrefix("wardragon_backup_") }
+            
+            if !hasLegacyBackup {
+                do {
+                    let backupURL = try migrationManager.createBackup()
+                    print("✅ Backup created at: \(backupURL.path)")
+                } catch {
+                    print("⚠️ Warning: Backup creation failed (non-fatal): \(error.localizedDescription)")
+                    print("   Migration will continue, but you may want to manually backup your data")
+                }
+            } else {
+                print("ℹ️ Backup already exists, skipping duplicate backup creation")
             }
             
-            // Perform migration
-            try await migrationManager.migrate(modelContext: context)
-            print("Migration completed successfully - will not run again")
-            print("New Migration Status: \(migrationManager.migrationStatus)")
+            // Perform migration with retry logic
+            var migrationSucceeded = false
+            var lastError: Error?
             
-            // Force DroneStorageManager to reload from SwiftData
-            DroneStorageManager.shared.loadFromStorage()
+            for attempt in 1...3 {
+                do {
+                    if attempt > 1 {
+                        print("Migration attempt \(attempt)/3...")
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                    
+                    try await migrationManager.migrate(modelContext: context)
+                    migrationSucceeded = true
+                    break
+                } catch {
+                    lastError = error
+                    print("⚠️ Migration attempt \(attempt) failed: \(error.localizedDescription)")
+                    
+                    if attempt < 3 {
+                        print("   Will retry...")
+                    }
+                }
+            }
+            
+            if migrationSucceeded {
+                print("✅ Migration completed successfully!")
+                print("   Your data has been migrated to the new storage system")
+                print("   New Migration Status: \(migrationManager.migrationStatus)")
+                
+                // Verify migration by checking data count
+                let descriptor = FetchDescriptor<StoredDroneEncounter>()
+                let count = try context.fetchCount(descriptor)
+                print("✅ Verification: \(count) encounters now stored in SwiftData")
+                
+                // Force DroneStorageManager to reload from SwiftData
+                DroneStorageManager.shared.loadFromStorage()
+                
+                print("🎉 Migration complete - app is now using the new storage system")
+            } else {
+                throw lastError ?? NSError(domain: "Migration", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown migration error"])
+            }
+            
         } catch {
-            print("❌ Migration failed: \(error.localizedDescription)")
-            print("   App will continue using UserDefaults fallback")
-            print("   Migration will be retried on next launch")
+            print("❌ Migration failed after all attempts: \(error.localizedDescription)")
+            print("   Don't worry - your data is safe!")
+            print("   • App will continue using UserDefaults as fallback")
+            print("   • Migration will be retried automatically on next launch")
+            print("   • Your original data has been preserved")
+            
+            // Load from UserDefaults fallback
+            DroneStorageManager.shared.loadFromStorage()
+            
+            // Log additional debugging info
+            if let nsError = error as NSError? {
+                print("   Debug info: domain=\(nsError.domain), code=\(nsError.code)")
+                if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    print("   Underlying: \(underlyingError.localizedDescription)")
+                }
+            }
         }
     }
 }
