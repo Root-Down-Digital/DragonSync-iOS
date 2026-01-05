@@ -352,25 +352,28 @@ class WebhookManager: ObservableObject {
     // MARK: - Webhook Delivery
     
     func sendWebhook(event: WebhookEvent, data: [String: Any], metadata: [String: String] = [:]) {
-        guard Settings.shared.webhooksEnabled else { return }
-        guard Settings.shared.enabledWebhookEvents.contains(event) else { return }
-        
-        let enabledConfigs = configurations.filter {
-            $0.isEnabled && $0.enabledEvents.contains(event)
-        }
-        
-        guard !enabledConfigs.isEmpty else { return }
-        
-        let payload = WebhookPayload(
-            event: event,
-            timestamp: Date(),
-            data: data,
-            metadata: metadata
-        )
-        
-        for config in enabledConfigs {
-            Task {
-                await deliverWebhook(config: config, payload: payload)
+        Task { @MainActor in
+            guard Settings.shared.webhooksEnabled else { return }
+            guard Settings.shared.enabledWebhookEvents.contains(event) else { return }
+            
+            let enabledConfigs = configurations.filter {
+                $0.isEnabled && $0.enabledEvents.contains(event)
+            }
+            
+            guard !enabledConfigs.isEmpty else { return }
+            
+            let payload = WebhookPayload(
+                event: event,
+                timestamp: Date(),
+                data: data,
+                metadata: metadata
+            )
+            
+            // Send to each enabled webhook
+            for config in enabledConfigs {
+                Task {
+                    await self.deliverWebhook(config: config, payload: payload)
+                }
             }
         }
     }

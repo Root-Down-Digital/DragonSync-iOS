@@ -224,10 +224,10 @@ public final class DroneSignatureGenerator {
     }
     
     // TODO implement this (drone is approaching)
-    func checkProximity(_ signature: DroneSignature) -> ProximityWarning? {
+    nonisolated func checkProximity(_ signature: DroneSignature, enableProximityWarnings: Bool, proximityThreshold: Int) -> ProximityWarning? {
         guard let rssi = signature.transmissionInfo.signalStrength,
-              Settings.shared.enableProximityWarnings,
-              rssi > Double(Settings.shared.proximityThreshold) else {
+              enableProximityWarnings,
+              rssi > Double(proximityThreshold) else {
             return nil
         }
         

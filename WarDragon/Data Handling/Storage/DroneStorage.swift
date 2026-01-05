@@ -573,7 +573,7 @@ class DroneStorageManager: ObservableObject {
         
         // Log what we loaded
         let swiftDataCount = encounters.count
-        print("📊 Loaded \(swiftDataCount) encounters from SwiftData")
+        print("Loaded \(swiftDataCount) encounters from SwiftData")
         
         // Fallback to UserDefaults if SwiftData is empty (pre-migration)
         if encounters.isEmpty {
@@ -581,12 +581,12 @@ class DroneStorageManager: ObservableObject {
                let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
                 encounters = loaded
                 print("⚠️ SwiftData empty - Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
-                print("💡 Migration may not have completed yet or data needs to be migrated")
+                print("Migration may not have completed yet or data needs to be migrated")
             } else {
-                print("✅ No encounters found in either SwiftData or UserDefaults (fresh install)")
+                print("No encounters found in either SwiftData or UserDefaults (fresh install)")
             }
         } else {
-            print("✅ Using \(encounters.count) encounters from SwiftData (migration complete)")
+            print("Using \(encounters.count) encounters from SwiftData")
         }
     }
     

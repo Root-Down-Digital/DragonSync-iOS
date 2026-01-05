@@ -31,15 +31,21 @@ class ServiceViewModel: ObservableObject {
     }
     
     func startMonitoring() {
-        zmqHandler.connect(
-            host: Settings.shared.zmqHost,
-            zmqTelemetryPort: UInt16(Settings.shared.zmqTelemetryPort),
-            zmqStatusPort: UInt16(Settings.shared.zmqStatusPort),
-            onTelemetry: { _ in }, // Undefined for unused telemetry port
-            onStatus: { [weak self] message in
-                self?.handleStatusUpdate(message)
-            }
-        )
+        Task { @MainActor in
+            let zmqHost = Settings.shared.zmqHost
+            let zmqTelemetryPort = UInt16(Settings.shared.zmqTelemetryPort)
+            let zmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
+            
+            zmqHandler.connect(
+                host: zmqHost,
+                zmqTelemetryPort: zmqTelemetryPort,
+                zmqStatusPort: zmqStatusPort,
+                onTelemetry: { _ in }, // Undefined for unused telemetry port
+                onStatus: { [weak self] message in
+                    self?.handleStatusUpdate(message)
+                }
+            )
+        }
     }
     
     func stopMonitoring() {

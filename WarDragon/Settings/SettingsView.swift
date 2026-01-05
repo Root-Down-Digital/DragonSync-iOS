@@ -9,6 +9,7 @@ import SwiftUI
 import UIKit
 import Network
 
+@MainActor
 struct SettingsView: View {
     @ObservedObject var cotHandler : CoTViewModel
     @StateObject private var settings = Settings.shared

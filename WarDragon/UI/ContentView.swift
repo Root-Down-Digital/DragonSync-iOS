@@ -337,16 +337,42 @@ struct ContentView: View {
     
     private var unifiedMapSheet: some View {
         NavigationStack {
-            LiveMapView(cotViewModel: cotViewModel, initialMessage: getInitialMessageForMap())
-                .navigationTitle("Unified Map")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") {
-                            showUnifiedMap = false
-                        }
+            LiveMapView(
+                cotViewModel: cotViewModel,
+                initialMessage: getInitialMessageForMap(),
+                filterMode: convertToFilterMode(detectionMode)
+            )
+            .navigationTitle(mapNavigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        showUnifiedMap = false
                     }
                 }
+            }
+        }
+    }
+    
+    private func convertToFilterMode(_ mode: DetectionMode) -> LiveMapView.FilterMode {
+        switch mode {
+        case .drones:
+            return .drones
+        case .aircraft:
+            return .aircraft
+        case .both:
+            return .both
+        }
+    }
+    
+    private var mapNavigationTitle: String {
+        switch detectionMode {
+        case .drones:
+            return "Drones Map"
+        case .aircraft:
+            return "Aircraft Map"
+        case .both:
+            return "Unified Map"
         }
     }
     

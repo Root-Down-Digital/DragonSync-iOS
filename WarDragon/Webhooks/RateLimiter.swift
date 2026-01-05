@@ -307,7 +307,8 @@ struct RateLimitConfiguration: Codable, Equatable {
 class RateLimiterManager {
     static let shared = RateLimiterManager()
     
-    private(set) var config: RateLimitConfiguration
+    private var config: RateLimitConfiguration
+    private let configLock = NSLock()
     
     // Per-drone rate limiters
     let dronePublishLimiter: PerItemRateLimiter<String>  // Key: MAC or UID
@@ -318,7 +319,7 @@ class RateLimiterManager {
     let webhookLimiter: RateLimiter
     
     private init() {
-        self.config = Settings.shared.rateLimitConfiguration
+        self.config = RateLimitConfiguration()
         
         // Initialize per-drone limiter
         self.dronePublishLimiter = PerItemRateLimiter(
@@ -338,43 +339,60 @@ class RateLimiterManager {
             strategy: .perMinute(config.webhookMaxPerMinute)
         )
         
-        // Clean up stale limiters every 5 minutes
+        Task { @MainActor in
+            let initialConfig = Settings.shared.rateLimitConfiguration
+            await self.applyConfiguration(initialConfig)
+        }
+        
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            self?.dronePublishLimiter.cleanupStale(olderThan: 600) // 10 minutes
+            self?.dronePublishLimiter.cleanupStale(olderThan: 600)
         }
     }
     
-    /// Update configuration and recreate limiters
-    func updateConfiguration(_ config: RateLimitConfiguration) {
-        self.config = config
-        Settings.shared.updateRateLimitConfiguration(config)
+    private func applyConfiguration(_ newConfig: RateLimitConfiguration) async {
+        configLock.withLock {
+            self.config = newConfig
+        }
+    }
+    
+    @MainActor
+    func updateConfiguration(_ newConfig: RateLimitConfiguration) async {
+        configLock.withLock {
+            self.config = newConfig
+        }
         
-        // Note: Existing limiters keep running with old config
-        // A full restart would be needed to apply new limits to existing limiters
-        // For now, just store the new config for next launch
+        Settings.shared.updateRateLimitConfiguration(newConfig)
     }
     
     /// Check if drone publish should be allowed
     func shouldAllowDronePublish(for droneId: String) -> Bool {
-        guard config.enabled else { return true }
+        let enabled = configLock.withLock { config.enabled }
+        
+        guard enabled else { return true }
         return dronePublishLimiter.tryAllow(for: droneId)
     }
     
     /// Check if MQTT publish should be allowed
     func shouldAllowMQTTPublish() -> Bool {
-        guard config.enabled else { return true }
+        let enabled = configLock.withLock { config.enabled }
+        
+        guard enabled else { return true }
         return mqttLimiter.tryAllow()
     }
     
     /// Check if TAK publish should be allowed
     func shouldAllowTAKPublish() -> Bool {
-        guard config.enabled else { return true }
+        let enabled = configLock.withLock { config.enabled }
+        
+        guard enabled else { return true }
         return takLimiter.tryAllow()
     }
     
     /// Check if webhook should be allowed
     func shouldAllowWebhook() -> Bool {
-        guard config.enabled else { return true }
+        let enabled = configLock.withLock { config.enabled }
+        
+        guard enabled else { return true }
         return webhookLimiter.tryAllow()
     }
     

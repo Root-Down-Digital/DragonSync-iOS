@@ -218,7 +218,9 @@ struct RateLimitSettingsView: View {
     private func applyPreset(_ preset: RateLimitPreset?) {
         guard let preset = preset, let config = preset.config else { return }
         settings.updateRateLimitConfiguration(config)
-        RateLimiterManager.shared.updateConfiguration(config)
+        Task {
+            await RateLimiterManager.shared.updateConfiguration(config)
+        }
     }
     
     private func detectCurrentPreset() {

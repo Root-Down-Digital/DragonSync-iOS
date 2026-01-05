@@ -32,9 +32,19 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cotListener: NWListener?
     private var statusListener: NWListener?
     private var multicastConnection: NWConnection?
-    private let multicastGroup = Settings.shared.multicastHost
-    private let cotPortMC = UInt16(Settings.shared.multicastPort)
-    private let statusPortZMQ = UInt16(Settings.shared.zmqStatusPort)
+    
+    // Cached settings values to avoid main actor access issues
+    private var cachedConnectionMode: ConnectionMode = .multicast
+    private var cachedMulticastHost: String = "224.0.0.1"
+    private var cachedMulticastPort: UInt16 = 6969
+    private var cachedZmqHost: String = "192.168.2.1"
+    private var cachedZmqTelemetryPort: UInt16 = 45454
+    private var cachedZmqStatusPort: UInt16 = 4225
+    private var cachedMessageProcessingInterval: TimeInterval = 0.1
+    private var cachedBackgroundMessageInterval: TimeInterval = 1.0
+    private var cachedIsListening: Bool = false
+    private var cachedEnableBackgroundDetection: Bool = false
+    
     private let listenerQueue = DispatchQueue(label: "CoTListenerQueue")
     public var isListeningCot = false
     public var macIdHistory: [String: Set<String>] = [:]
@@ -574,6 +584,18 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         // Setup MQTT and TAK clients
         Task { @MainActor in
+            // Cache settings values to avoid main actor access from background threads
+            self.cachedConnectionMode = Settings.shared.connectionMode
+            self.cachedMulticastHost = Settings.shared.multicastHost
+            self.cachedMulticastPort = UInt16(Settings.shared.multicastPort)
+            self.cachedZmqHost = Settings.shared.zmqHost
+            self.cachedZmqTelemetryPort = UInt16(Settings.shared.zmqTelemetryPort)
+            self.cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
+            self.cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
+            self.cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
+            self.cachedIsListening = Settings.shared.isListening
+            self.cachedEnableBackgroundDetection = Settings.shared.enableBackgroundDetection
+            
             self.checkPermissions()
             self.setupMQTTClient()
             self.setupTAKClient()
@@ -581,7 +603,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             // Delay ADS-B setup to give the server time to be ready
             // This prevents timeouts when app launches before readsb is fully running
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            self.setupADSBClient()
+            await self.setupADSBClient()
             
             self.restoreAlertRingsFromStorage()
         }
@@ -623,7 +645,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 guard let self = self else { return }
                 Task { @MainActor in
                     if Settings.shared.adsbEnabled {
-                        self.setupADSBClient()
+                        await self.setupADSBClient()
                     } else {
                         // Clean up properly when disabling
                         self.adsbCancellables.removeAll()
@@ -634,6 +656,21 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
             }
             .store(in: &cancellables)
+    }
+    
+    /// Update cached settings values - call this when settings change
+    @MainActor
+    private func updateCachedSettings() {
+        cachedConnectionMode = Settings.shared.connectionMode
+        cachedMulticastHost = Settings.shared.multicastHost
+        cachedMulticastPort = UInt16(Settings.shared.multicastPort)
+        cachedZmqHost = Settings.shared.zmqHost
+        cachedZmqTelemetryPort = UInt16(Settings.shared.zmqTelemetryPort)
+        cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
+        cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
+        cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
+        cachedIsListening = Settings.shared.isListening
+        cachedEnableBackgroundDetection = Settings.shared.enableBackgroundDetection
     }
     
     
@@ -696,20 +733,25 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 guard let self = self else { return }
                 
-                switch Settings.shared.connectionMode {
-                case .multicast:
-                    self.multicastConnection?.cancel()
-                    self.multicastConnection = nil
-                    self.startMulticastListening()
-                case .zmq:
-                    self.zmqHandler?.disconnect()
-                    self.zmqHandler = nil
-                    self.startZMQListening()
-                }
-                
-                // Reset reconnecting flag
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.isReconnecting = false
+                // Update cached settings on main thread
+                Task { @MainActor in
+                    self.updateCachedSettings()
+                    
+                    switch self.cachedConnectionMode {
+                    case .multicast:
+                        self.multicastConnection?.cancel()
+                        self.multicastConnection = nil
+                        self.startMulticastListening()
+                    case .zmq:
+                        self.zmqHandler?.disconnect()
+                        self.zmqHandler = nil
+                        self.startZMQListening()
+                    }
+                    
+                    // Reset reconnecting flag
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                        self?.isReconnecting = false
+                    }
                 }
             }
         }
@@ -766,17 +808,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             object: nil
         )
         
-        // Start the appropriate connection type
-        switch Settings.shared.connectionMode {
-        case .multicast:
-            startMulticastListening()
-        case .zmq:
-            startZMQListening()
-        }
-        
-        // Start background processing if enabled
-        if Settings.shared.enableBackgroundDetection {
-            backgroundManager.startBackgroundProcessing()
+        // Update cached settings before starting
+        Task { @MainActor in
+            self.updateCachedSettings()
+            
+            // Start the appropriate connection type
+            switch self.cachedConnectionMode {
+            case .multicast:
+                self.startMulticastListening()
+            case .zmq:
+                self.startZMQListening()
+            }
+            
+            // Start background processing if enabled
+            if self.cachedEnableBackgroundDetection {
+                self.backgroundManager.startBackgroundProcessing()
+            }
         }
     }
     
@@ -798,7 +845,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         do {
             // Create listener on the multicast port
-            cotListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: cotPortMC))
+            cotListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: cachedMulticastPort))
             
             cotListener?.stateUpdateHandler = { [weak self] state in
                 switch state {
@@ -815,10 +862,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         self?.isListeningCot = false
                         // Attempt recovery after a delay
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            if Settings.shared.connectionMode == .multicast && 
-                               Settings.shared.isListening {
-                                print("Attempting to recover multicast connection...")
-                                self?.startMulticastListening()
+                            Task { @MainActor [weak self] in
+                                guard let self = self else { return }
+                                self.updateCachedSettings()
+                                if self.cachedConnectionMode == .multicast &&
+                                   self.cachedIsListening {
+                                    print("Attempting to recover multicast connection...")
+                                    self.startMulticastListening()
+                                }
                             }
                         }
                     }
@@ -859,8 +910,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         // Create endpoint for multicast group
-        let host = NWEndpoint.Host(multicastGroup)
-        let port = NWEndpoint.Port(integerLiteral: cotPortMC)
+        let host = NWEndpoint.Host(cachedMulticastHost)
+        let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
         let multicastEndpoint = NWEndpoint.hostPort(host: host, port: port)
         
         // Create connection to multicast group - THIS triggers the permission dialog
@@ -870,7 +921,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             guard let self = self else { return }
             switch state {
             case .ready:
-                print("Successfully joined multicast group \(self.multicastGroup):\(self.cotPortMC)")
+                print("Successfully joined multicast group \(self.cachedMulticastHost):\(self.cachedMulticastPort)")
                 // Start receiving data immediately after joining
                 self.receiveMessages(from: self.multicastConnection!)
             case .failed(let error):
@@ -889,9 +940,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         zmqHandler = ZMQHandler()
         
         zmqHandler?.connect(
-            host: Settings.shared.zmqHost,
-            zmqTelemetryPort: UInt16(Settings.shared.zmqTelemetryPort),
-            zmqStatusPort: UInt16(Settings.shared.zmqStatusPort),
+            host: cachedZmqHost,
+            zmqTelemetryPort: cachedZmqTelemetryPort,
+            zmqStatusPort: cachedZmqStatusPort,
             onTelemetry: { [weak self] message in
                 // MARK: Check if this is raw FPV JSON
                 if message.contains("AUX_ADV_IND") || message.contains("FPV Detection") {
@@ -911,6 +962,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         )
     }
     
+    @MainActor
     private func isDeviceBlocked(_ message: CoTMessage) async -> Bool {
         let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
         let fpvID = message.uid.hasPrefix("fpv-") ? message.uid : "fpv-\(message.uid)"
@@ -925,9 +977,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         ]
         
         // Get encounters on MainActor
-        let encounters = await MainActor.run {
-            DroneStorageManager.shared.encounters
-        }
+        let encounters = DroneStorageManager.shared.encounters
         
         // Check each possible ID format
         for id in possibleIds {
@@ -980,16 +1030,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         // Handle AUX_ADV_IND from BT/WiFi array
                         else if messageObj["AUX_ADV_IND"] != nil {
                             let fpvMessage = createAuxAdvIndMessage(messageObj)
-                            DispatchQueue.main.async {
-                                self.updateFPVMessage(fpvMessage)
+                            Task { @MainActor in
+                                await self.updateFPVMessage(fpvMessage)
                             }
                         }
                         // Handle direct frequency field (from ZMQ decoded messages)
                         else if messageObj["frequency"] != nil &&
                                (messageObj["rssi"] != nil || messageObj["AUX_ADV_IND"] != nil) {
                             let fpvMessage = createAuxAdvIndMessage(messageObj)
-                            DispatchQueue.main.async {
-                                self.updateFPVMessage(fpvMessage)
+                            Task { @MainActor in
+                                await self.updateFPVMessage(fpvMessage)
                             }
                         }
                     }
@@ -1012,8 +1062,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 // Handle AUX_ADV_IND update message (from BT/WiFi)
                 else if jsonObject["AUX_ADV_IND"] != nil {
                     let fpvMessage = createAuxAdvIndMessage(jsonObject)
-                    DispatchQueue.main.async {
-                        self.updateFPVMessage(fpvMessage)
+                    Task { @MainActor in
+                        await self.updateFPVMessage(fpvMessage)
                     }
                 }
                 // Handle direct frequency-based messages (from ZMQ decoded BT/WiFi)
@@ -1022,8 +1072,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         jsonObject["signal_strength"] != nil ||
                         jsonObject["AUX_ADV_IND"] != nil) {
                     let fpvMessage = createAuxAdvIndMessage(jsonObject)
-                    DispatchQueue.main.async {
-                        self.updateFPVMessage(fpvMessage)
+                    Task { @MainActor in
+                        await self.updateFPVMessage(fpvMessage)
                     }
                 }
             }
@@ -1158,7 +1208,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         return message
     }
 
-    private func updateFPVMessage(_ updatedMessage: CoTMessage) {
+    @MainActor
+    private func updateFPVMessage(_ updatedMessage: CoTMessage) async {
         // Find existing FPV message and update it - need to check both formats
         let possibleUIDs = [
             updatedMessage.uid,
@@ -1513,8 +1564,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             // Adaptive throttling based on app state
             let now = Date()
             let throttleInterval = self.isInBackground ?
-                Settings.shared.backgroundMessageIntervalSeconds :
-                Settings.shared.messageProcessingIntervalSeconds
+                self.cachedBackgroundMessageInterval :
+                self.cachedMessageProcessingInterval
                 
             if now.timeIntervalSince(self.lastProcessTime) < throttleInterval {
                 // In background mode, buffer messages instead of dropping them
@@ -1647,27 +1698,30 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             return 
         }
         
-        guard Settings.shared.isListening && !isListeningCot else {
-            print("No reconnection needed: listening=\(Settings.shared.isListening), isListeningCot=\(isListeningCot)")
-            return
-        }
-        
-        print("Initiating reconnection...")
-        isReconnecting = true
-        
-        // Clean up any existing connections
-        stopListening()
-        
-        // Wait for cleanup to complete before reconnecting
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor in
+            updateCachedSettings()
+            guard cachedIsListening && !isListeningCot else {
+                print("No reconnection needed: listening=\(cachedIsListening), isListeningCot=\(isListeningCot)")
+                return
+            }
             
-            self.startListening()
+            print("Initiating reconnection...")
+            isReconnecting = true
             
-            // Clear reconnecting flag after a delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.isReconnecting = false
-                print("Reconnection complete")
+            // Clean up any existing connections
+            stopListening()
+            
+            // Wait for cleanup to complete before reconnecting
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self else { return }
+                
+                self.startListening()
+                
+                // Clear reconnecting flag after a delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.isReconnecting = false
+                    print("Reconnection complete")
+                }
             }
         }
     }
@@ -1801,7 +1855,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         self.updateMACHistory(droneId: droneId, mac: mac)
         
         // Spoof detection
-        if Settings.shared.spoofDetectionEnabled {
+        let spoofDetectionEnabled = await MainActor.run {
+            Settings.shared.spoofDetectionEnabled
+        }
+        
+        if spoofDetectionEnabled {
             let monitorStatus = await MainActor.run {
                 self.statusViewModel.statusMessages.last
             }
@@ -1831,46 +1889,44 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         return uid
     }
     
+    @MainActor
     private func updatePilotLocation(for droneId: String, message: CoTMessage) async {
-        await MainActor.run {
-            let targetUid = "drone-\(droneId)"
-            
-            // Find existing drone message and update pilot location
-            if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
-                var updatedMessage = parsedMessages[index]
-                updatedMessage.pilotLat = message.lat
-                updatedMessage.pilotLon = message.lon
-                parsedMessages[index] = updatedMessage
-            }
-            
-            // Also update in storage (MainActor isolated)
-            DroneStorageManager.shared.updatePilotLocation(
-                droneId: "drone-\(droneId)",
-                latitude: Double(message.lat) ?? 0.0,
-                longitude: Double(message.lon) ?? 0.0
-            )
+        let targetUid = "drone-\(droneId)"
+        
+        // Find existing drone message and update pilot location
+        if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
+            var updatedMessage = parsedMessages[index]
+            updatedMessage.pilotLat = message.lat
+            updatedMessage.pilotLon = message.lon
+            parsedMessages[index] = updatedMessage
         }
+        
+        // Also update in storage (MainActor isolated)
+        DroneStorageManager.shared.updatePilotLocation(
+            droneId: "drone-\(droneId)",
+            latitude: Double(message.lat) ?? 0.0,
+            longitude: Double(message.lon) ?? 0.0
+        )
     }
     
+    @MainActor
     private func updateHomeLocation(for droneId: String, message: CoTMessage) async {
-        await MainActor.run {
-            let targetUid = "drone-\(droneId)"
-            
-            // Find existing drone message and update home location
-            if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
-                var updatedMessage = parsedMessages[index]
-                updatedMessage.homeLat = message.lat
-                updatedMessage.homeLon = message.lon
-                parsedMessages[index] = updatedMessage
-            }
-            
-            // Also update in storage (MainActor isolated)
-            DroneStorageManager.shared.updateHomeLocation(
-                droneId: "drone-\(droneId)",
-                latitude: Double(message.lat) ?? 0.0,
-                longitude: Double(message.lon) ?? 0.0
-            )
+        let targetUid = "drone-\(droneId)"
+        
+        // Find existing drone message and update home location
+        if let index = parsedMessages.firstIndex(where: { $0.uid == targetUid }) {
+            var updatedMessage = parsedMessages[index]
+            updatedMessage.homeLat = message.lat
+            updatedMessage.homeLon = message.lon
+            parsedMessages[index] = updatedMessage
         }
+        
+        // Also update in storage (MainActor isolated)
+        DroneStorageManager.shared.updateHomeLocation(
+            droneId: "drone-\(droneId)",
+            latitude: Double(message.lat) ?? 0.0,
+            longitude: Double(message.lon) ?? 0.0
+        )
     }
     
     // MARK: - Helper Methods
@@ -2328,41 +2384,37 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     //MARK: - Helper functions
     
     private func sendNotification(for message: CoTViewModel.CoTMessage) {
-        guard Settings.shared.notificationsEnabled else { return }
-        
-        // Only send notification if more than 5 seconds have passed
-        if let lastTime = lastNotificationTime,
-           Date().timeIntervalSince(lastTime) < 5 {
-            return
-        }
-        
-        if Settings.shared.webhooksEnabled {
-            sendWebhookNotification(for: message)
-        }
-        
-        // Create and send notification
-        let content = UNMutableNotificationContent()
-        print("Attempting to send notification for drone: \(message.uid)")
-        content.title = "Drone Detected"
-        content.body = "ID: \(message.id)\nRSSI: \(message.rssi ?? 0)dBm"
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                print("Failed to schedule notification: \(error)")
-            } else {
-                print("Successfully scheduled notification")
+        Task { @MainActor in
+            guard Settings.shared.notificationsEnabled else { return }
+            
+            // Only send notification if more than 5 seconds have passed
+            if let lastTime = self.lastNotificationTime,
+               Date().timeIntervalSince(lastTime) < 5 {
+                return
             }
+            
+            if Settings.shared.webhooksEnabled {
+                self.sendWebhookNotification(for: message)
+            }
+            
+            // Create and send notification
+            let content = UNMutableNotificationContent()
+            print("Attempting to send notification for drone: \(message.uid)")
+            content.title = "Drone Detected"
+            content.body = "ID: \(message.id)\nRSSI: \(message.rssi ?? 0)dBm"
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            
+            try? await UNUserNotificationCenter.current().add(request)
+            
+            self.lastNotificationTime = Date()
         }
-        
-        lastNotificationTime = Date()
     }
     
     private func sendStatusNotification(for message: StatusViewModel.StatusMessage) {
-        guard Settings.shared.notificationsEnabled else { return }
-        // Don't send here - let StatusViewModel handle it through checkSystemThresholds
         Task { @MainActor in
-            statusViewModel.checkSystemThresholds()
+            guard Settings.shared.notificationsEnabled else { return }
+            // Don't send here - let StatusViewModel handle it through checkSystemThresholds
+            self.statusViewModel.checkSystemThresholds()
         }
     }
     
@@ -2423,29 +2475,32 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     func verifyZMQSubscription() {
-        guard Settings.shared.connectionMode == .zmq else { return }
-        
-        if zmqHandler == nil {
-            print("ZMQ handler is nil, creating new connection")
-            startZMQListening()
-            return
-        }
-        
-        if zmqHandler?.isConnected != true {
-            print("ZMQ connection lost, reconnecting...")
-            zmqHandler?.disconnect()
-            zmqHandler = nil
-            startZMQListening()
-            return
-        }
-        
-        // Just check if connection is valid, but don't resubscribe
-        zmqHandler?.verifySubscription { [weak self] isValid in
-            if !isValid {
-                print("ZMQ connection invalid, reconnecting...")
-                self?.zmqHandler?.disconnect()
-                self?.zmqHandler = nil
-                self?.startZMQListening()
+        Task { @MainActor in
+            updateCachedSettings()
+            guard cachedConnectionMode == .zmq else { return }
+            
+            if zmqHandler == nil {
+                print("ZMQ handler is nil, creating new connection")
+                startZMQListening()
+                return
+            }
+            
+            if zmqHandler?.isConnected != true {
+                print("ZMQ connection lost, reconnecting...")
+                zmqHandler?.disconnect()
+                zmqHandler = nil
+                startZMQListening()
+                return
+            }
+            
+            // Just check if connection is valid, but don't resubscribe
+            zmqHandler?.verifySubscription { [weak self] isValid in
+                if !isValid {
+                    print("ZMQ connection invalid, reconnecting...")
+                    self?.zmqHandler?.disconnect()
+                    self?.zmqHandler = nil
+                    self?.startZMQListening()
+                }
             }
         }
     }
@@ -2454,12 +2509,15 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Only check if we're supposed to be listening
         guard isListeningCot else { return }
         
-        if Settings.shared.connectionMode == .zmq {
-            verifyZMQSubscription()
-        } else if Settings.shared.connectionMode == .multicast {
-            if cotListener == nil || statusListener == nil {
-                print("Multicast connection lost in background, reconnecting...")
-                startMulticastListening()
+        Task { @MainActor in
+            updateCachedSettings()
+            if cachedConnectionMode == .zmq {
+                verifyZMQSubscription()
+            } else if cachedConnectionMode == .multicast {
+                if cotListener == nil || statusListener == nil {
+                    print("Multicast connection lost in background, reconnecting...")
+                    startMulticastListening()
+                }
             }
         }
     }
@@ -2662,63 +2720,63 @@ extension CoTViewModel {
     
     /// Setup MQTT client and start connection
     func setupMQTTClient() {
-        let config = Settings.shared.mqttConfiguration
-        guard config.enabled && config.isValid else {
-            mqttClient = nil
-            return
-        }
-        
         Task { @MainActor in
-            mqttClient = MQTTClient(configuration: config)
-            mqttClient?.connect()
+            let config = Settings.shared.mqttConfiguration
+            guard config.enabled && config.isValid else {
+                self.mqttClient = nil
+                return
+            }
+            
+            self.mqttClient = MQTTClient(configuration: config)
+            self.mqttClient?.connect()
             
             // Observe connection state
-            mqttClient?.$state
+            self.mqttClient?.$state
                 .sink { state in
                     print("MQTT state: \(state)")
                 }
-                .store(in: &cancellables)
+                .store(in: &self.cancellables)
         }
     }
     
     /// Setup TAK client and start connection
     func setupTAKClient() {
-        let config = Settings.shared.takConfiguration
-        guard config.enabled && config.isValid else {
-            takClient = nil
-            return
-        }
-        
         Task { @MainActor in
-            takClient = TAKClient(configuration: config)
-            takClient?.connect()
+            let config = Settings.shared.takConfiguration
+            guard config.enabled && config.isValid else {
+                self.takClient = nil
+                return
+            }
+            
+            self.takClient = TAKClient(configuration: config)
+            self.takClient?.connect()
             
             // Observe connection state
-            takClient?.$state
+            self.takClient?.$state
                 .sink { state in
                     print("TAK state: \(state)")
                 }
-                .store(in: &cancellables)
+                .store(in: &self.cancellables)
         }
     }
     
     /// Publish drone detection to MQTT
     func publishDroneToMQTT(_ message: CoTMessage) {
-        guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
-        
-        // Check rate limit
-        let droneId = message.mac ?? message.uid
-        guard RateLimiterManager.shared.shouldAllowDronePublish(for: droneId) else {
-            // Rate limited - skip this publish
-            return
-        }
-        
-        guard RateLimiterManager.shared.shouldAllowMQTTPublish() else {
-            // Global MQTT rate limit hit
-            return
-        }
-        
-        Task {
+        Task { @MainActor in
+            guard Settings.shared.mqttEnabled, let mqttClient = self.mqttClient else { return }
+            
+            // Check rate limit
+            let droneId = message.mac ?? message.uid
+            guard RateLimiterManager.shared.shouldAllowDronePublish(for: droneId) else {
+                // Rate limited - skip this publish
+                return
+            }
+            
+            guard RateLimiterManager.shared.shouldAllowMQTTPublish() else {
+                // Global MQTT rate limit hit
+                return
+            }
+            
             do {
                 let mqttMessage = message.toMQTTDroneMessage()
                 try await mqttClient.publishDrone(mqttMessage)
@@ -2726,8 +2784,8 @@ extension CoTViewModel {
                 // Home Assistant discovery (first time only per MAC)
                 if Settings.shared.mqttHomeAssistantEnabled {
                     let mac = message.mac ?? message.uid
-                    if !publishedDrones.contains(mac) {
-                        publishedDrones.insert(mac)
+                    if !self.publishedDrones.contains(mac) {
+                        self.publishedDrones.insert(mac)
                         try await mqttClient.publishHomeAssistantDiscovery(
                             for: mac,
                             deviceName: message.deviceName
@@ -2742,15 +2800,15 @@ extension CoTViewModel {
     
     /// Publish CoT XML to TAK server
     func publishCoTToTAK(_ cotXML: String) {
-        guard Settings.shared.takEnabled, let takClient = takClient else { return }
-        
-        // Check rate limit
-        guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
-            // Rate limited - skip this publish
-            return
-        }
-        
-        Task {
+        Task { @MainActor in
+            guard Settings.shared.takEnabled, let takClient = self.takClient else { return }
+            
+            // Check rate limit
+            guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
+                // Rate limited - skip this publish
+                return
+            }
+            
             do {
                 try await takClient.send(cotXML)
             } catch {
@@ -2761,10 +2819,10 @@ extension CoTViewModel {
     
     /// Publish system status to MQTT (call periodically)
     func publishSystemStatusToMQTT() {
-        guard Settings.shared.mqttEnabled, let mqttClient = mqttClient else { return }
-        
         Task { @MainActor in
-            let systemMessage = createMQTTSystemMessage(dronesTracked: droneSignatures.count)
+            guard Settings.shared.mqttEnabled, let mqttClient = self.mqttClient else { return }
+            
+            let systemMessage = self.createMQTTSystemMessage(dronesTracked: self.droneSignatures.count)
             
             do {
                 try await mqttClient.publishSystemStatus(systemMessage)
@@ -2859,70 +2917,64 @@ extension CoTViewModel {
 extension CoTViewModel {
     
     /// Setup ADS-B client and start polling
-    func setupADSBClient() {
+    @MainActor
+    func setupADSBClient() async {
         let config = Settings.shared.adsbConfiguration
         print("DEBUG: setupADSBClient called - enabled: \(config.enabled), URL: '\(config.readsbURL)', isValid: \(config.isValid)")
         
         guard config.enabled && config.isValid else {
             print("DEBUG: ADS-B config not enabled or invalid, cleaning up")
-            Task { @MainActor in
-                // Cancel all subscriptions first to prevent memory leaks
-                self.adsbCancellables.removeAll()
-                
-                // Stop and clear client
-                self.adsbClient?.stop()
-                self.adsbClient = nil
-                
-                // Clear tracked aircraft
-                self.aircraftTracks.removeAll()
-            }
+            // Cancel all subscriptions first to prevent memory leaks
+            self.adsbCancellables.removeAll()
+            
+            // Stop and clear client
+            self.adsbClient?.stop()
+            self.adsbClient = nil
+            
+            // Clear tracked aircraft
+            self.aircraftTracks.removeAll()
             return
         }
         
-        Task { @MainActor in
-            // Cancel ALL previous ADS-B subscriptions first
-            self.adsbCancellables.removeAll()
-            
-            // Stop existing client if any
-            if let existingClient = self.adsbClient {
-                existingClient.stop()
-                self.adsbClient = nil
+        // Cancel ALL previous ADS-B subscriptions first
+        self.adsbCancellables.removeAll()
+        
+        // Stop existing client if any
+        if let existingClient = self.adsbClient {
+            existingClient.stop()
+            self.adsbClient = nil
+        }
+        
+        // Create new client
+        let client = ADSBClient(configuration: config)
+        self.adsbClient = client
+        
+        // Observe aircraft updates
+        client.$aircraft
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] aircraft in
+                guard let self = self else { return }
+                self.handleAircraftUpdate(aircraft)
             }
-            
-            // Small delay to ensure complete cleanup
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-            
-            // Create new client
-            let client = ADSBClient(configuration: config)
-            self.adsbClient = client
-            
-            // Observe aircraft updates
-            client.$aircraft
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] aircraft in
-                    guard let self = self else { return }
-                    self.handleAircraftUpdate(aircraft)
-                }
-                .store(in: &self.adsbCancellables)
-            
-            // Observe connection state
-            client.$state
-                .receive(on: DispatchQueue.main)
-                .sink { state in
-                    if case .failed(let error) = state {
-                        print("ADS-B error: \(error.localizedDescription)")
-                        // Provide helpful message for connection errors
-                        if (error as NSError).code == -1004 || (error as NSError).code == -1003 {
-                            print("TIP: Make sure readsb/dump1090 is running at: \(config.readsbURL)")
-                            print("     You can test with: curl \(config.readsbURL)/data/aircraft.json")
-                        }
+            .store(in: &self.adsbCancellables)
+        
+        // Observe connection state
+        client.$state
+            .receive(on: DispatchQueue.main)
+            .sink { state in
+                if case .failed(let error) = state {
+                    print("ADS-B error: \(error.localizedDescription)")
+                    // Provide helpful message for connection errors
+                    if (error as NSError).code == -1004 || (error as NSError).code == -1003 {
+                        print("TIP: Make sure readsb/dump1090 is running at: \(config.readsbURL)")
+                        print("     You can test with: curl \(config.readsbURL)/data/aircraft.json")
                     }
                 }
-                .store(in: &self.adsbCancellables)
-            
-            // Start polling AFTER observations are set up and cleanup is complete
-            client.start()
-        }
+            }
+            .store(in: &self.adsbCancellables)
+        
+        // Start polling AFTER observations are set up and cleanup is complete
+        client.start()
     }
     
     /// Get all active detections (drones + aircraft)
@@ -3024,6 +3076,7 @@ extension CoTViewModel {
     }
     
     /// Send notification for nearby aircraft
+    @MainActor
     private func sendAircraftProximityNotification(for aircraft: Aircraft, distance: Double) {
         // Rate limiting
         guard let lastTime = lastNotificationTime,
@@ -3105,7 +3158,9 @@ extension CoTViewModel {
     private func publishAircraftToMQTT(_ aircraft: [Aircraft]) {
         guard let mqttClient = mqttClient else { return }
         
-        Task {
+        Task { @MainActor in
+            let mqttBaseTopic = Settings.shared.mqttBaseTopic
+            
             for aircraft in aircraft {
                 // Rate limit per aircraft
                 guard RateLimiterManager.shared.shouldAllowDronePublish(for: aircraft.hex) else {
@@ -3118,7 +3173,7 @@ extension CoTViewModel {
                 }
                 
                 do {
-                    let topic = "\(Settings.shared.mqttBaseTopic)/aircraft/\(aircraft.hex)"
+                    let topic = "\(mqttBaseTopic)/aircraft/\(aircraft.hex)"
                     let message = aircraft.toMQTTMessage()
                     let data = try JSONSerialization.data(withJSONObject: message)
                     
@@ -3134,7 +3189,7 @@ extension CoTViewModel {
     private func publishAircraftToTAK(_ aircraft: [Aircraft]) {
         guard let takClient = takClient else { return }
         
-        Task {
+        Task { @MainActor in
             for aircraft in aircraft {
                 // Rate limit per aircraft
                 guard RateLimiterManager.shared.shouldAllowDronePublish(for: aircraft.hex) else {

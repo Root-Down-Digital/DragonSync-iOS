@@ -15,9 +15,13 @@ final class BackgroundManager {
     static let shared = BackgroundManager()
 
     private let queue = DispatchQueue(label: "BackgroundWork")
-    private let groupLock = NSLock()
     private var group: NWConnectionGroup?
-    private var running = false
+    private let runningQueue = DispatchQueue(label: "BackgroundManager.running")
+    private var _running = false
+    private var running: Bool {
+        get { runningQueue.sync { _running } }
+        set { runningQueue.sync { _running = newValue } }
+    }
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
     private var bgRefreshTimer: Timer?
     private let monitor = NWPathMonitor()
@@ -39,13 +43,10 @@ final class BackgroundManager {
     func isNetworkAvailable() -> Bool { hasConnection }
 
     func startBackgroundProcessing(useBackgroundTask: Bool = true) {
-        groupLock.lock()
         if running {
-            groupLock.unlock()
             return
         }
         running = true
-        groupLock.unlock()
 
         SilentAudioKeepAlive.shared.start()
 
@@ -57,24 +58,36 @@ final class BackgroundManager {
             }
         }
 
-        queue.async { [weak self] in
+        Task.detached { [weak self] in
             guard let self else { return }
             
-            switch Settings.shared.connectionMode {
+            // Get connection mode on main actor
+            let connectionMode = await MainActor.run {
+                Settings.shared.connectionMode
+            }
+            
+            switch connectionMode {
             case .multicast:
-                MulticastDrain.connect(&self.group, lock: self.groupLock)
+                await self.connectMulticast()
             case .zmq:
                 ZMQHandler.shared.connectIfNeeded()
             }
 
             while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
                 autoreleasepool {
-                    switch Settings.shared.connectionMode {
-                    case .multicast:
-                        break
-                    case .zmq:
-                        if ZMQHandler.shared.isConnected {
-                            ZMQHandler.shared.drainOnce()
+                    // Check connection mode each iteration in case it changed
+                    Task {
+                        let currentMode = await MainActor.run {
+                            Settings.shared.connectionMode
+                        }
+                        
+                        switch currentMode {
+                        case .multicast:
+                            break
+                        case .zmq:
+                            if ZMQHandler.shared.isConnected {
+                                ZMQHandler.shared.drainOnce()
+                            }
                         }
                     }
                     // Reduced sleep time for faster message processing
@@ -82,20 +95,49 @@ final class BackgroundManager {
                 }
             }
 
-            self.stopBackgroundProcessing()
+            await self.cleanup()
         }
+    }
+    
+    private func connectMulticast() async {
+        guard group == nil else { return }
+        
+        let host = await MainActor.run { Settings.shared.multicastHost }
+        let port = await MainActor.run { Settings.shared.multicastPort }
+        
+        do {
+            let hostEndpoint = NWEndpoint.Host(host)
+            let portEndpoint = NWEndpoint.Port(integerLiteral: UInt16(port))
+            let desc = try NWMulticastGroup(for: [.hostPort(host: hostEndpoint, port: portEndpoint)])
+            let params = NWParameters.udp
+            params.allowLocalEndpointReuse = true
+
+            let g = NWConnectionGroup(with: desc, using: params)
+            g.setReceiveHandler(maximumMessageSize: 65_535) { _, data, _ in
+                if let d = data {
+                    NotificationCenter.default.post(name: .init("BackgroundMulticastData"), object: d)
+                }
+            }
+            g.start(queue: DispatchQueue.global(qos: .utility))
+            
+            group = g
+        } catch {
+            print("Failed to connect multicast: \(error)")
+        }
+    }
+    
+    private func cleanup() async {
+        self.stopBackgroundProcessing()
     }
 
     func stopBackgroundProcessing() {
-        groupLock.lock()
         let wasRunning = running
         running = false
-        groupLock.unlock()
         guard wasRunning else { return }
 
         // Fix for crash report: Don't access Settings.shared during stop - disconnect both safely
         ZMQHandler.shared.disconnect()
-        MulticastDrain.disconnect(&group, lock: groupLock)
+        disconnectMulticast()
 
         bgRefreshTimer?.invalidate()
         bgRefreshTimer = nil
@@ -104,9 +146,7 @@ final class BackgroundManager {
     }
 
     private func isRunningAndBackgroundOK(useBackgroundTask: Bool) -> Bool {
-        groupLock.lock()
         let run = running
-        groupLock.unlock()
         
         let backgroundTimeOK = useBackgroundTask ?
             UIApplication.shared.backgroundTimeRemaining > 10 : true
@@ -149,35 +189,9 @@ final class BackgroundManager {
             taskStartTime = nil
         }
     }
-}
-
-enum MulticastDrain {
-    static func connect(_ grp: inout NWConnectionGroup?, lock: NSLock) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard grp == nil else { return }
-        do {
-            let host = NWEndpoint.Host(Settings.shared.multicastHost)
-            let port = NWEndpoint.Port(integerLiteral: UInt16(Settings.shared.multicastPort))
-            let desc = try NWMulticastGroup(for: [.hostPort(host: host, port: port)])
-            let params = NWParameters.udp
-            params.allowLocalEndpointReuse = true
-
-            let g = NWConnectionGroup(with: desc, using: params)
-            g.setReceiveHandler(maximumMessageSize: 65_535) { _, data, _ in
-                if let d = data {
-                    NotificationCenter.default.post(name: .init("BackgroundMulticastData"), object: d)
-                }
-            }
-            g.start(queue: DispatchQueue.global(qos: .utility))
-            grp = g
-        } catch { }
-    }
-
-    static func disconnect(_ grp: inout NWConnectionGroup?, lock: NSLock) {
-        lock.lock()
-        defer { lock.unlock() }
-        grp?.cancel()
-        grp = nil
+    
+    private func disconnectMulticast() {
+        group?.cancel()
+        group = nil
     }
 }

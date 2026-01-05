@@ -25,6 +25,7 @@ enum ConnectionMode: String, Codable, CaseIterable {
 
 //MARK: - Local stored vars (nothing sensitive)
 
+@MainActor
 class Settings: ObservableObject {
     static let shared = Settings()
     
@@ -260,8 +261,16 @@ class Settings: ObservableObject {
         }
     }
     @AppStorage("enableProximityWarnings") var enableProximityWarnings = true
-    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 50
-    @AppStorage("backgroundMessageInterval") var backgroundMessageInterval: Int = 100
+    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 50 {
+        didSet {
+            objectWillChange.send()
+        }
+    }
+    @AppStorage("backgroundMessageInterval") var backgroundMessageInterval: Int = 100 {
+        didSet {
+            objectWillChange.send()
+        }
+    }
     @AppStorage("useUserLocationForStatus") var useUserLocationForStatus = false {
         didSet { objectWillChange.send() }
     }

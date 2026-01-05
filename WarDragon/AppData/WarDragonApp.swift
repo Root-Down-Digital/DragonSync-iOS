@@ -63,7 +63,7 @@ struct WarDragonApp: App {
         print("📊 Migration Status: \(migrationManager.migrationStatus)")
         
         guard migrationManager.needsMigration else {
-            print("ℹ️ No migration needed - skipping")
+            print("No migration needed - skipping")
             return
         }
         
@@ -80,8 +80,8 @@ struct WarDragonApp: App {
             
             // Perform migration
             try await migrationManager.migrate(modelContext: context)
-            print("✅ Migration completed successfully - will not run again")
-            print("📊 New Migration Status: \(migrationManager.migrationStatus)")
+            print("Migration completed successfully - will not run again")
+            print("New Migration Status: \(migrationManager.migrationStatus)")
             
             // Force DroneStorageManager to reload from SwiftData
             DroneStorageManager.shared.loadFromStorage()
@@ -102,6 +102,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ]
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        
+        // Always start with a clean state - not listening
+        Task { @MainActor in
+            Settings.shared.isListening = false
+        }
 
         UNUserNotificationCenter.current().delegate = self
         setupAppLifecycleObservers()
@@ -179,6 +184,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
     
     func applicationWillTerminate(_ application: UIApplication) {
+        // Clean stop - ensure listening is disabled
+        Task { @MainActor in
+            Settings.shared.isListening = false
+        }
         ZMQHandler.shared.disconnect()
     }
 
