@@ -136,6 +136,11 @@ Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally
 4. Enter WarDragon Pro IP address
 5. Start monitoring
 
+**If no connection/data:**
+- System status from wardragon monitor service needs GPS. Assign it with the static flag or wait for lock
+- The `config.ini` file in the `/home/dragon/WarDragon/DragonSync/` directory may need to be changed:
+    - `zmq_host = 127.0.0.1` -> `zmq_host = 0.0.0.0` - to use all interfaces if localhost does not see the dragon
+    - `tak_multicast_addr = 239.2.3.1` -> `tak_multicast_addr = 224.0.0.1` - for multicast on some networks (using macOS firewall, etc.)
 ---
 
 ## Option 2: Drag0net Scanner (ESP32 Standalone)
