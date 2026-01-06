@@ -551,6 +551,154 @@ class Settings: ObservableObject {
         adsbConfiguration = config
     }
     
+    // MARK: - Kismet Settings
+    @AppStorage("kismetEnabled") var kismetEnabled = false {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .kismetSettingsChanged, object: nil)
+        }
+    }
+    
+    @AppStorage("kismetServerURL") var kismetServerURL: String = "http://localhost:2501" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .kismetSettingsChanged, object: nil)
+        }
+    }
+    
+    var kismetAPIKey: String {
+        get {
+            (try? KeychainManager.shared.loadString(forKey: "kismetAPIKey")) ?? ""
+        }
+        set {
+            if newValue.isEmpty {
+                try? KeychainManager.shared.delete(key: "kismetAPIKey")
+            } else {
+                try? KeychainManager.shared.save(newValue, forKey: "kismetAPIKey")
+            }
+            objectWillChange.send()
+        }
+    }
+    
+    @AppStorage("kismetPollInterval") var kismetPollInterval: Double = 5.0 {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .kismetSettingsChanged, object: nil)
+        }
+    }
+    
+    @AppStorage("kismetFilterByType") private var kismetFilterByTypeJson: String = "[\"Wi-Fi Device\",\"Bluetooth Device\"]" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .kismetSettingsChanged, object: nil)
+        }
+    }
+    
+    var kismetFilterByType: [String] {
+        get {
+            guard let data = kismetFilterByTypeJson.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return ["Wi-Fi Device", "Bluetooth Device"]
+            }
+            return array
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                kismetFilterByTypeJson = json
+            }
+        }
+    }
+    
+    var kismetConfiguration: KismetClient.KismetConfiguration {
+        get {
+            KismetClient.KismetConfiguration(
+                enabled: kismetEnabled,
+                serverURL: kismetServerURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                apiKey: kismetAPIKey.isEmpty ? nil : kismetAPIKey,
+                pollInterval: kismetPollInterval,
+                filterByType: kismetFilterByType
+            )
+        }
+        set {
+            kismetEnabled = newValue.enabled
+            kismetServerURL = newValue.serverURL
+            kismetAPIKey = newValue.apiKey ?? ""
+            kismetPollInterval = newValue.pollInterval
+            kismetFilterByType = newValue.filterByType
+        }
+    }
+    
+    func updateKismetConfiguration(_ config: KismetClient.KismetConfiguration) {
+        kismetConfiguration = config
+    }
+    
+    // MARK: - Lattice Settings
+    @AppStorage("latticeEnabled") var latticeEnabled = false {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .latticeSettingsChanged, object: nil)
+        }
+    }
+    
+    @AppStorage("latticeServerURL") var latticeServerURL: String = "https://api.lattice.com" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .latticeSettingsChanged, object: nil)
+        }
+    }
+    
+    var latticeAPIToken: String {
+        get {
+            (try? KeychainManager.shared.loadString(forKey: "latticeAPIToken")) ?? ""
+        }
+        set {
+            if newValue.isEmpty {
+                try? KeychainManager.shared.delete(key: "latticeAPIToken")
+            } else {
+                try? KeychainManager.shared.save(newValue, forKey: "latticeAPIToken")
+            }
+            objectWillChange.send()
+        }
+    }
+    
+    @AppStorage("latticeOrganizationID") var latticeOrganizationID: String = "" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .latticeSettingsChanged, object: nil)
+        }
+    }
+    
+    @AppStorage("latticeSiteID") var latticeSiteID: String = "" {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .latticeSettingsChanged, object: nil)
+        }
+    }
+    
+    var latticeConfiguration: LatticeClient.LatticeConfiguration {
+        get {
+            LatticeClient.LatticeConfiguration(
+                enabled: latticeEnabled,
+                serverURL: latticeServerURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                apiToken: latticeAPIToken.isEmpty ? nil : latticeAPIToken,
+                organizationID: latticeOrganizationID.trimmingCharacters(in: .whitespacesAndNewlines),
+                siteID: latticeSiteID.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        set {
+            latticeEnabled = newValue.enabled
+            latticeServerURL = newValue.serverURL
+            latticeAPIToken = newValue.apiToken ?? ""
+            latticeOrganizationID = newValue.organizationID
+            latticeSiteID = newValue.siteID
+        }
+    }
+    
+    func updateLatticeConfiguration(_ config: LatticeClient.LatticeConfiguration) {
+        latticeConfiguration = config
+    }
+    
     // MARK: - Rate Limiting Settings
     @AppStorage("rateLimitEnabled") var rateLimitEnabled = true {
         didSet { objectWillChange.send() }
@@ -748,5 +896,7 @@ class Settings: ObservableObject {
 // MARK: - Notification Names
 extension Notification.Name {
     static let adsbSettingsChanged = Notification.Name("adsbSettingsChanged")
+    static let kismetSettingsChanged = Notification.Name("kismetSettingsChanged")
+    static let latticeSettingsChanged = Notification.Name("latticeSettingsChanged")
 }
 

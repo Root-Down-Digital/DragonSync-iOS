@@ -191,7 +191,7 @@ struct ContentView: View {
         .tabItem {
             Label(tabLabel, systemImage: tabIcon)
         }
-        .badge(unreadDetectionCount > 0 ? unreadDetectionCount : nil)
+        .badge(unreadDetectionCount > 0 ? unreadDetectionCount : 0)
         .tag(1)
     }
     

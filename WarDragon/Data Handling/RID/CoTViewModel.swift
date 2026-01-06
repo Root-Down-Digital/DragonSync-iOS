@@ -61,7 +61,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var mqttClient: MQTTClient?
     private var takClient: TAKClient?
     private var cancellables = Set<AnyCancellable>()
-    private var publishedDrones: Set<String> = [] // Track drones for HA discovery
+    private var publishedDrones: Set<String> = []
+    
+    private var kismetClient: KismetClient?
+    private var latticeClient: LatticeClient? // Track drones for HA discovery
     
     // MARK: - ADS-B Integration
     private var adsbClient: ADSBClient?
@@ -613,6 +616,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.checkPermissions()
             self.setupMQTTClient()
             self.setupTAKClient()
+            self.setupKismetClient()
+            self.setupLatticeClient()
             
             // Delay ADS-B setup to give the server time to be ready
             // This prevents timeouts when app launches before readsb is fully running
@@ -1867,6 +1872,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 if let cotXML = self.generateCoTXML(from: fpvMessage) {
                     self.publishCoTToTAK(cotXML)
                 }
+                self.publishToKismet(fpvMessage)
+                self.publishToLattice(fpvMessage)
             }
             
             // Save to storage
@@ -2461,6 +2468,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             if let cotXML = self.generateCoTXML(from: updatedMessage) {
                 self.publishCoTToTAK(cotXML)
             }
+            self.publishToKismet(updatedMessage)
+            self.publishToLattice(updatedMessage)
         }
     }
     
@@ -2850,10 +2859,66 @@ extension CoTViewModel {
             self.takClient = TAKClient(configuration: config)
             self.takClient?.connect()
             
-            // Observe connection state
             self.takClient?.$state
                 .sink { state in
                     print("TAK state: \(state)")
+                }
+                .store(in: &self.cancellables)
+        }
+    }
+    
+    func setupKismetClient() {
+        Task { @MainActor in
+            let config = Settings.shared.kismetConfiguration
+            guard config.enabled && config.isValid else {
+                self.kismetClient?.stop()
+                self.kismetClient = nil
+                return
+            }
+            
+            self.kismetClient = KismetClient(configuration: config)
+            self.kismetClient?.start()
+            
+            NotificationCenter.default.publisher(for: .kismetSettingsChanged)
+                .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        if Settings.shared.kismetEnabled {
+                            await self.setupKismetClient()
+                        } else {
+                            self.kismetClient?.stop()
+                            self.kismetClient = nil
+                        }
+                    }
+                }
+                .store(in: &self.cancellables)
+        }
+    }
+    
+    func setupLatticeClient() {
+        Task { @MainActor in
+            let config = Settings.shared.latticeConfiguration
+            guard config.enabled && config.isValid else {
+                self.latticeClient = nil
+                return
+            }
+            
+            self.latticeClient = LatticeClient(configuration: config)
+            
+            NotificationCenter.default.publisher(for: .latticeSettingsChanged)
+                .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        if Settings.shared.latticeEnabled {
+                            await self.setupLatticeClient()
+                        } else {
+                            self.latticeClient = nil
+                        }
+                    }
                 }
                 .store(in: &self.cancellables)
         }
@@ -2995,6 +3060,34 @@ extension CoTViewModel {
         """
         
         return xml
+    }
+    
+    private func publishToKismet(_ message: CoTMessage) {
+        guard let kismetClient = kismetClient else { return }
+        
+        Task { @MainActor in
+            guard Settings.shared.kismetEnabled else { return }
+            
+            do {
+                try await kismetClient.publish(device: message)
+            } catch {
+                print("Kismet publish failed: \(error)")
+            }
+        }
+    }
+    
+    private func publishToLattice(_ message: CoTMessage) {
+        guard let latticeClient = latticeClient else { return }
+        
+        Task { @MainActor in
+            guard Settings.shared.latticeEnabled else { return }
+            
+            do {
+                try await latticeClient.publish(detection: message)
+            } catch {
+                print("Lattice publish failed: \(error)")
+            }
+        }
     }
 }
 
