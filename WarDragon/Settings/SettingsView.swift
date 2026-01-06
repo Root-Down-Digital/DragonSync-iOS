@@ -329,6 +329,36 @@ struct SettingsView: View {
                         }
                     }
                 }
+                
+                NavigationLink {
+                    KismetSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "wifi.circle.fill")
+                            .foregroundColor(.cyan)
+                        Text("Kismet Server")
+                        Spacer()
+                        if settings.kismetEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+                
+                NavigationLink {
+                    LatticeSettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "grid.circle.fill")
+                            .foregroundColor(.purple)
+                        Text("Lattice DAS")
+                        Spacer()
+                        if settings.latticeEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
             }
             
             Section("Input") {
@@ -337,7 +367,7 @@ struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "airplane")
-                            .foregroundColor(.purple)
+                            .foregroundColor(.teal)
                         Text("ADS-B Aircraft")
                         Spacer()
                         if settings.adsbEnabled {
