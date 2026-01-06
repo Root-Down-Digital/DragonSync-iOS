@@ -641,7 +641,7 @@ class Settings: ObservableObject {
         }
     }
     
-    @AppStorage("latticeServerURL") var latticeServerURL: String = "https://api.lattice.com" {
+    @AppStorage("latticeServerURL") var latticeServerURL: String = "https://sandbox.lattice-das.com" {
         didSet {
             objectWillChange.send()
             NotificationCenter.default.post(name: .latticeSettingsChanged, object: nil)

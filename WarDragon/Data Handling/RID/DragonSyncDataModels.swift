@@ -30,14 +30,40 @@ struct KismetDevice: Codable {
     let key: String
     let macaddr: String
     let type: String
-    let name: String
+    let name: String?
     let latitude: Double?
     let longitude: Double?
     let altitude: Double?
     let signal: Int?
     let channel: String?
-    let firstSeen: Date
-    let lastSeen: Date
+    let firstSeen: Date?
+    let lastSeen: Date?
+    let signalData: KismetSignalData?
+    
+    private enum CodingKeys: String, CodingKey {
+        case key = "kismet.device.base.key"
+        case macaddr = "kismet.device.base.macaddr"
+        case type = "kismet.device.base.type"
+        case name = "kismet.device.base.name"
+        case latitude = "kismet.device.base.location.lat"
+        case longitude = "kismet.device.base.location.lon"
+        case altitude = "kismet.device.base.location.alt"
+        case signal = "kismet.device.base.signal.last_signal"
+        case channel = "kismet.device.base.channel"
+        case firstSeen = "kismet.device.base.first_time"
+        case lastSeen = "kismet.device.base.last_time"
+        case signalData = "kismet.device.base.signal"
+    }
+}
+
+struct KismetSignalData: Codable {
+    let lastSignal: Int?
+    let lastSignalDBM: Int?
+    
+    private enum CodingKeys: String, CodingKey {
+        case lastSignal = "kismet.common.signal.last_signal"
+        case lastSignalDBM = "kismet.common.signal.last_signal_dbm"
+    }
 }
 
 struct LatticeReport: Codable {

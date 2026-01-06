@@ -491,7 +491,15 @@ class DataMigrationManager {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let backupURL = documentsPath.appendingPathComponent("wardragon_swiftdata_export_\(Int(Date().timeIntervalSince1970)).json")
         
-        try jsonData.write(to: backupURL)
+        // Write with proper file permissions
+        try jsonData.write(to: backupURL, options: [.atomic, .completeFileProtection])
+        
+        // Ensure file is accessible for sharing
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = false
+        var mutableURL = backupURL
+        try? mutableURL.setResourceValues(resourceValues)
+        
         logger.info("✅ SwiftData export created and validated at: \(backupURL.lastPathComponent) (\(encounters.count) encounters)")
         
         return backupURL

@@ -19,7 +19,7 @@ class LatticeClient: ObservableObject {
         
         init(
             enabled: Bool = false,
-            serverURL: String = "https://api.lattice.com",
+            serverURL: String = "https://sandbox.lattice-das.com",
             apiToken: String? = nil,
             organizationID: String = "",
             siteID: String = ""
@@ -123,3 +123,5 @@ enum LatticeError: LocalizedError {
         }
     }
 }
+
+
