@@ -17,9 +17,11 @@
 
 <br>
 
+DragonSync iOS is a user friendly alternative/companion app for the Python backend utility. It relies on the ZMQ data from DroneID, and can be used with or without additional wrapper scripts. 
+
 Real-time drone, aircraft & FPV detection and monitoring for iOS/macOS. Professional-grade detection with advanced signal analysis and intelligence. 
 
-Enrich data from ADS-B, DragonSync and DroneID feeds: In-app ADS-B, MQTT and TAK support allows for easy integration, granting users functionality without complex backend configurations.
+Enrich data from ADS-B, DragonSync and DroneID feeds. In-app TAK, MQTT, Kismet and Lattice support allows for easy integration, granting users functionality without complex backend configurations.
 </div>
 <br>
 
