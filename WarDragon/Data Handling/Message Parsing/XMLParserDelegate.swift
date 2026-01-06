@@ -1391,23 +1391,42 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                        fpvSource = sourceStr
                    }
             // Parse backend metadata fields from dragonsync.py
-            } else if trimmed.hasPrefix("Frequency:") {
-                // Parse frequency in MHz format: "Frequency: 5785.000 MHz"
-                let freqStr = trimmed.dropFirst(10)
+            } else if trimmed.hasPrefix("Freq:") {
+                // Parse frequency - can be in Hz or MHz format
+                let original = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                let hasHzSuffix = original.contains(" Hz")
+                let hasMHzSuffix = original.contains(" MHz")
+                
+                let freqStr = original
+                    .replacingOccurrences(of: " Hz", with: "")
                     .replacingOccurrences(of: " MHz", with: "")
                     .trimmingCharacters(in: .whitespaces)
-                freq = Double(freqStr)
-            } else if trimmed.hasPrefix("SeenBy:") {
-                seenBy = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("ObservedAt:") {
-                // Parse ISO8601 timestamp and convert to Unix timestamp
-                let dateStr = trimmed.dropFirst(11).trimmingCharacters(in: .whitespaces)
-                let formatter = ISO8601DateFormatter()
-                if let date = formatter.date(from: dateStr) {
-                    observedAt = date.timeIntervalSince1970
+                
+                if let freqVal = Double(freqStr) {
+                    if hasHzSuffix || (!hasMHzSuffix && freqVal > 100000) {
+                        // Explicit Hz suffix OR large value (> 100 kHz) means it's Hz
+                        freq = freqVal
+                    } else {
+                        // Explicit MHz suffix OR small value means MHz, convert to Hz
+                        freq = freqVal * 1_000_000
+                    }
                 }
-            } else if trimmed.hasPrefix("RID_TS:") {
-                ridTimestamp = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("Seen By:") {
+                seenBy = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("Observed At:") {
+                // Can be Unix timestamp or ISO8601
+                let obsStr = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
+                if let unixTs = Double(obsStr) {
+                    observedAt = unixTs
+                } else {
+                    // Try parsing as ISO8601
+                    let formatter = ISO8601DateFormatter()
+                    if let date = formatter.date(from: obsStr) {
+                        observedAt = date.timeIntervalSince1970
+                    }
+                }
+            } else if trimmed.hasPrefix("RID Time:") {
+                ridTimestamp = trimmed.dropFirst(9).trimmingCharacters(in: .whitespaces)
             // Parse FAA RID enrichment fields
             } else if trimmed.hasPrefix("RID:") {
                 // Parse "RID: Make Model (source)"

@@ -247,6 +247,16 @@ struct DroneDetailView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+                    if let tracking = message.ridTracking {
+                        DroneInfoRow(title: "Tracking Status", value: tracking)
+                            .font(.caption2)
+                            .foregroundColor(tracking.lowercased() == "active" ? .green : .orange)
+                    }
+                    if let status = message.ridStatus {
+                        DroneInfoRow(title: "Registration Status", value: status)
+                            .font(.caption2)
+                            .foregroundColor(status.lowercased() == "valid" ? .green : .red)
+                    }
                 }
                 
                 // Display detection metadata
@@ -367,8 +377,10 @@ struct DroneDetailView: View {
                         DroneInfoRow(title: "MAC Address", value: mac)
                     }
                     
-                    if let freqMHz = message.freq {
-                        DroneInfoRow(title: "Frequency", value: String(format: "%.3f MHz", freqMHz))
+                    if let freqHz = message.freq {
+                        // Backend sends frequency in Hz, convert to MHz for display
+                        let freqMHz = freqHz / 1_000_000
+                        DroneInfoRow(title: "Frequency", value: String(format: "%.2f MHz", freqMHz))
                     }
                     
                     if let obs = message.observedAt {

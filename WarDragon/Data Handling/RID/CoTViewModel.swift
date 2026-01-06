@@ -344,6 +344,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         var fpvFrequency: Int?
         var fpvBandwidth: String?
         var fpvRSSI: Double?
+        var fpvStatus: String?  // Status from fpv_mdn_receiver (NEW CONTACT LOCK, LOCK UPDATE, etc.)
+        var fpvEstimatedDistance: Double?  // Calculated distance from RSSI
+        var fpvSensorLat: Double?  // Sensor location when detection occurred
+        var fpvSensorLon: Double?  // Sensor location when detection occurred
         
         // Helper
         public var headingDeg: Double {
@@ -492,7 +496,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             lhs.fpvSource == rhs.fpvSource &&
             lhs.fpvBandwidth == rhs.fpvBandwidth &&
             lhs.fpvFrequency == rhs.fpvFrequency &&
-            lhs.fpvTimestamp == rhs.fpvTimestamp
+            lhs.fpvTimestamp == rhs.fpvTimestamp &&
+            lhs.fpvStatus == rhs.fpvStatus &&
+            lhs.fpvEstimatedDistance == rhs.fpvEstimatedDistance &&
+            lhs.fpvSensorLat == rhs.fpvSensorLat &&
+            lhs.fpvSensorLon == rhs.fpvSensorLon
         }
         
         var coordinate: CLLocationCoordinate2D? {
@@ -571,6 +579,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             dict["area_radius"] = self.area_radius
             dict["area_ceiling"] = self.area_ceiling
             dict["area_floor"] = self.area_floor
+            
+            // Add FPV-specific fields
+            dict["fpvStatus"] = self.fpvStatus
+            dict["fpvEstimatedDistance"] = self.fpvEstimatedDistance
+            dict["fpvSensorLat"] = self.fpvSensorLat
+            dict["fpvSensorLon"] = self.fpvSensorLon
             
             return dict
         }
@@ -1086,13 +1100,67 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private func createFPVDetectionMessage(_ fpvData: [String: Any]) -> CoTMessage {
         let timestamp = fpvData["timestamp"] as? String ?? ""
         let manufacturer = fpvData["manufacturer"] as? String ?? ""
-        let deviceType = fpvData["device_type"] as? String ?? ""
-        let frequency = fpvData["frequency"] as? Int ?? 0
+        
+        // Parse device type - handle both "device_type" and "model" field names
+        let deviceType: String
+        if let type = fpvData["device_type"] as? String {
+            deviceType = type
+        } else if let model = fpvData["model"] as? String {
+            deviceType = model
+        } else {
+            deviceType = ""
+        }
+        
+        // Parse frequency - handle both Int and Double, and both Hz and MHz units
+        // Try multiple field names: "frequency", "frequency_mhz", "freq"
+        var frequencyHz: Double = 0.0
+        
+        // First try "frequency" field (from fpv_mdn_receiver)
+        if let freqDouble = fpvData["frequency"] as? Double {
+            // Determine if it's MHz or Hz based on magnitude
+            // fpv_mdn_receiver: 5785000000 (Hz) - very large
+            // fpv_receive: might use this for Hz values
+            frequencyHz = freqDouble > 100000 ? freqDouble : freqDouble * 1_000_000
+        } else if let freqInt = fpvData["frequency"] as? Int {
+            let freqDouble = Double(freqInt)
+            frequencyHz = freqDouble > 100000 ? freqDouble : freqDouble * 1_000_000
+        }
+        // Try "frequency_mhz" field (from fpv_receive/AntSDR)
+        else if let freqMhz = fpvData["frequency_mhz"] as? Double {
+            // Already in MHz, convert to Hz
+            frequencyHz = freqMhz * 1_000_000
+        }
+        // Try "freq" field (alternative naming)
+        else if let freq = fpvData["freq"] as? Double {
+            frequencyHz = freq > 100000 ? freq : freq * 1_000_000
+        } else if let freqInt = fpvData["freq"] as? Int {
+            let freqDouble = Double(freqInt)
+            frequencyHz = freqDouble > 100000 ? freqDouble : freqDouble * 1_000_000
+        }
+        
+        // Convert to MHz for display/storage (CoTMessage.fpvFrequency is Int, stores MHz)
+        let frequencyMHz = Int(frequencyHz / 1_000_000)
+        
         let bandwidth = fpvData["bandwidth"] as? String ?? ""
-        let signalStrength = fpvData["signal_strength"] as? Double ?? 0.0
+        
+        // Parse signal strength - handle both field names
+        // fpv_receive uses "signal_strength_dbm", fpv_mdn_receiver uses "signal_strength"
+        let signalStrength: Double
+        if let strength = fpvData["signal_strength"] as? Double {
+            signalStrength = strength
+        } else if let strengthDbm = fpvData["signal_strength_dbm"] as? Double {
+            signalStrength = strengthDbm
+        } else if let strengthInt = fpvData["signal_strength"] as? Int {
+            signalStrength = Double(strengthInt)
+        } else if let strengthDbmInt = fpvData["signal_strength_dbm"] as? Int {
+            signalStrength = Double(strengthDbmInt)
+        } else {
+            signalStrength = 0.0
+        }
+        
         let detectionSource = fpvData["detection_source"] as? String ?? ""
         
-        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        let fpvId = "fpv-\(detectionSource)-\(frequencyMHz)"
         
         // Create the CoTMessage with FPV data
         var message = CoTMessage(
@@ -1108,7 +1176,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             pilotLat: "0.0",
             pilotLon: "0.0",
             description: "FPV Detection: \(deviceType)",
-            selfIDText: "FPV \(frequency)MHz \(bandwidth)",
+            selfIDText: "FPV \(frequencyMHz)MHz \(bandwidth)",
             uaType: .helicopter, // Default for FPV
             idType: "FPV Detection",
             rawMessage: fpvData
@@ -1117,11 +1185,28 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Populate FPV-specific variables
         message.fpvTimestamp = timestamp
         message.fpvSource = detectionSource
-        message.fpvFrequency = frequency
+        message.fpvFrequency = frequencyMHz
         message.fpvBandwidth = bandwidth
         message.fpvRSSI = signalStrength
         message.manufacturer = manufacturer
         message.rssi = Int(signalStrength)
+        
+        // Populate additional FPV fields from fpv_mdn_receiver
+        if let status = fpvData["status"] as? String {
+            message.fpvStatus = status
+        }
+        
+        if let estimatedDistance = fpvData["estimated_distance"] as? Double {
+            message.fpvEstimatedDistance = estimatedDistance
+        }
+        
+        if let sensorLat = fpvData["sensor_lat"] as? Double {
+            message.fpvSensorLat = sensorLat
+        }
+        
+        if let sensorLon = fpvData["sensor_lon"] as? Double {
+            message.fpvSensorLon = sensorLon
+        }
         
         // Set additional metadata
         message.time = formatCurrentTimeForCoT()
@@ -1156,9 +1241,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let timestamp = auxAdvInd["time"] as? String ?? ""
         let aa = auxAdvInd["aa"] as? Int ?? 0
         let advA = (aext["AdvA"] as? String ?? "").replacingOccurrences(of: " random", with: "").replacingOccurrences(of: " ", with: "-")
-        let frequency = jsonObject["frequency"] as? Int ?? 0
+        
+        // Parse frequency - handle both Int and Double, and both Hz and MHz units
+        var frequencyHz: Double = 0.0
+        if let freqDouble = jsonObject["frequency"] as? Double {
+            // fpv_mdn_receiver update: might be in Hz or MHz
+            frequencyHz = freqDouble > 100000 ? freqDouble : freqDouble * 1_000_000
+        } else if let freqInt = jsonObject["frequency"] as? Int {
+            let freqDouble = Double(freqInt)
+            frequencyHz = freqDouble > 100000 ? freqDouble : freqDouble * 1_000_000
+        }
+        
+        // Convert to MHz for storage
+        let frequencyMHz = Int(frequencyHz / 1_000_000)
+        
         let detectionSource = advA
-        let fpvId = "fpv-\(detectionSource)-\(frequency)"
+        let fpvId = "fpv-\(detectionSource)-\(frequencyMHz)"
         
         // Create the CoTMessage with AUX_ADV_IND data
         var message = CoTMessage(
@@ -1174,7 +1272,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             pilotLat: "0.0",
             pilotLon: "0.0",
             description: "FPV Update: \(detectionSource)",
-            selfIDText: "FPV \(frequency)MHz Update",
+            selfIDText: "FPV \(frequencyMHz)MHz Update",
             uaType: .helicopter,
             idType: "FPV Update",
             rawMessage: jsonObject
@@ -1183,7 +1281,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Populate FPV-specific variables
         message.fpvTimestamp = timestamp
         message.fpvSource = detectionSource
-        message.fpvFrequency = frequency
+        message.fpvFrequency = frequencyMHz  // Use converted MHz value
         message.fpvBandwidth = "" // Not provided in AUX_ADV_IND
         message.fpvRSSI = rssi
         message.rssi = Int(rssi)
