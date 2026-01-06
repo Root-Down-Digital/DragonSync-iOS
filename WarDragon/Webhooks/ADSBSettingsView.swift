@@ -12,6 +12,8 @@ struct ADSBSettingsView: View {
     @State private var testResult: String?
     @State private var isTesting = false
     @State private var aircraftCount: Int = 0
+    @State private var showAutoDisabledAlert = false
+    @State private var autoDisabledReason = ""
     
     var body: some View {
         Form {
@@ -267,6 +269,25 @@ struct ADSBSettingsView: View {
             }
         }
         .navigationTitle("ADS-B Tracking")
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ADSBAutoDisabled"))) { notification in
+            if let reason = notification.userInfo?["reason"] as? String {
+                autoDisabledReason = reason
+            } else {
+                autoDisabledReason = "Connection failed after multiple attempts"
+            }
+            showAutoDisabledAlert = true
+        }
+        .alert("ADS-B Automatically Disabled", isPresented: $showAutoDisabledAlert) {
+            Button("OK") {
+                showAutoDisabledAlert = false
+            }
+            Button("Open Settings") {
+                showAutoDisabledAlert = false
+                // Settings is already open, just acknowledge
+            }
+        } message: {
+            Text("ADS-B tracking has been disabled because the connection to readsb failed after multiple attempts.\n\nReason: \(autoDisabledReason)\n\nPlease check that your readsb server is running and accessible, then re-enable ADS-B tracking.")
+        }
     }
     
     // MARK: - Connection Test

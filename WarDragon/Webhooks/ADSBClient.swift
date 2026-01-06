@@ -93,6 +93,11 @@ class ADSBClient: ObservableObject {
     @Published private(set) var lastUpdate: Date?
     @Published private(set) var lastError: Error?
     
+    // MARK: - Callbacks
+    
+    /// Called when the client gives up after max consecutive errors
+    var onConnectionFailed: (() -> Void)?
+    
     // MARK: - Private Properties
     
     private var configuration: ADSBConfiguration
@@ -101,8 +106,9 @@ class ADSBClient: ObservableObject {
     private var pollTimer: Timer?
     private var session: URLSession
     private var consecutiveErrors: Int = 0
-    private let maxConsecutiveErrors = 10
+    private let maxConsecutiveErrors = 30  // Increased from 10 to give more time for server to start
     private var isInitialConnection = true
+    private let initialConnectionGracePeriod = 10  // More lenient during first 10 attempts
     
     // MARK: - Initialization
     
@@ -243,8 +249,8 @@ class ADSBClient: ObservableObject {
             let isConnectionError = (error as NSError).code == -1004 || (error as NSError).code == -1003 || (error as NSError).code == -1001
             
             if isConnectionError {
-                // During initial connection, be less noisy with warnings
-                if isInitialConnection && consecutiveErrors <= 3 {
+                // During initial connection (first N attempts), be less noisy with warnings
+                if isInitialConnection && consecutiveErrors <= initialConnectionGracePeriod {
                     logger.debug("Initial connection attempt \(self.consecutiveErrors): server not ready yet")
                 } else {
                     logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
@@ -256,8 +262,16 @@ class ADSBClient: ObservableObject {
             // Only stop after max consecutive errors
             if consecutiveErrors >= maxConsecutiveErrors {
                 state = .failed(error)
-                stop()
+                
+                // Notify that we're giving up - this allows the parent to disable ADS-B in settings
                 logger.error("Max consecutive errors reached, stopped polling. Check that readsb is running at: \(url.absoluteString)")
+                logger.warning("ADS-B will be automatically disabled in settings to prevent further connection attempts")
+                
+                stop()
+                
+                // Call the failure callback to notify the view model
+                onConnectionFailed?()
+                
             } else if consecutiveErrors == 1 {
                 // On first error, update state but keep polling
                 state = .failed(error)

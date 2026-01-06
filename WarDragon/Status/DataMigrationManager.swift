@@ -849,6 +849,9 @@ class DataMigrationManager {
         let signatureDescriptor = FetchDescriptor<StoredSignature>()
         let signatureCount = try modelContext.fetchCount(signatureDescriptor)
         
+        let aircraftDescriptor = FetchDescriptor<StoredADSBEncounter>()
+        let aircraftCount = try modelContext.fetchCount(aircraftDescriptor)
+        
         // Calculate database file size
         let fileManager = FileManager.default
         let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -864,6 +867,7 @@ class DataMigrationManager {
             encounterCount: encounterCount,
             flightPointCount: pointCount,
             signatureCount: signatureCount,
+            aircraftCount: aircraftCount,
             databaseSizeBytes: databaseSize
         )
     }
@@ -872,16 +876,24 @@ class DataMigrationManager {
     func deleteAllSwiftData(modelContext: ModelContext) throws {
         logger.warning("Deleting all SwiftData...")
         
-        // Delete all encounters (cascade will handle relationships)
-        let descriptor = FetchDescriptor<StoredDroneEncounter>()
-        let encounters = try modelContext.fetch(descriptor)
+        // Delete all drone encounters (cascade will handle relationships)
+        let droneDescriptor = FetchDescriptor<StoredDroneEncounter>()
+        let encounters = try modelContext.fetch(droneDescriptor)
         
         for encounter in encounters {
             modelContext.delete(encounter)
         }
         
+        // Delete all aircraft encounters
+        let aircraftDescriptor = FetchDescriptor<StoredADSBEncounter>()
+        let aircraft = try modelContext.fetch(aircraftDescriptor)
+        
+        for aircraftEncounter in aircraft {
+            modelContext.delete(aircraftEncounter)
+        }
+        
         try modelContext.save()
-        logger.info("✅ Deleted \(encounters.count) encounters from SwiftData")
+        logger.info("✅ Deleted \(encounters.count) drone encounters and \(aircraft.count) aircraft from SwiftData")
     }
 }
 
@@ -889,6 +901,7 @@ struct DatabaseStats {
     let encounterCount: Int
     let flightPointCount: Int
     let signatureCount: Int
+    let aircraftCount: Int
     let databaseSizeBytes: Int64
     
     var formattedSize: String {

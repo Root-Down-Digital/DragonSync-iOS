@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var showDeleteAllConfirmation = false
     @State private var detectionMode: DetectionMode = .drones
     @State private var showUnifiedMap = false
+    @State private var showAdsbAutoDisabledAlert = false
+    @State private var adsbDisabledReason = ""
     
     enum DetectionMode {
         case drones
@@ -65,6 +67,26 @@ struct ContentView: View {
         }
         .onChange(of: cotViewModel.aircraftTracks) { oldTracks, newTracks in
             updateDetectionMode()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ADSBAutoDisabled"))) { notification in
+            if let reason = notification.userInfo?["reason"] as? String {
+                adsbDisabledReason = reason
+            } else {
+                adsbDisabledReason = "Connection failed after multiple attempts"
+            }
+            showAdsbAutoDisabledAlert = true
+        }
+        .alert("ADS-B Automatically Disabled", isPresented: $showAdsbAutoDisabledAlert) {
+            Button("Dismiss") {
+                showAdsbAutoDisabledAlert = false
+            }
+            Button("Open ADS-B Settings") {
+                showAdsbAutoDisabledAlert = false
+                // Switch to settings tab and navigate to ADS-B settings
+                selectedTab = 3
+            }
+        } message: {
+            Text("ADS-B tracking has been automatically disabled because the connection to readsb failed repeatedly.\n\nPlease check that your readsb/dump1090 server is running and accessible, then re-enable ADS-B tracking in Settings.")
         }
         .onAppear {
             // Inject ModelContext into storage managers

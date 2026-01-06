@@ -602,7 +602,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             
             // Delay ADS-B setup to give the server time to be ready
             // This prevents timeouts when app launches before readsb is fully running
-            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            // Increased to 5 seconds to give more time for external servers to start
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
             await self.setupADSBClient()
             
             self.restoreAlertRingsFromStorage()
@@ -2949,6 +2950,23 @@ extension CoTViewModel {
         let client = ADSBClient(configuration: config)
         self.adsbClient = client
         
+        // Set up callback for when connection permanently fails
+        client.onConnectionFailed = { [weak self] in
+            Task { @MainActor in
+                guard let self = self else { return }
+                
+                // Automatically disable ADS-B in settings
+                Settings.shared.adsbEnabled = false
+                
+                print("⚠️ ADS-B has been automatically disabled after repeated connection failures.")
+                print("💡 Check that readsb/dump1090 is running at: \(config.readsbURL)")
+                print("   You can re-enable ADS-B in Settings once the server is available.")
+                
+                // Show a user notification about this
+                self.showAdsbAutoDisabledAlert()
+            }
+        }
+        
         // Observe aircraft updates
         client.$aircraft
             .receive(on: DispatchQueue.main)
@@ -2975,6 +2993,16 @@ extension CoTViewModel {
         
         // Start polling AFTER observations are set up and cleanup is complete
         client.start()
+    }
+    
+    /// Show alert that ADS-B was automatically disabled
+    private func showAdsbAutoDisabledAlert() {
+        // Post notification for UI to show alert
+        NotificationCenter.default.post(
+            name: Notification.Name("ADSBAutoDisabled"),
+            object: nil,
+            userInfo: ["reason": "Connection failed after multiple attempts"]
+        )
     }
     
     /// Get all active detections (drones + aircraft)

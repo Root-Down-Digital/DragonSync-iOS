@@ -41,6 +41,7 @@ struct DatabaseManagementView: View {
                     EncounterCountRow(count: stats.encounterCount)
                     FlightPointsRow(count: stats.flightPointCount)
                     SignaturesRow(count: stats.signatureCount)
+                    AircraftCountRow(count: stats.aircraftCount)
                 } else {
                     HStack {
                         ProgressView()
@@ -202,7 +203,7 @@ struct DatabaseManagementView: View {
                 Label("Danger Zone", systemImage: "exclamationmark.triangle.fill")
                     .foregroundColor(.red)
             } footer: {
-                Text("⚠️ This will permanently delete all drone encounters, flight paths, and signatures. This action cannot be undone. Create a backup first!")
+                Text("⚠️ This will permanently delete all drone encounters, aircraft encounters, flight paths, and signatures. This action cannot be undone. Create a backup first!")
                     .font(.appCaption)
                     .foregroundColor(.red)
             }
@@ -261,7 +262,19 @@ struct DatabaseManagementView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("⚠️ This will permanently delete all \(stats?.encounterCount ?? 0) encounters and cannot be undone. Make sure you have a backup!")
+            let droneCount = stats?.encounterCount ?? 0
+            let aircraftCount = stats?.aircraftCount ?? 0
+            let total = droneCount + aircraftCount
+            
+            if droneCount > 0 && aircraftCount > 0 {
+                Text("⚠️ This will permanently delete \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") (\(total) total) and cannot be undone. Make sure you have a backup!")
+            } else if droneCount > 0 {
+                Text("⚠️ This will permanently delete all \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
+            } else if aircraftCount > 0 {
+                Text("⚠️ This will permanently delete all \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
+            } else {
+                Text("⚠️ This will permanently delete all data and cannot be undone.")
+            }
         }
         .alert("Restore from Backup?", isPresented: $showRestoreConfirmation, presenting: fileToRestore) { fileURL in
             Button("Restore", role: .destructive) {
@@ -559,6 +572,25 @@ struct SignaturesRow: View {
     }
 }
 
+struct AircraftCountRow: View {
+    let count: Int
+    
+    var body: some View {
+        HStack {
+            Image(systemName: "airplane")
+                .foregroundColor(.cyan)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Aircraft (ADS-B)")
+                    .font(.appCaption)
+                    .foregroundColor(.secondary)
+                Text("\(count)")
+                    .font(.appHeadline)
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
 // MARK: - Backup File Row
 
 struct BackupFileRow: View {
@@ -795,6 +827,6 @@ struct ActivityViewController: UIViewControllerRepresentable {
 #Preview {
     NavigationStack {
         DatabaseManagementView()
-            .modelContainer(for: [StoredDroneEncounter.self])
+            .modelContainer(for: [StoredDroneEncounter.self, StoredADSBEncounter.self])
     }
 }
