@@ -26,6 +26,9 @@ struct ContentView: View {
     @State private var showUnifiedMap = false
     @State private var showAdsbAutoDisabledAlert = false
     @State private var adsbDisabledReason = ""
+    @State private var unreadDetectionCount = 0
+    @State private var lastViewedDroneCount = 0
+    @State private var lastViewedAircraftCount = 0
     
     enum DetectionMode {
         case drones
@@ -58,15 +61,22 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { oldValue, newValue in
             handleTabChange(from: oldValue, to: newValue)
+            
+            // Clear unread count when detections tab is selected
+            if newValue == 1 {
+                clearUnreadDetections()
+            }
         }
         .onChange(of: settings.connectionMode) {
             handleConnectionModeChange()
         }
         .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
             updateDetectionMode()
+            updateUnreadCount(oldDroneCount: oldMessages.count, newDroneCount: newMessages.count)
         }
         .onChange(of: cotViewModel.aircraftTracks) { oldTracks, newTracks in
             updateDetectionMode()
+            updateUnreadCount(oldAircraftCount: oldTracks.count, newAircraftCount: newTracks.count)
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ADSBAutoDisabled"))) { notification in
             if let reason = notification.userInfo?["reason"] as? String {
@@ -181,7 +191,7 @@ struct ContentView: View {
         .tabItem {
             Label(tabLabel, systemImage: tabIcon)
         }
-        .badge(detectionBadgeCount)
+        .badge(unreadDetectionCount > 0 ? unreadDetectionCount : nil)
         .tag(1)
     }
     
@@ -336,6 +346,12 @@ struct ContentView: View {
     private var aircraftMenuItems: some View {
         Button(action: {
             cotViewModel.aircraftTracks.removeAll()
+            
+            // Update unread tracking
+            lastViewedAircraftCount = 0
+            if selectedTab == 1 {
+                clearUnreadDetections()
+            }
         }) {
             Label("Clear Aircraft", systemImage: "airplane")
         }
@@ -558,18 +574,51 @@ struct ContentView: View {
         }
     }
     
+    private func updateUnreadCount(oldDroneCount: Int? = nil, newDroneCount: Int? = nil, 
+                                   oldAircraftCount: Int? = nil, newAircraftCount: Int? = nil) {
+        // Only update if we're not currently viewing the detections tab
+        guard selectedTab != 1 else { return }
+        
+        let currentDroneCount = newDroneCount ?? cotViewModel.parsedMessages.count
+        let currentAircraftCount = newAircraftCount ?? cotViewModel.aircraftTracks.count
+        
+        // Calculate new detections since last view
+        let newDrones = max(0, currentDroneCount - lastViewedDroneCount)
+        let newAircraft = max(0, currentAircraftCount - lastViewedAircraftCount)
+        
+        unreadDetectionCount = newDrones + newAircraft
+    }
+    
+    private func clearUnreadDetections() {
+        unreadDetectionCount = 0
+        lastViewedDroneCount = cotViewModel.parsedMessages.count
+        lastViewedAircraftCount = cotViewModel.aircraftTracks.count
+    }
+    
     private func clearDrones() {
         cotViewModel.parsedMessages.removeAll()
         cotViewModel.droneSignatures.removeAll()
         cotViewModel.macIdHistory.removeAll()
         cotViewModel.macProcessing.removeAll()
         cotViewModel.alertRings.removeAll()
+        
+        // Update unread tracking
+        lastViewedDroneCount = 0
+        if selectedTab == 1 {
+            clearUnreadDetections()
+        }
     }
     
     private func stopDroneTracking() {
         cotViewModel.parsedMessages.removeAll()
         cotViewModel.droneSignatures.removeAll()
         cotViewModel.alertRings.removeAll()
+        
+        // Update unread tracking
+        lastViewedDroneCount = 0
+        if selectedTab == 1 {
+            clearUnreadDetections()
+        }
     }
     
     private func deleteAllHistory() {
@@ -579,6 +628,12 @@ struct ContentView: View {
         cotViewModel.macIdHistory.removeAll()
         cotViewModel.macProcessing.removeAll()
         cotViewModel.alertRings.removeAll()
+        
+        // Update unread tracking
+        lastViewedDroneCount = 0
+        if selectedTab == 1 {
+            clearUnreadDetections()
+        }
     }
     
     private func createDummyMessage() -> CoTViewModel.CoTMessage {
