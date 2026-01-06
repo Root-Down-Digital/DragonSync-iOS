@@ -57,7 +57,7 @@ struct StoredEncountersView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Aircraft History")
                                 .font(.appHeadline)
-                            Text("View all tracked aircraft with charts")
+                            Text("View/visualize all tracked aircraft")
                                 .font(.appCaption)
                                 .foregroundColor(.secondary)
                         }

@@ -30,6 +30,17 @@ struct DroneEncounter: Codable, Identifiable, Hashable {
         }
     }
     
+    // CodingKeys to properly map private _flightPath property
+    enum CodingKeys: String, CodingKey {
+        case id
+        case firstSeen
+        case lastSeen
+        case signatures
+        case metadata
+        case macHistory
+        case _flightPath = "flightPath"
+    }
+    
     var headingDeg: Double {
         func parse(_ key: String) -> Double? {
             guard let raw = metadata[key]?

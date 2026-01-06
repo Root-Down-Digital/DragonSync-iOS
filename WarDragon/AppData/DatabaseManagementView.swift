@@ -24,9 +24,13 @@ struct DatabaseManagementView: View {
     @State private var showDeleteConfirmation = false
     @State private var fileToDelete: URL?
     @State private var showResetConfirmation = false
+    @State private var showRestoreConfirmation = false
+    @State private var fileToRestore: URL?
     @State private var showRestoreSheet = false
     @State private var showExportShare = false
     @State private var exportedFileURL: URL?
+    @State private var backupVerificationResults: [BackupVerificationResult] = []
+    @State private var showVerificationResults = false
     
     var body: some View {
         Form {
@@ -98,13 +102,19 @@ struct DatabaseManagementView: View {
                         }
                     }
                 }
-                .disabled(isLoading)
+                .disabled(isLoading || stats?.encounterCount == 0)
                 
             } header: {
                 Label("Backup & Export", systemImage: "externaldrive.fill")
             } footer: {
-                Text("Creates a JSON backup of all drone encounters. You can share this file to back up your data.")
-                    .font(.appCaption)
+                if stats?.encounterCount == 0 {
+                    Text("No encounters to export. The database is empty.")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Creates a JSON backup of all drone encounters. You can share this file to back up your data.")
+                        .font(.appCaption)
+                }
             }
             
             // Backup Files Section
@@ -118,17 +128,33 @@ struct DatabaseManagementView: View {
                     }
                 } else {
                     ForEach(backupFiles, id: \.self) { fileURL in
-                        BackupFileRow(fileURL: fileURL, onDelete: {
-                            fileToDelete = fileURL
-                            showDeleteConfirmation = true
-                        }, onRestore: {
-                            Task {
-                                await restoreFromBackup(fileURL: fileURL)
+                        BackupFileRow(
+                            fileURL: fileURL,
+                            verificationResult: backupVerificationResults.first { $0.url == fileURL },
+                            onDelete: {
+                                fileToDelete = fileURL
+                                showDeleteConfirmation = true
+                            },
+                            onRestore: {
+                                fileToRestore = fileURL
+                                showRestoreConfirmation = true
+                            },
+                            onShare: {
+                                exportedFileURL = fileURL
+                                showExportShare = true
                             }
-                        }, onShare: {
-                            exportedFileURL = fileURL
-                            showExportShare = true
-                        })
+                        )
+                    }
+                    
+                    // Verify backups button
+                    Button {
+                        verifyBackups()
+                    } label: {
+                        HStack {
+                            Image(systemName: "checkmark.shield")
+                                .foregroundColor(.green)
+                            Text("Verify All Backups")
+                        }
                     }
                     
                     // Show cleanup button if there are multiple legacy backups
@@ -156,7 +182,7 @@ struct DatabaseManagementView: View {
             } header: {
                 Label("Backup Files (\(backupFiles.count))", systemImage: "doc.on.doc.fill")
             } footer: {
-                Text("Tap a file to view options. Backups are stored in the app's Documents directory.")
+                Text("Tap a file to view options. Backups are stored in the app's Documents directory. Use 'Verify All Backups' to check for corrupted files.")
                     .font(.appCaption)
             }
             
@@ -187,6 +213,28 @@ struct DatabaseManagementView: View {
             await loadStats()
             loadBackupFiles()
         }
+        .overlay {
+            if isLoading {
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                        
+                        Text("Processing...")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    }
+                    .padding(32)
+                    .background(Color(uiColor: .systemBackground))
+                    .cornerRadius(16)
+                    .shadow(radius: 20)
+                }
+            }
+        }
         .alert("Success", isPresented: $showSuccess) {
             Button("OK") { }
         } message: {
@@ -197,7 +245,7 @@ struct DatabaseManagementView: View {
         } message: {
             Text(errorMessage)
         }
-        .confirmationDialog("Delete Backup File?", isPresented: $showDeleteConfirmation, presenting: fileToDelete) { fileURL in
+        .alert("Delete Backup File?", isPresented: $showDeleteConfirmation, presenting: fileToDelete) { fileURL in
             Button("Delete", role: .destructive) {
                 deleteBackupFile(fileURL)
             }
@@ -205,7 +253,7 @@ struct DatabaseManagementView: View {
         } message: { fileURL in
             Text("Are you sure you want to delete \(fileURL.lastPathComponent)?")
         }
-        .confirmationDialog("Delete All Data?", isPresented: $showResetConfirmation) {
+        .alert("Delete All Data?", isPresented: $showResetConfirmation) {
             Button("Delete Everything", role: .destructive) {
                 Task {
                     await deleteAllData()
@@ -215,9 +263,28 @@ struct DatabaseManagementView: View {
         } message: {
             Text("⚠️ This will permanently delete all \(stats?.encounterCount ?? 0) encounters and cannot be undone. Make sure you have a backup!")
         }
+        .alert("Restore from Backup?", isPresented: $showRestoreConfirmation, presenting: fileToRestore) { fileURL in
+            Button("Restore", role: .destructive) {
+                Task {
+                    await restoreFromBackup(fileURL: fileURL)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { fileURL in
+            if let result = backupVerificationResults.first(where: { $0.url == fileURL }) {
+                Text("This will import \(result.encounterCount) encounter\(result.encounterCount == 1 ? "" : "s") from '\(fileURL.lastPathComponent)' into your database. Existing encounters with the same ID will not be duplicated.")
+            } else {
+                Text("This will import encounters from '\(fileURL.lastPathComponent)' into your database. Existing encounters with the same ID will not be duplicated.")
+            }
+        }
         .sheet(isPresented: $showExportShare) {
+            // Clean up on dismissal
+            exportedFileURL = nil
+        } content: {
             if let url = exportedFileURL {
-                ShareSheet(items: [url])
+                ShareSheetView(url: url)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
     }
@@ -270,13 +337,19 @@ struct DatabaseManagementView: View {
         
         do {
             let url = try migrationManager.exportSwiftDataBackup(modelContext: modelContext)
-            successMessage = "Backup created successfully!\n\(url.lastPathComponent)"
-            showSuccess = true
             loadBackupFiles()
             
-            // Show share sheet
-            exportedFileURL = url
-            showExportShare = true
+            // Wait a moment for UI to settle before showing share sheet
+            try? await Task.sleep(for: .milliseconds(100))
+            
+            // Show share sheet on main thread
+            await MainActor.run {
+                exportedFileURL = url
+                showExportShare = true
+            }
+            
+            successMessage = "Backup created successfully!\n\(url.lastPathComponent)"
+            showSuccess = true
         } catch {
             errorMessage = "Failed to create backup: \(error.localizedDescription)"
             showError = true
@@ -288,12 +361,33 @@ struct DatabaseManagementView: View {
         defer { isLoading = false }
         
         do {
+            // Get encounter count before restore
+            let statsBefore = try? migrationManager.getDatabaseStats(modelContext: modelContext)
+            let encountersBefore = statsBefore?.encounterCount ?? 0
+            
+            // Perform restore
             try migrationManager.restoreFromBackup(backupURL: fileURL, modelContext: modelContext)
-            successMessage = "Successfully restored from backup!"
-            showSuccess = true
+            
+            // Get new stats
             await loadStats()
+            let encountersAfter = stats?.encounterCount ?? 0
+            let encountersAdded = encountersAfter - encountersBefore
+            
+            // Build success message
+            var message = "✅ Backup restored successfully!\n\n"
+            message += "File: \(fileURL.lastPathComponent)\n"
+            if encountersAdded > 0 {
+                message += "Added: \(encountersAdded) new encounter\(encountersAdded == 1 ? "" : "s")\n"
+            }
+            message += "Total encounters: \(encountersAfter)"
+            
+            successMessage = message
+            showSuccess = true
+            
+            // Refresh backup list in case verification status changed
+            loadBackupFiles()
         } catch {
-            errorMessage = "Failed to restore: \(error.localizedDescription)"
+            errorMessage = "Failed to restore backup:\n\(error.localizedDescription)"
             showError = true
         }
     }
@@ -365,6 +459,26 @@ struct DatabaseManagementView: View {
             successMessage = "Cleaned up \(deletedCount) duplicate backup\(deletedCount == 1 ? "" : "s"). Kept the most recent one."
             showSuccess = true
         }
+    }
+    
+    private func verifyBackups() {
+        backupVerificationResults = migrationManager.verifyAllBackups()
+        
+        let validCount = backupVerificationResults.filter { $0.status == .valid }.count
+        let emptyCount = backupVerificationResults.filter { $0.status == .empty }.count
+        let corruptedCount = backupVerificationResults.filter { $0.status == .corrupted }.count
+        
+        var message = "Backup Verification Complete:\n"
+        message += "\(validCount) valid backup\(validCount == 1 ? "" : "s")\n"
+        if emptyCount > 0 {
+            message += "⚠️ \(emptyCount) empty backup\(emptyCount == 1 ? "" : "s")\n"
+        }
+        if corruptedCount > 0 {
+            message += "\(corruptedCount) corrupted backup\(corruptedCount == 1 ? "" : "s")"
+        }
+        
+        successMessage = message
+        showSuccess = true
     }
 }
 
@@ -449,6 +563,7 @@ struct SignaturesRow: View {
 
 struct BackupFileRow: View {
     let fileURL: URL
+    let verificationResult: BackupVerificationResult?
     let onDelete: () -> Void
     let onRestore: () -> Void
     let onShare: () -> Void
@@ -459,11 +574,16 @@ struct BackupFileRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Image(systemName: "doc.fill")
-                    .foregroundColor(.blue)
+                Image(systemName: iconForFile)
+                    .foregroundColor(colorForFile)
                 Text(fileURL.lastPathComponent)
                     .font(.appCaption)
                     .lineLimit(1)
+                
+                if let result = verificationResult {
+                    Text(result.statusEmoji)
+                        .font(.caption)
+                }
             }
             
             HStack {
@@ -477,6 +597,22 @@ struct BackupFileRow: View {
                 Text(fileSize)
                     .font(.caption2)
                     .foregroundColor(.secondary)
+                
+                if let result = verificationResult, result.encounterCount > 0 {
+                    Text("•")
+                        .foregroundColor(.secondary)
+                    Text("\(result.encounterCount) encounters")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Show error if corrupted
+            if let result = verificationResult, result.status == .corrupted, let error = result.error {
+                Text("⚠️ \(error)")
+                    .font(.caption2)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
             }
             
             HStack(spacing: 16) {
@@ -487,9 +623,14 @@ struct BackupFileRow: View {
                         .font(.appCaption)
                 }
                 .buttonStyle(.bordered)
+                .disabled(verificationResult?.status == .corrupted)
                 
                 Button {
-                    onShare()
+                    // Add small delay to ensure proper presentation
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(50))
+                        onShare()
+                    }
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .font(.appCaption)
@@ -512,6 +653,36 @@ struct BackupFileRow: View {
         }
     }
     
+    private var iconForFile: String {
+        if let result = verificationResult {
+            switch result.status {
+            case .valid:
+                return "checkmark.circle.fill"
+            case .empty:
+                return "doc.fill"
+            case .corrupted:
+                return "xmark.circle.fill"
+            }
+        } else {
+            return "doc.fill"
+        }
+    }
+    
+    private var colorForFile: Color {
+        if let result = verificationResult {
+            switch result.status {
+            case .valid:
+                return .green
+            case .empty:
+                return .orange
+            case .corrupted:
+                return .red
+            }
+        } else {
+            return .blue
+        }
+    }
+    
     private func loadFileInfo() {
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -527,18 +698,95 @@ struct BackupFileRow: View {
     }
 }
 
-// MARK: - Share Sheet
+// MARK: - Share Sheet View
 
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
+struct ShareSheetView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingActivityVC = false
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.green)
+                
+                Text("Backup Created")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text(url.lastPathComponent)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Button {
+                    showingActivityVC = true
+                } label: {
+                    Label("Share Backup File", systemImage: "square.and.arrow.up")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentColor)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+                
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Done")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.secondary.opacity(0.2))
+                        .foregroundColor(.primary)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $showingActivityVC) {
+                ActivityViewController(activityItems: [url])
+                    .ignoresSafeArea()
+            }
+        }
+    }
+}
+
+// MARK: - Activity View Controller (Fallback)
+
+struct ActivityViewController: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        
+        // Completion handler to prevent crashes
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            // Handle completion if needed
+        }
+        
         return controller
     }
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // No update needed
+        // Nothing to update
     }
 }
 

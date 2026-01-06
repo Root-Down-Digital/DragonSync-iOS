@@ -230,86 +230,72 @@ struct SettingsView: View {
             }
             
             Section("Warning Thresholds") {
-                VStack(alignment: .leading) {
-                    Toggle("System Warnings", isOn: $settings.systemWarningsEnabled)
-                        .padding(.bottom)
+                Toggle("System Warnings", isOn: $settings.systemWarningsEnabled)
+                
+                if settings.systemWarningsEnabled {
+                    ThresholdSlider(
+                        title: "CPU Usage",
+                        value: $settings.cpuWarningThreshold,
+                        range: 50...90,
+                        step: 5,
+                        unit: "%",
+                        color: .blue
+                    )
                     
-                    if settings.systemWarningsEnabled {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 30) {
-                                TacDial(
-                                    title: "CPU USAGE",
-                                    value: $settings.cpuWarningThreshold,
-                                    range: 50...90,
-                                    step: 5,
-                                    unit: "%",
-                                    color: .blue
-                                )
-                                
-                                TacDial(
-                                    title: "SYSTEM TEMP",
-                                    value: $settings.tempWarningThreshold,
-                                    range: 40...85,
-                                    step: 5,
-                                    unit: "°C",
-                                    color: .red
-                                )
-                                
-                                TacDial(
-                                    title: "MEMORY",
-                                    value: .init(
-                                        get: { settings.memoryWarningThreshold * 100 },
-                                        set: { settings.memoryWarningThreshold = $0 / 100 }
-                                    ),
-                                    range: 50...95,
-                                    step: 5,
-                                    unit: "%",
-                                    color: .green
-                                )
-                                
-                                TacDial(
-                                    title: "PLUTO TEMP",
-                                    value: $settings.plutoTempThreshold,
-                                    range: 40...100,
-                                    step: 5,
-                                    unit: "°C",
-                                    color: .purple
-                                )
-                                
-                                TacDial(
-                                    title: "ZYNQ TEMP",
-                                    value: $settings.zynqTempThreshold,
-                                    range: 40...100,
-                                    step: 5,
-                                    unit: "°C",
-                                    color: .orange
-                                )
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
+                    ThresholdSlider(
+                        title: "System Temperature",
+                        value: $settings.tempWarningThreshold,
+                        range: 40...85,
+                        step: 5,
+                        unit: "°C",
+                        color: .red
+                    )
+                    
+                    ThresholdSlider(
+                        title: "Memory Usage",
+                        value: .init(
+                            get: { settings.memoryWarningThreshold * 100 },
+                            set: { settings.memoryWarningThreshold = $0 / 100 }
+                        ),
+                        range: 50...95,
+                        step: 5,
+                        unit: "%",
+                        color: .green
+                    )
+                    
+                    ThresholdSlider(
+                        title: "PlutoSDR Temperature",
+                        value: $settings.plutoTempThreshold,
+                        range: 40...100,
+                        step: 5,
+                        unit: "°C",
+                        color: .purple
+                    )
+                    
+                    ThresholdSlider(
+                        title: "Zynq Temperature",
+                        value: $settings.zynqTempThreshold,
+                        range: 40...100,
+                        step: 5,
+                        unit: "°C",
+                        color: .orange
+                    )
                 }
                 
-                VStack(alignment: .leading) {
-                    Toggle("Proximity Warnings", isOn: $settings.enableProximityWarnings)
-                        .padding(.vertical)
-                    
-                    if settings.enableProximityWarnings {
-                        HStack {
-                            TacDial(
-                                title: "RSSI THRESHOLD",
-                                value: .init(
-                                    get: { Double(settings.proximityThreshold) },
-                                    set: { settings.proximityThreshold = Int($0) }
-                                ),
-                                range: -90...(-30),
-                                step: 5,
-                                unit: "dBm",
-                                color: .yellow
-                            )
-                        }
-                        .padding(.horizontal)
-                    }
+                Toggle("Proximity Warnings", isOn: $settings.enableProximityWarnings)
+                
+                if settings.enableProximityWarnings {
+                    ThresholdSlider(
+                        title: "RSSI Threshold",
+                        value: .init(
+                            get: { Double(settings.proximityThreshold) },
+                            set: { settings.proximityThreshold = Int($0) }
+                        ),
+                        range: -90...(-30),
+                        step: 5,
+                        unit: "dBm",
+                        color: .yellow
+                    )
                 }
             }
             

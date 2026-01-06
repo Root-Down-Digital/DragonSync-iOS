@@ -1,7 +1,7 @@
 {
   "images" : [
     {
-      "filename" : "dragonLogo2.jpg",
+      "filename" : "dsLogo.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -13,7 +13,7 @@
           "value" : "dark"
         }
       ],
-      "filename" : "dragonLogo2 1.jpg",
+      "filename" : "dsLogo 1.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

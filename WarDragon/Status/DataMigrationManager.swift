@@ -20,6 +20,20 @@ class DataMigrationManager {
     
     private init() {}
     
+    /// Helper to convert date decoding strategy to readable string
+    private func strategyName(_ strategy: JSONDecoder.DateDecodingStrategy) -> String {
+        switch strategy {
+        case .iso8601:
+            return "ISO8601"
+        case .secondsSince1970:
+            return "secondsSince1970"
+        case .millisecondsSince1970:
+            return "millisecondsSince1970"
+        default:
+            return "unknown"
+        }
+    }
+    
     /// Check if migration is needed
     var needsMigration: Bool {
         let completed = UserDefaults.standard.bool(forKey: migrationCompletedKey)
@@ -213,40 +227,218 @@ class DataMigrationManager {
         
         // Check for existing recent backup (within last hour) unless forced
         if !forceNew {
-            let backupFiles = try? listBackupFiles()
-            let recentBackups = backupFiles?.filter { url in
-                url.lastPathComponent.hasPrefix("wardragon_backup_") &&
-                (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate?
-                    .timeIntervalSinceNow ?? -Double.infinity > -3600 // Within last hour
-            } ?? []
-            
-            if let existingBackup = recentBackups.first {
-                logger.info("Using existing recent backup: \(existingBackup.lastPathComponent)")
+            if let existingBackup = try findRecentValidBackup() {
+                logger.info("✅ Using existing recent backup: \(existingBackup.lastPathComponent)")
                 return existingBackup
             }
         }
         
-        var backupData: [String: Any] = [
-            "timestamp": Date().timeIntervalSince1970,
-            "migrationVersion": currentMigrationVersion
-        ]
-        
-        // Safely handle potentially nil data
-        if let encountersData = UserDefaults.standard.data(forKey: "DroneEncounters") {
-            // Convert data to base64 string for safe JSON serialization
-            backupData["droneEncounters"] = encountersData.base64EncodedString()
-        } else {
-            backupData["droneEncounters"] = NSNull()
-            logger.info("No drone encounters data found to backup")
+        // Load UserDefaults data
+        guard let encountersData = UserDefaults.standard.data(forKey: "DroneEncounters") else {
+            logger.info("No drone encounters data found to backup - creating empty backup marker")
+            return try createEmptyBackupMarker()
         }
         
+        // Validate the data can be decoded before creating backup
+        logger.info("Validating UserDefaults data before backup...")
+        let isValid = validateUserDefaultsData(encountersData)
+        if !isValid {
+            logger.warning("⚠️ UserDefaults data appears corrupted - creating backup anyway for forensics")
+        }
+        
+        // Create backup with validated format
+        var backupData: [String: Any] = [
+            "version": "1.0",
+            "timestamp": Date().timeIntervalSince1970,
+            "migrationVersion": currentMigrationVersion,
+            "dataValid": isValid
+        ]
+        
+        // Convert data to base64 string for safe JSON serialization
+        let base64String = encountersData.base64EncodedString()
+        backupData["droneEncounters"] = base64String
+        backupData["droneEncountersSize"] = encountersData.count
+        
+        // Serialize to JSON
         let jsonData = try JSONSerialization.data(withJSONObject: backupData, options: .prettyPrinted)
         
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let backupURL = documentsPath.appendingPathComponent("wardragon_backup_\(Int(Date().timeIntervalSince1970)).json")
         
+        // Write to file
         try jsonData.write(to: backupURL)
-        logger.info("Backup created at: \(backupURL.path)")
+        
+        // Immediately verify the backup can be read back
+        do {
+            try validateBackupFile(backupURL)
+            logger.info("✅ Backup created and verified at: \(backupURL.lastPathComponent)")
+        } catch {
+            logger.error("❌ Backup verification failed: \(error.localizedDescription)")
+            // Delete the bad backup
+            try? FileManager.default.removeItem(at: backupURL)
+            throw MigrationError.backupFailed(NSError(
+                domain: "com.wardragon.migration",
+                code: 1002,
+                userInfo: [NSLocalizedDescriptionKey: "Backup file verification failed: \(error.localizedDescription)"]
+            ))
+        }
+        
+        return backupURL
+    }
+    
+    /// Find a recent valid backup (within last hour)
+    private func findRecentValidBackup() throws -> URL? {
+        let backupFiles = try? listBackupFiles()
+        let recentBackups = backupFiles?.filter { url in
+            url.lastPathComponent.hasPrefix("wardragon_backup_") &&
+            (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate?
+                .timeIntervalSinceNow ?? -Double.infinity > -3600 // Within last hour
+        } ?? []
+        
+        // Find first valid backup
+        for backup in recentBackups {
+            do {
+                try validateBackupFile(backup)
+                logger.info("Found valid recent backup: \(backup.lastPathComponent)")
+                return backup
+            } catch {
+                logger.warning("Recent backup \(backup.lastPathComponent) is invalid: \(error.localizedDescription)")
+                continue
+            }
+        }
+        
+        return nil
+    }
+    
+    /// Validate UserDefaults data can be decoded
+    private func validateUserDefaultsData(_ data: Data) -> Bool {
+        // Try to decode with multiple strategies
+        let strategies: [JSONDecoder.DateDecodingStrategy] = [
+            .iso8601,
+            .secondsSince1970,
+            .millisecondsSince1970
+        ]
+        
+        for strategy in strategies {
+            do {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = strategy
+                let encounters = try decoder.decode([String: DroneEncounter].self, from: data)
+                logger.info("✅ Data is valid - contains \(encounters.count) encounters (decoded with \(self.strategyName(strategy)))")
+                return true
+            } catch {
+                continue
+            }
+        }
+        
+        logger.error("❌ Data validation failed - could not decode with any strategy")
+        return false
+    }
+    
+    /// Validate a backup file can be read and contains expected structure
+    private func validateBackupFile(_ url: URL) throws {
+        // Check file exists and is readable
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw MigrationError.decodingFailed("Backup file does not exist")
+        }
+        
+        // Read file data
+        let jsonData = try Data(contentsOf: url)
+        guard jsonData.count > 0 else {
+            throw MigrationError.decodingFailed("Backup file is empty (0 bytes)")
+        }
+        
+        // Try to parse as JSON object
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) else {
+            throw MigrationError.decodingFailed("Backup file is not valid JSON")
+        }
+        
+        // Check if this is a wrapped backup (legacy format with timestamp)
+        if let backupDict = jsonObject as? [String: Any] {
+            // Check if it has timestamp (legacy UserDefaults backup format)
+            if backupDict["timestamp"] != nil {
+                logger.info("Validating legacy backup format (with timestamp wrapper)")
+                
+                // Check for encounters data
+                if let encountersBase64 = backupDict["droneEncounters"] as? String {
+                    // Verify base64 can be decoded
+                    guard let encountersData = Data(base64Encoded: encountersBase64) else {
+                        throw MigrationError.decodingFailed("Backup 'droneEncounters' field is not valid base64")
+                    }
+                    
+                    // Verify encounters data is valid JSON
+                    let strategies: [JSONDecoder.DateDecodingStrategy] = [.iso8601, .secondsSince1970, .millisecondsSince1970]
+                    var decodedSuccessfully = false
+                    
+                    for strategy in strategies {
+                        do {
+                            let decoder = JSONDecoder()
+                            decoder.dateDecodingStrategy = strategy
+                            _ = try decoder.decode([String: DroneEncounter].self, from: encountersData)
+                            decodedSuccessfully = true
+                            break
+                        } catch {
+                            continue
+                        }
+                    }
+                    
+                    if !decodedSuccessfully {
+                        throw MigrationError.decodingFailed("Backup 'droneEncounters' data cannot be decoded")
+                    }
+                } else if backupDict["droneEncounters"] is NSNull {
+                    // Empty backup is valid
+                    logger.info("Backup file contains no encounters (NSNull) - this is valid")
+                } else {
+                    throw MigrationError.decodingFailed("Backup file missing 'droneEncounters' field or wrong type")
+                }
+                
+                logger.info("✅ Legacy backup file validation passed")
+                return
+            }
+            
+            // If no timestamp, try as direct SwiftData export format (dictionary of encounters)
+            logger.info("Validating SwiftData export format (direct encounter dictionary)")
+            
+            let strategies: [JSONDecoder.DateDecodingStrategy] = [.iso8601, .secondsSince1970, .millisecondsSince1970]
+            var decodedSuccessfully = false
+            
+            for strategy in strategies {
+                do {
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = strategy
+                    _ = try decoder.decode([String: DroneEncounter].self, from: jsonData)
+                    decodedSuccessfully = true
+                    logger.info("✅ SwiftData export validation passed (strategy: \(self.strategyName(strategy)))")
+                    return
+                } catch {
+                    continue
+                }
+            }
+            
+            if !decodedSuccessfully {
+                throw MigrationError.decodingFailed("Backup file is not a valid encounter dictionary")
+            }
+        } else {
+            throw MigrationError.decodingFailed("Backup file is not a valid JSON dictionary")
+        }
+    }
+    
+    /// Create an empty backup marker when there's no data to backup
+    private func createEmptyBackupMarker() throws -> URL {
+        let backupData: [String: Any] = [
+            "version": "1.0",
+            "timestamp": Date().timeIntervalSince1970,
+            "migrationVersion": currentMigrationVersion,
+            "droneEncounters": NSNull(),
+            "note": "Empty backup - no data in UserDefaults"
+        ]
+        
+        let jsonData = try JSONSerialization.data(withJSONObject: backupData, options: .prettyPrinted)
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let backupURL = documentsPath.appendingPathComponent("wardragon_backup_empty_\(Int(Date().timeIntervalSince1970)).json")
+        
+        try jsonData.write(to: backupURL)
+        logger.info("✅ Empty backup marker created at: \(backupURL.lastPathComponent)")
         
         return backupURL
     }
@@ -260,7 +452,18 @@ class DataMigrationManager {
         )
         let encounters = try modelContext.fetch(descriptor)
         
+        // Check if there's any data to backup
+        if encounters.isEmpty {
+            logger.warning("⚠️ No encounters found to export")
+            throw MigrationError.backupFailed(NSError(
+                domain: "com.wardragon.migration",
+                code: 1001,
+                userInfo: [NSLocalizedDescriptionKey: "No encounters to export. Database is empty."]
+            ))
+        }
+        
         // Convert to legacy format for JSON serialization
+        logger.info("Converting \(encounters.count) encounters to legacy format...")
         let legacyEncounters = encounters.map { $0.toLegacy() }
         let encountersDict = Dictionary(uniqueKeysWithValues: legacyEncounters.map { ($0.id, $0) })
         
@@ -269,11 +472,27 @@ class DataMigrationManager {
         encoder.outputFormatting = .prettyPrinted
         let jsonData = try encoder.encode(encountersDict)
         
+        // Validate the encoded data can be decoded back
+        logger.info("Validating encoded data...")
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let validated = try decoder.decode([String: DroneEncounter].self, from: jsonData)
+            logger.info("✅ Validation passed - \(validated.count) encounters can be decoded")
+        } catch {
+            logger.error("❌ Validation failed: \(error.localizedDescription)")
+            throw MigrationError.backupFailed(NSError(
+                domain: "com.wardragon.migration",
+                code: 1003,
+                userInfo: [NSLocalizedDescriptionKey: "Backup validation failed: \(error.localizedDescription)"]
+            ))
+        }
+        
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let backupURL = documentsPath.appendingPathComponent("wardragon_swiftdata_export_\(Int(Date().timeIntervalSince1970)).json")
         
         try jsonData.write(to: backupURL)
-        logger.info("SwiftData export created at: \(backupURL.path) (\(encounters.count) encounters)")
+        logger.info("✅ SwiftData export created and validated at: \(backupURL.lastPathComponent) (\(encounters.count) encounters)")
         
         return backupURL
     }
@@ -309,57 +528,314 @@ class DataMigrationManager {
         try FileManager.default.removeItem(at: url)
     }
     
+    /// Clean up old or duplicate backups, keeping only the most recent valid ones
+    /// - Parameter keepCount: Number of recent backups to keep (default 3)
+    func cleanupOldBackups(keepCount: Int = 3) throws {
+        logger.info("Cleaning up old backups (keeping \(keepCount) most recent)...")
+        
+        let backupFiles = try listBackupFiles()
+        
+        // Separate by type
+        let legacyBackups = backupFiles.filter { $0.lastPathComponent.hasPrefix("wardragon_backup_") }
+        let swiftDataExports = backupFiles.filter { $0.lastPathComponent.hasPrefix("wardragon_swiftdata_export_") }
+        
+        // Clean each type separately
+        try cleanupBackupList(legacyBackups, keepCount: keepCount, type: "legacy UserDefaults")
+        try cleanupBackupList(swiftDataExports, keepCount: keepCount, type: "SwiftData export")
+    }
+    
+    /// Helper to clean up a list of backups
+    private func cleanupBackupList(_ backups: [URL], keepCount: Int, type: String) throws {
+        guard backups.count > keepCount else {
+            logger.info("No cleanup needed for \(type) backups (\(backups.count) files)")
+            return
+        }
+        
+        // Sort by date (newest first) - already done in listBackupFiles
+        let toDelete = backups.dropFirst(keepCount)
+        
+        logger.info("Deleting \(toDelete.count) old \(type) backup(s)...")
+        
+        for backup in toDelete {
+            do {
+                try deleteBackup(at: backup)
+                logger.info("  Deleted: \(backup.lastPathComponent)")
+            } catch {
+                logger.warning("  Failed to delete \(backup.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Verify all existing backups and report status
+    func verifyAllBackups() -> [BackupVerificationResult] {
+        logger.info("Verifying all backup files...")
+        
+        guard let backupFiles = try? listBackupFiles() else {
+            logger.error("Failed to list backup files")
+            return []
+        }
+        
+        var results: [BackupVerificationResult] = []
+        
+        for backupURL in backupFiles {
+            let result = verifyBackup(backupURL)
+            results.append(result)
+            
+            switch result.status {
+            case .valid:
+                logger.info("✅ \(backupURL.lastPathComponent): Valid (\(result.encounterCount) encounters)")
+            case .empty:
+                logger.info("⚠️  \(backupURL.lastPathComponent): Empty (no encounters)")
+            case .corrupted:
+                logger.error("❌ \(backupURL.lastPathComponent): Corrupted - \(result.error ?? "Unknown error")")
+            }
+        }
+        
+        return results
+    }
+    
+    /// Verify a single backup file
+    private func verifyBackup(_ url: URL) -> BackupVerificationResult {
+        do {
+            try validateBackupFile(url)
+            
+            // Count encounters if possible
+            let jsonData = try Data(contentsOf: url)
+            guard let backupDict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                logger.error("Failed to parse JSON dictionary for \(url.lastPathComponent)")
+                return BackupVerificationResult(url: url, status: .corrupted, error: "Not a valid JSON dictionary")
+            }
+            
+            var encounterCount = 0
+            
+            // Check if this is legacy format (with timestamp wrapper)
+            if backupDict["timestamp"] != nil {
+                logger.info("Verifying legacy format backup: \(url.lastPathComponent)")
+                // Legacy UserDefaults backup format
+                if let encountersBase64 = backupDict["droneEncounters"] as? String,
+                   let encountersData = Data(base64Encoded: encountersBase64) {
+                    // Try to count encounters from base64
+                    for strategy in [JSONDecoder.DateDecodingStrategy.iso8601, .secondsSince1970, .millisecondsSince1970] {
+                        do {
+                            let decoder = JSONDecoder()
+                            decoder.dateDecodingStrategy = strategy
+                            let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersData)
+                            encounterCount = encounters.count
+                            logger.info("Successfully decoded \(encounterCount) encounters from legacy backup")
+                            break
+                        } catch {
+                            continue
+                        }
+                    }
+                } else if backupDict["droneEncounters"] is NSNull {
+                    encounterCount = 0
+                    logger.info("Legacy backup is empty (NSNull)")
+                }
+            } else {
+                logger.info("Verifying SwiftData export format: \(url.lastPathComponent)")
+                // SwiftData export format (direct encounter dictionary)
+                // Try to decode the entire JSON as encounters
+                for strategy in [JSONDecoder.DateDecodingStrategy.iso8601, .secondsSince1970, .millisecondsSince1970] {
+                    do {
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = strategy
+                        let encounters = try decoder.decode([String: DroneEncounter].self, from: jsonData)
+                        encounterCount = encounters.count
+                        logger.info("Successfully decoded \(encounterCount) encounters from SwiftData export using \(self.strategyName(strategy))")
+                        break
+                    } catch {
+                        logger.debug("Failed to decode with \(self.strategyName(strategy)): \(error.localizedDescription)")
+                        continue
+                    }
+                }
+            }
+            
+            if encounterCount == 0 {
+                logger.warning("Backup \(url.lastPathComponent) contains no encounters")
+                return BackupVerificationResult(url: url, status: .empty, encounterCount: 0)
+            } else {
+                logger.info("Backup \(url.lastPathComponent) is valid with \(encounterCount) encounters")
+                return BackupVerificationResult(url: url, status: .valid, encounterCount: encounterCount)
+            }
+            
+        } catch {
+            logger.error("Backup verification failed for \(url.lastPathComponent): \(error.localizedDescription)")
+            return BackupVerificationResult(url: url, status: .corrupted, error: error.localizedDescription)
+        }
+    }
+    
     /// Restore from a backup file (imports into SwiftData)
     func restoreFromBackup(backupURL: URL, modelContext: ModelContext) throws {
         logger.info("Restoring from backup: \(backupURL.lastPathComponent)")
         
+        // First validate the backup file
+        do {
+            try validateBackupFile(backupURL)
+        } catch {
+            logger.error("❌ Backup validation failed: \(error.localizedDescription)")
+            throw MigrationError.decodingFailed("Invalid backup format or backup may be corrupted: \(error.localizedDescription)")
+        }
+        
         let jsonData = try Data(contentsOf: backupURL)
+        logger.info("Read \(jsonData.count) bytes from backup file")
         
         // Try to decode as direct encounter dictionary first (SwiftData export format)
-        do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let encounters = try decoder.decode([String: DroneEncounter].self, from: jsonData)
-            
-            logger.info("Found \(encounters.count) encounters in backup")
-            
-            // Import each encounter
-            var importedCount = 0
-            for (_, encounter) in encounters {
-                let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
-                modelContext.insert(stored)
-                importedCount += 1
+        logger.info("Attempting to decode as SwiftData export format...")
+        
+        for strategy in [JSONDecoder.DateDecodingStrategy.iso8601, 
+                         .secondsSince1970, 
+                         .millisecondsSince1970] {
+            do {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = strategy
+                let encounters = try decoder.decode([String: DroneEncounter].self, from: jsonData)
+                
+                logger.info("✅ Successfully decoded \(encounters.count) encounters using \(self.strategyName(strategy))")
+                
+                // Check if backup is empty
+                if encounters.isEmpty {
+                    logger.warning("⚠️ Backup file contains no encounters")
+                    throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
+                }
+                
+                // Import each encounter
+                var importedCount = 0
+                for (_, encounter) in encounters {
+                    let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
+                    modelContext.insert(stored)
+                    importedCount += 1
+                }
+                
+                try modelContext.save()
+                logger.info("✅ Successfully restored \(importedCount) encounters from backup")
+                return
+                
+            } catch let decodeError as DecodingError {
+                logger.info("Failed with \(self.strategyName(strategy)): \(decodeError.localizedDescription)")
+                continue
+            } catch let migrationError as MigrationError {
+                // Re-throw migration errors (like empty backup)
+                throw migrationError
+            } catch {
+                logger.info("Failed with \(self.strategyName(strategy)): \(error.localizedDescription)")
+                continue
             }
-            
-            try modelContext.save()
-            logger.info("✅ Successfully restored \(importedCount) encounters from backup")
-            
-        } catch {
-            // Try legacy backup format with base64-encoded data
-            logger.info("Trying legacy backup format...")
-            
-            let backupDict = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-            guard let encountersBase64 = backupDict?["droneEncounters"] as? String,
-                  let encountersData = Data(base64Encoded: encountersBase64) else {
-                throw MigrationError.invalidData
-            }
-            
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersData)
-            
-            logger.info("Found \(encounters.count) encounters in legacy backup")
-            
-            var importedCount = 0
-            for (_, encounter) in encounters {
-                let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
-                modelContext.insert(stored)
-                importedCount += 1
-            }
-            
-            try modelContext.save()
-            logger.info("✅ Successfully restored \(importedCount) encounters from legacy backup")
         }
+        
+        // If direct decode failed, try legacy backup format
+        logger.info("Direct decode failed, attempting legacy backup format...")
+        
+        do {
+            guard let backupDict = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                logger.error("Failed to parse JSON as dictionary")
+                throw MigrationError.decodingFailed("JSON is not a dictionary")
+            }
+            
+            logger.info("Parsed JSON dictionary with keys: \(backupDict.keys.joined(separator: ", "))")
+            
+            // Check if this is the legacy format with base64-encoded data
+            if let encountersBase64 = backupDict["droneEncounters"] as? String {
+                logger.info("Found base64-encoded encounters data")
+                
+                guard let encountersData = Data(base64Encoded: encountersBase64) else {
+                    logger.error("Failed to decode base64 string")
+                    throw MigrationError.decodingFailed("Invalid base64 encoding")
+                }
+                
+                logger.info("Decoded base64 data: \(encountersData.count) bytes")
+                
+                // Try multiple date decoding strategies
+                for strategy in [JSONDecoder.DateDecodingStrategy.iso8601, 
+                                 .secondsSince1970, 
+                                 .millisecondsSince1970] {
+                    do {
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = strategy
+                        let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersData)
+                        
+                        logger.info("✅ Successfully decoded \(encounters.count) encounters from base64 using \(self.strategyName(strategy))")
+                        
+                        if encounters.isEmpty {
+                            logger.warning("⚠️ Backup file contains no encounters")
+                            throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
+                        }
+                        
+                        var importedCount = 0
+                        for (_, encounter) in encounters {
+                            let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
+                            modelContext.insert(stored)
+                            importedCount += 1
+                        }
+                        
+                        try modelContext.save()
+                        logger.info("✅ Successfully restored \(importedCount) encounters from legacy backup")
+                        return
+                    } catch let migrationError as MigrationError {
+                        throw migrationError
+                    } catch {
+                        logger.info("Failed base64 decode with \(self.strategyName(strategy)): \(error.localizedDescription)")
+                        continue
+                    }
+                }
+            }
+            // Handle NSNull case (empty UserDefaults backup)
+            else if backupDict["droneEncounters"] is NSNull {
+                logger.warning("⚠️ Backup contains NSNull for droneEncounters (empty UserDefaults backup)")
+                throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
+            }
+            // Check if encounters is directly in the dictionary (not base64)
+            else if let encountersDict = backupDict["droneEncounters"] {
+                logger.info("Found encounters dictionary directly (not base64)")
+                
+                let encountersJSON = try JSONSerialization.data(withJSONObject: encountersDict)
+                logger.info("Serialized encounters dictionary: \(encountersJSON.count) bytes")
+                
+                for strategy in [JSONDecoder.DateDecodingStrategy.iso8601, 
+                                 .secondsSince1970, 
+                                 .millisecondsSince1970] {
+                    do {
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = strategy
+                        let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersJSON)
+                        
+                        logger.info("✅ Successfully decoded \(encounters.count) encounters from dictionary using \(self.strategyName(strategy))")
+                        
+                        if encounters.isEmpty {
+                            logger.warning("⚠️ Backup file contains no encounters")
+                            throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
+                        }
+                        
+                        var importedCount = 0
+                        for (_, encounter) in encounters {
+                            let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
+                            modelContext.insert(stored)
+                            importedCount += 1
+                        }
+                        
+                        try modelContext.save()
+                        logger.info("✅ Successfully restored \(importedCount) encounters from legacy backup")
+                        return
+                    } catch let migrationError as MigrationError {
+                        throw migrationError
+                    } catch {
+                        logger.info("Failed dictionary decode with \(self.strategyName(strategy)): \(error.localizedDescription)")
+                        continue
+                    }
+                }
+            } else {
+                logger.error("No 'droneEncounters' key found in backup dictionary")
+                throw MigrationError.decodingFailed("Backup file missing 'droneEncounters' key")
+            }
+            
+        } catch let jsonError as MigrationError {
+            throw jsonError
+        } catch {
+            logger.error("Failed to parse legacy format: \(error.localizedDescription)")
+            throw MigrationError.decodingFailed("Legacy format parsing failed: \(error.localizedDescription)")
+        }
+        
+        logger.error("All restore attempts failed")
+        throw MigrationError.invalidData
     }
     
     /// Get database statistics
@@ -422,10 +898,32 @@ struct DatabaseStats {
     }
 }
 
+struct BackupVerificationResult {
+    let url: URL
+    let status: BackupStatus
+    var encounterCount: Int = 0
+    var error: String?
+    
+    enum BackupStatus {
+        case valid
+        case empty
+        case corrupted
+    }
+    
+    var statusEmoji: String {
+        switch status {
+        case .valid: return "✅"
+        case .empty: return "⚠️"
+        case .corrupted: return "❌"
+        }
+    }
+}
+
 enum MigrationError: LocalizedError {
     case migrationFailed(Error)
     case backupFailed(Error)
     case invalidData
+    case decodingFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -434,7 +932,9 @@ enum MigrationError: LocalizedError {
         case .backupFailed(let error):
             return "Backup failed: \(error.localizedDescription)"
         case .invalidData:
-            return "Invalid data format in UserDefaults"
+            return "Invalid backup file format. The file may be corrupted or in an unsupported format."
+        case .decodingFailed(let details):
+            return "Failed to decode backup data: \(details)"
         }
     }
 }
