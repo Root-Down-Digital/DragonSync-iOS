@@ -1884,14 +1884,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             
             return
         }
-            
-            // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
-            let extractedId = extractNumericId(from: message.uid)
         
+        // Extract the numerical ID from messages like "pilot-107", "home-107", "drone-107"
+        let extractedId = extractNumericId(from: message.uid)
+    
         // Check if this is a pilot or home message that should be associated with a drone
         if message.uid.hasPrefix("pilot-") {
             await updatePilotLocation(for: extractedId, message: message)
-            return // Don't create lone message for pilot or home
+            return
         }
         
         if message.uid.hasPrefix("home-") {
@@ -2886,7 +2886,7 @@ extension CoTViewModel {
                     guard let self = self else { return }
                     Task { @MainActor in
                         if Settings.shared.kismetEnabled {
-                            await self.setupKismetClient()
+                            self.setupKismetClient()
                         } else {
                             self.kismetClient?.stop()
                             self.kismetClient = nil
@@ -2914,7 +2914,7 @@ extension CoTViewModel {
                     guard let self = self else { return }
                     Task { @MainActor in
                         if Settings.shared.latticeEnabled {
-                            await self.setupLatticeClient()
+                            self.setupLatticeClient()
                         } else {
                             self.latticeClient = nil
                         }

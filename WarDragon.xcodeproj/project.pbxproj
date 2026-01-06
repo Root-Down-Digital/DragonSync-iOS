@@ -491,32 +491,32 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/emqx/CocoaMQTT";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.1.9;
+				kind = branch;
+				branch = master;
 			};
 		};
 		EB7833952EFEF48200E78F12 /* XCRemoteSwiftPackageReference "CocoaMQTT" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/emqx/CocoaMQTT";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.1.9;
+				kind = branch;
+				branch = master;
 			};
 		};
 		EB7834302EFEF4E500E78F12 /* XCRemoteSwiftPackageReference "CocoaMQTT" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/emqx/CocoaMQTT";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.1.9;
+				kind = branch;
+				branch = master;
 			};
 		};
 		EB7834332EFEF50F00E78F12 /* XCRemoteSwiftPackageReference "CocoaMQTT" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/emqx/CocoaMQTT";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.1.9;
+				kind = branch;
+				branch = master;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
