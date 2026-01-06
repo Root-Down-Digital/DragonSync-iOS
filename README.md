@@ -17,7 +17,9 @@
 
 <br>
 
-Real-time drone & FPV detection and monitoring for iOS/macOS, powered by locally-hosted decoding. Professional-grade detection with advanced signal analysis and tracking. 
+Real-time drone, aircraft & FPV detection and monitoring for iOS/macOS. Professional-grade detection with advanced signal analysis and intelligence. 
+
+Enrich data from ADS-B, DragonSync and DroneID feeds: In-app ADS-B, MQTT and TAK support allows for easy integration, granting users functionality without complex backend configurations.
 </div>
 <br>
 
