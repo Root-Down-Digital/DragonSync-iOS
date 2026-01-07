@@ -26,11 +26,10 @@ struct DatabaseManagementView: View {
     @State private var showResetConfirmation = false
     @State private var showRestoreConfirmation = false
     @State private var fileToRestore: URL?
-    @State private var showRestoreSheet = false
-    @State private var showExportShare = false
-    @State private var exportedFileURL: URL?
     @State private var backupVerificationResults: [BackupVerificationResult] = []
     @State private var showVerificationResults = false
+    @State private var showExportShare = false
+    @State private var exportedFileURL: URL?
     
     var body: some View {
         Form {
@@ -129,9 +128,10 @@ struct DatabaseManagementView: View {
                     }
                 } else {
                     ForEach(backupFiles, id: \.self) { fileURL in
+                        let verificationResult = backupVerificationResults.first { $0.url == fileURL }
                         BackupFileRow(
                             fileURL: fileURL,
-                            verificationResult: backupVerificationResults.first { $0.url == fileURL },
+                            verificationResult: verificationResult,
                             onDelete: {
                                 fileToDelete = fileURL
                                 showDeleteConfirmation = true
@@ -139,10 +139,6 @@ struct DatabaseManagementView: View {
                             onRestore: {
                                 fileToRestore = fileURL
                                 showRestoreConfirmation = true
-                            },
-                            onShare: {
-                                exportedFileURL = fileURL
-                                showExportShare = true
                             }
                         )
                     }
@@ -353,16 +349,13 @@ struct DatabaseManagementView: View {
             loadBackupFiles()
             
             // Wait a moment for UI to settle before showing share sheet
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: .milliseconds(200))
             
-            // Show share sheet on main thread
             await MainActor.run {
                 exportedFileURL = url
                 showExportShare = true
             }
             
-            successMessage = "Backup created successfully!\n\(url.lastPathComponent)"
-            showSuccess = true
         } catch {
             errorMessage = "Failed to create backup: \(error.localizedDescription)"
             showError = true
@@ -407,9 +400,22 @@ struct DatabaseManagementView: View {
     
     private func deleteBackupFile(_ fileURL: URL) {
         do {
+            // Ensure we have access to the file before trying to delete
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                errorMessage = "File not found: \(fileURL.lastPathComponent)"
+                showError = true
+                return
+            }
+            
             try migrationManager.deleteBackup(at: fileURL)
+            
+            // Refresh the list
             loadBackupFiles()
-            successMessage = "Backup file deleted"
+            
+            // Clear any verification results for this file
+            backupVerificationResults.removeAll { $0.url == fileURL }
+            
+            successMessage = "Backup file deleted: \(fileURL.lastPathComponent)"
             showSuccess = true
         } catch {
             errorMessage = "Failed to delete: \(error.localizedDescription)"
@@ -598,7 +604,6 @@ struct BackupFileRow: View {
     let verificationResult: BackupVerificationResult?
     let onDelete: () -> Void
     let onRestore: () -> Void
-    let onShare: () -> Void
     
     @State private var fileSize: String = "..."
     @State private var creationDate: Date?
@@ -657,12 +662,9 @@ struct BackupFileRow: View {
                 .buttonStyle(.bordered)
                 .disabled(verificationResult?.status == .corrupted)
                 
+                // Share button using custom action
                 Button {
-                    // Add small delay to ensure proper presentation
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(50))
-                        onShare()
-                    }
+                    shareFile()
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .font(.appCaption)
@@ -728,6 +730,49 @@ struct BackupFileRow: View {
             fileSize = "Unknown"
         }
     }
+    
+    private func shareFile() {
+        // Get the root view controller
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootViewController = windowScene.windows.first?.rootViewController else {
+            return
+        }
+        
+        // Read the file data and share it directly as Data with proper type identifier
+        guard let data = try? Data(contentsOf: fileURL) else {
+            print("Could not read file data")
+            return
+        }
+        
+        // Create a temporary item provider
+        let itemProvider = NSItemProvider(item: data as NSData, typeIdentifier: UTType.json.identifier)
+        itemProvider.suggestedName = fileURL.lastPathComponent
+        
+        // Create activity view controller with the data
+        let activityVC = UIActivityViewController(
+            activityItems: [itemProvider],
+            applicationActivities: nil
+        )
+        
+        // Exclude incompatible activities
+        activityVC.excludedActivityTypes = [
+            .addToReadingList,
+            .assignToContact
+        ]
+        
+        // Configure for iPad
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = rootViewController.view
+            popover.sourceRect = CGRect(x: rootViewController.view.bounds.midX, 
+                                       y: rootViewController.view.bounds.midY, 
+                                       width: 0, 
+                                       height: 0)
+            popover.permittedArrowDirections = []
+        }
+        
+        // Present
+        rootViewController.present(activityVC, animated: true)
+    }
 }
 
 // MARK: - Share Sheet View
@@ -736,15 +781,17 @@ struct ShareSheetView: View {
     let url: URL
     @Environment(\.dismiss) private var dismiss
     @State private var showingActivityVC = false
+    @State private var shareCompleted = false
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: shareCompleted ? "checkmark.circle.fill" : "doc.badge.arrow.up.fill")
                     .font(.system(size: 60))
-                    .foregroundColor(.green)
+                    .foregroundColor(shareCompleted ? .green : .blue)
+                    .animation(.spring(), value: shareCompleted)
                 
-                Text("Backup Created")
+                Text(shareCompleted ? "Backup Shared" : "Backup Created")
                     .font(.title2)
                     .fontWeight(.bold)
                 
@@ -754,18 +801,25 @@ struct ShareSheetView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                 
-                Button {
-                    showingActivityVC = true
-                } label: {
-                    Label("Share Backup File", systemImage: "square.and.arrow.up")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.accentColor)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
+                if !shareCompleted {
+                    // Use native ShareLink which handles file URLs better
+                    ShareLink(item: url) {
+                        Label("Share Backup File", systemImage: "square.and.arrow.up")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.accentColor)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                    }
+                    .padding(.horizontal)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        // Mark as completed when tapped
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            shareCompleted = true
+                        }
+                    })
                 }
-                .padding(.horizontal)
                 
                 Button {
                     dismiss()
@@ -790,8 +844,19 @@ struct ShareSheetView: View {
                 }
             }
             .sheet(isPresented: $showingActivityVC) {
-                ActivityViewController(activityItems: [url])
+                // Ensure the file URL is accessible
+                if FileManager.default.fileExists(atPath: url.path) {
+                    ActivityViewController(
+                        activityItems: [url],
+                        onComplete: {
+                            shareCompleted = true
+                        }
+                    )
                     .ignoresSafeArea()
+                } else {
+                    Text("Error: File not found")
+                        .padding()
+                }
             }
         }
     }
@@ -802,16 +867,54 @@ struct ShareSheetView: View {
 struct ActivityViewController: UIViewControllerRepresentable {
     let activityItems: [Any]
     var applicationActivities: [UIActivity]? = nil
+    var onComplete: (() -> Void)?
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Prepare the file URL for sharing
+        var itemsToShare: [Any] = []
+        
+        for item in activityItems {
+            if let url = item as? URL {
+                // Ensure file URL is accessible
+                if url.startAccessingSecurityScopedResource() {
+                    // Will stop accessing when done
+                }
+                itemsToShare.append(url)
+            } else {
+                itemsToShare.append(item)
+            }
+        }
+        
         let controller = UIActivityViewController(
-            activityItems: activityItems,
+            activityItems: itemsToShare,
             applicationActivities: applicationActivities
         )
         
-        // Completion handler to prevent crashes
-        controller.completionWithItemsHandler = { _, _, _, _ in
-            // Handle completion if needed
+        // Exclude activities that might not work well with JSON files
+        controller.excludedActivityTypes = [
+            .addToReadingList,
+            .assignToContact,
+            .postToFlickr,
+            .postToVimeo,
+            .postToWeibo,
+            .postToTencentWeibo
+        ]
+        
+        // Completion handler to clean up and prevent crashes
+        controller.completionWithItemsHandler = { activityType, completed, returnedItems, error in
+            // Stop accessing security-scoped resources
+            for item in activityItems {
+                if let url = item as? URL {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            
+            if let error = error {
+                print("Share error: \(error.localizedDescription)")
+            }
+            
+            // Call completion handler
+            onComplete?()
         }
         
         return controller
@@ -819,6 +922,35 @@ struct ActivityViewController: UIViewControllerRepresentable {
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
         // Nothing to update
+    }
+}
+
+// MARK: - File Item Source for Sharing
+
+class FileItemSource: NSObject, UIActivityItemSource {
+    let fileURL: URL
+    let filename: String
+    
+    init(fileURL: URL, filename: String) {
+        self.fileURL = fileURL
+        self.filename = filename
+        super.init()
+    }
+    
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return fileURL
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return fileURL
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return "WarDragon Backup - \(filename)"
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return "public.json"
     }
 }
 
