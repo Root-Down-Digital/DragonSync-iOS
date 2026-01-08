@@ -112,8 +112,7 @@ extension StatusViewModel.StatusMessage {
                 "latitude": gpsData.latitude,
                 "longitude": gpsData.longitude,
                 "altitude": gpsData.altitude,
-                "speed": gpsData.speed,
-                "track": gpsData.track
+                "speed": gpsData.speed
             ],
             "system_stats": [
                 "cpu_usage": systemStats.cpuUsage,
