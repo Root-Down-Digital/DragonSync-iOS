@@ -692,6 +692,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     zynqTemp: zynqTemp
                 )
             )
+            
+            // Debug log to verify antStats are being created with correct values
+            print("DEBUG XMLParser: Created StatusMessage with antStats - Pluto: \(plutoTemp)°C, Zynq: \(zynqTemp)°C")
         default:
             break
         }
@@ -1049,8 +1052,10 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 memoryPercent = Double(component.replacingOccurrences(of: "Memory Percent: ", with: "").replacingOccurrences(of: " percent", with: "")) ?? 0.0
             } else if component.hasPrefix("Pluto Temp:") {
                 plutoTemp = Double(component.replacingOccurrences(of: "Pluto Temp: ", with: "").replacingOccurrences(of: "°C", with: "")) ?? 0.0
+                print("DEBUG XMLParser: Parsed Pluto Temp: \(plutoTemp)°C")
             } else if component.hasPrefix("Zynq Temp:") {
                 zynqTemp = Double(component.replacingOccurrences(of: "Zynq Temp: ", with: "").replacingOccurrences(of: "°C", with: "")) ?? 0.0
+                print("DEBUG XMLParser: Parsed Zynq Temp: \(zynqTemp)°C")
             } else if component.hasPrefix("GPS Course:") {
                 gps_course = Double(component.replacingOccurrences(of: "GPS Course: ", with: "").replacingOccurrences(of: "°", with: "")) ?? 0.0
             } else if component.hasPrefix("GPS Speed:") {

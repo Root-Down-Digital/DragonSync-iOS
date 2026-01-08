@@ -184,6 +184,11 @@ struct MQTTSystemMessage: Codable {
     let dronesTracked: Int
     let uptime: String?
     
+    // GPS status fields (matching Python dragonsync.py)
+    let timeSource: String?     // "gpsd" | "static" | "unknown"
+    let gpsdTimeUtc: String?    // ISO8601 timestamp from GPS daemon
+    let kitSerial: String?      // wardragon-XXXX identifier
+    
     var json: Data? {
         try? JSONEncoder().encode(self)
     }

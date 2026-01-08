@@ -15,6 +15,7 @@
 		EB7834322EFEF4E500E78F12 /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = EB7834312EFEF4E500E78F12 /* CocoaMQTT */; };
 		EB7834352EFEF50F00E78F12 /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = EB7834342EFEF50F00E78F12 /* CocoaMQTT */; };
 		EB7834372EFEF50F00E78F12 /* CocoaMQTTWebSocket in Frameworks */ = {isa = PBXBuildFile; productRef = EB7834362EFEF50F00E78F12 /* CocoaMQTTWebSocket */; };
+		EB96A03B2F0F26BC00FC518A /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = EB96A03A2F0F26BC00FC518A /* CocoaMQTT */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +64,7 @@
 				EB7834372EFEF50F00E78F12 /* CocoaMQTTWebSocket in Frameworks */,
 				EB7832FC2EFEE8C900E78F12 /* CocoaMQTT in Frameworks */,
 				EB7834322EFEF4E500E78F12 /* CocoaMQTT in Frameworks */,
+				EB96A03B2F0F26BC00FC518A /* CocoaMQTT in Frameworks */,
 				BD6EB8993310167A6208B806 /* Pods_WarDragon.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -158,7 +160,7 @@
 			mainGroup = EBFDAFB42CEB98C8007CBD1F;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				EB7834332EFEF50F00E78F12 /* XCRemoteSwiftPackageReference "CocoaMQTT" */,
+				EB96A0392F0F26BC00FC518A /* XCRemoteSwiftPackageReference "CocoaMQTT" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EBFDAFBE2CEB98C8007CBD1F /* Products */;
@@ -515,8 +517,16 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/emqx/CocoaMQTT";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+		EB96A0392F0F26BC00FC518A /* XCRemoteSwiftPackageReference "CocoaMQTT" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/emqx/CocoaMQTT.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.1.9;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -556,6 +566,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = EB7834332EFEF50F00E78F12 /* XCRemoteSwiftPackageReference "CocoaMQTT" */;
 			productName = CocoaMQTTWebSocket;
+		};
+		EB96A03A2F0F26BC00FC518A /* CocoaMQTT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EB96A0392F0F26BC00FC518A /* XCRemoteSwiftPackageReference "CocoaMQTT" */;
+			productName = CocoaMQTT;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

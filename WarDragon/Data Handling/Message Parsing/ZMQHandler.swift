@@ -798,19 +798,38 @@ class ZMQHandler: ObservableObject {
         let diskPercent = Double(disk["percent"] as? Double ?? 0.0)
         
         // Get ANTSDR temps either from dedicated field or remarks string
-        var plutoTemp = antSDRTemps["pluto_temp"] as? Double ?? 0.0
-        var zynqTemp = antSDRTemps["zynq_temp"] as? Double ?? 0.0
+        // Handle both numeric values and "N/A" strings from Python
+        var plutoTemp: Double = 0.0
+        var zynqTemp: Double = 0.0
         
-        // If temps are 0, try to parse from remarks if available
+        // Try to get pluto_temp from JSON
+        if let temp = antSDRTemps["pluto_temp"] as? Double {
+            plutoTemp = temp
+        } else if let tempStr = antSDRTemps["pluto_temp"] as? String,
+                  tempStr != "N/A",
+                  let tempValue = Double(tempStr) {
+            plutoTemp = tempValue
+        }
+        
+        // Try to get zynq_temp from JSON
+        if let temp = antSDRTemps["zynq_temp"] as? Double {
+            zynqTemp = temp
+        } else if let tempStr = antSDRTemps["zynq_temp"] as? String,
+                  tempStr != "N/A",
+                  let tempValue = Double(tempStr) {
+            zynqTemp = tempValue
+        }
+        
+        // If temps are 0, try to parse from remarks if available (fallback)
         if (plutoTemp == 0.0 || zynqTemp == 0.0),
            let details = json["detail"] as? [String: Any],
            let remarks = details["remarks"] as? String {
             // Extract Pluto temp
-            if let plutoMatch = remarks.firstMatch(of: /Pluto Temp: (\d+\.?\d*)°C/) {
+            if plutoTemp == 0.0, let plutoMatch = remarks.firstMatch(of: /Pluto Temp: (\d+\.?\d*)°C/) {
                 plutoTemp = Double(plutoMatch.1) ?? 0.0
             }
             // Extract Zynq temp
-            if let zynqMatch = remarks.firstMatch(of: /Zynq Temp: (\d+\.?\d*)°C/) {
+            if zynqTemp == 0.0, let zynqMatch = remarks.firstMatch(of: /Zynq Temp: (\d+\.?\d*)°C/) {
                 zynqTemp = Double(zynqMatch.1) ?? 0.0
             }
         }
@@ -836,6 +855,9 @@ class ZMQHandler: ObservableObject {
         "Uptime: \(systemStats["uptime"] as? Double ?? 0.0) seconds, " +
         "Pluto Temp: \(plutoTemp)°C, " +
         "Zynq Temp: \(zynqTemp)°C"
+        
+        // Debug log to verify temps are being extracted
+        print("DEBUG: AntSDR Temps - Pluto: \(plutoTemp)°C, Zynq: \(zynqTemp)°C")
         
         return """
         <event version="2.0" uid="\(serialNumber)" type="b-m-p-s-m">

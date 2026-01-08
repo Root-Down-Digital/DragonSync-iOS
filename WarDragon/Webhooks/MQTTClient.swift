@@ -182,6 +182,42 @@ class MQTTClient: ObservableObject {
         logger.info("Published system status")
     }
     
+    /// Publish system attributes (matches Python wardragon/system/attrs)
+    func publishSystemAttributes(
+        latitude: Double,
+        longitude: Double,
+        altitude: Double,
+        gpsFix: Bool,
+        kitSerial: String,
+        timeSource: String = "unknown",
+        gpsdTimeUTC: String? = nil
+    ) async throws {
+        let topic = configuration.baseTopic + "/system/attrs"
+        
+        let attributes: [String: Any] = [
+            "gps_fix": gpsFix,
+            "time_source": timeSource,
+            "gpsd_time_utc": gpsdTimeUTC ?? ISO8601DateFormatter().string(from: Date()),
+            "kit_serial": kitSerial,
+            "latitude": latitude,
+            "longitude": longitude,
+            "altitude": altitude,
+            "updated": Int(Date().timeIntervalSince1970)
+        ]
+        
+        let payload = try JSONSerialization.data(withJSONObject: attributes)
+        try await publish(topic: topic, payload: payload, qos: .atLeastOnce, retain: false)
+        logger.info("Published system attributes to \(topic)")
+    }
+    
+    /// Mark drone as offline (Home Assistant availability)
+    func publishDroneOffline(_ macAddress: String) async throws {
+        let topic = configuration.droneTopic(for: macAddress) + "/availability"
+        let payload = "offline".data(using: .utf8) ?? Data()
+        try await publish(topic: topic, payload: payload, qos: .atLeastOnce, retain: true)
+        logger.info("Published offline status for drone: \(macAddress)")
+    }
+    
     /// Publish online status
     func publishOnlineStatus() async throws {
         let message = MQTTStatusMessage(

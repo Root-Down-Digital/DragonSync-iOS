@@ -243,6 +243,9 @@ class StatusViewModel: ObservableObject {
         statusMessages.append(processedMessage)
         lastStatusMessageReceived = Date()
         
+        // Debug log to verify antStats values
+        print("DEBUG StatusViewModel: Received status message with antStats - Pluto: \(processedMessage.antStats.plutoTemp)°C, Zynq: \(processedMessage.antStats.zynqTemp)°C")
+        
         // Keep only the last 100 messages to prevent memory issues
         if statusMessages.count > 100 {
             statusMessages.removeFirst(statusMessages.count - 100)

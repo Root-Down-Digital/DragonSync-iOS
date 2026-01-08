@@ -699,6 +699,19 @@ class Settings: ObservableObject {
         latticeConfiguration = config
     }
     
+    // MARK: - Detection Limits (matching Python DragonSync)
+    @AppStorage("maxDrones") var maxDrones: Int = 30 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("maxAircraft") var maxAircraft: Int = 100 {
+        didSet { objectWillChange.send() }
+    }
+    
+    @AppStorage("inactivityTimeout") var inactivityTimeout: Double = 60.0 {
+        didSet { objectWillChange.send() }
+    }
+    
     // MARK: - Rate Limiting Settings
     @AppStorage("rateLimitEnabled") var rateLimitEnabled = true {
         didSet { objectWillChange.send() }

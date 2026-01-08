@@ -33,6 +33,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var statusListener: NWListener?
     private var multicastConnection: NWConnection?
     
+    // MARK: - Detection Limits (matching Python DragonSync)
+    // Python has max_drones = 30 (default), configurable via config.ini
+    private let maxDrones = 30
+    private let maxAircraft = 100
+    
+    // MARK: - Inactivity Timeout (matching Python DragonSync)
+    // Python has inactivity_timeout = 60.0 seconds (default)
+    private let inactivityTimeout: TimeInterval = 60.0
+    private var inactivityCleanupTimer: Timer?
+    
     // Cached settings values to avoid main actor access issues
     private var cachedConnectionMode: ConnectionMode = .multicast
     private var cachedMulticastHost: String = "224.0.0.1"
@@ -524,9 +534,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 "lon": self.lon,
                 "latitude": self.lat,
                 "longitude": self.lon,
-                "speed": self.speed,
-                "vspeed": self.vspeed,
-                "alt": self.alt,
+                "speed": Double(self.speed) ?? 0.0,
+                "vspeed": Double(self.vspeed) ?? 0.0,
+                "alt": Double(self.alt) ?? 0.0,
                 "pilotLat": self.pilotLat,
                 "pilotLon": self.pilotLon,
                 "description": self.description,
@@ -534,7 +544,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 "uaType": self.uaType,
                 "idType": self.idType,
                 "isSpoofed": self.isSpoofed,
-                "rssi": self.rssi ?? 0.0,
+                "rssi": self.rssi ?? 0,
                 "mac": self.mac ?? "",
                 "manufacturer": self.manufacturer ?? "",
                 "op_status": self.op_status ?? "",
@@ -544,7 +554,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 "fpvTimestamp": self.fpvTimestamp ?? Date().timeIntervalSince1970,
                 "detection_source": self.fpvSource ?? "",
                 "bandwidth": self.fpvBandwidth ?? 0.0,
-                "signal_strength": self.fpvRSSI ?? 0.0
+                "signal_strength": self.fpvRSSI ?? 0
             ]
             
             // Include optional fields if they exist
@@ -626,6 +636,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             await self.setupADSBClient()
             
             self.restoreAlertRingsFromStorage()
+            
+            // Start inactivity cleanup timer (matches Python DragonSync behavior)
+            self.startInactivityCleanupTimer()
         }
         
         // Register for application lifecycle notifications
@@ -774,6 +787,112 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     }
                 }
             }
+        }
+    }
+    
+    // MARK: - Inactivity Cleanup (matches Python DragonSync)
+    
+    /// Start timer to periodically clean up inactive detections
+    /// Matches Python's inactivity_timeout behavior in manager.py
+    @MainActor
+    private func startInactivityCleanupTimer() {
+        // Stop any existing timer
+        inactivityCleanupTimer?.invalidate()
+        
+        // Run cleanup every 10 seconds to check for stale detections
+        inactivityCleanupTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.cleanupInactiveDetections()
+            }
+        }
+    }
+    
+    /// Clean up detections that haven't been updated within inactivityTimeout
+    /// Matches Python DragonSync manager.py send_updates() behavior
+    @MainActor
+    private func cleanupInactiveDetections() async {
+        let now = Date()
+        let timeout = Settings.shared.inactivityTimeout
+        var removedUIDs: [String] = []
+        
+        // Find stale detections
+        for message in parsedMessages {
+            let age = now.timeIntervalSince(message.lastUpdated)
+            if age > timeout {
+                removedUIDs.append(message.uid)
+                
+                // Publish MQTT offline status before removing (matches Python behavior)
+                if let mac = message.mac, !mac.isEmpty, mqttClient != nil {
+                    do {
+                        try await mqttClient?.publishDroneOffline(mac)
+                        print("Published offline status for \(message.uid)")
+                    } catch {
+                        print("Failed to publish offline status for \(message.uid): \(error)")
+                    }
+                }
+            }
+        }
+        
+        // Remove stale detections
+        if !removedUIDs.isEmpty {
+            parsedMessages.removeAll { removedUIDs.contains($0.uid) }
+            print("Removed \(removedUIDs.count) inactive detections (timeout: \(timeout)s)")
+        }
+    }
+    
+    /// Enforce maximum detection limits (matches Python DragonSync max_drones behavior)
+    /// When limit is exceeded, removes oldest detections (FIFO)
+    @MainActor
+    private func enforceDetectionLimits() {
+        let maxDrones = Settings.shared.maxDrones
+        let maxAircraft = Settings.shared.maxAircraft
+        
+        // Separate drones and aircraft
+        let drones = parsedMessages.filter { !$0.uid.hasPrefix("aircraft-") && !$0.uid.hasPrefix("fpv-") }
+        let aircraft = parsedMessages.filter { $0.uid.hasPrefix("aircraft-") }
+        
+        var removedUIDs: [String] = []
+        
+        // Enforce drone limit
+        if drones.count > maxDrones {
+            let excess = drones.count - maxDrones
+            // Sort by last update time (oldest first) and remove oldest
+            let sortedDrones = drones.sorted { 
+                $0.lastUpdated < $1.lastUpdated
+            }
+            
+            for i in 0..<excess {
+                let drone = sortedDrones[i]
+                removedUIDs.append(drone.uid)
+                
+                // Publish MQTT offline status
+                if let mac = drone.mac, !mac.isEmpty, mqttClient != nil {
+                    Task {
+                        try? await mqttClient?.publishDroneOffline(mac)
+                    }
+                }
+            }
+            
+            print("Drone limit exceeded (\(drones.count)/\(maxDrones)). Removing \(excess) oldest drones.")
+        }
+        
+        // Enforce aircraft limit
+        if aircraft.count > maxAircraft {
+            let excess = aircraft.count - maxAircraft
+            let sortedAircraft = aircraft.sorted {
+                $0.lastUpdated < $1.lastUpdated
+            }
+            
+            for i in 0..<excess {
+                removedUIDs.append(sortedAircraft[i].uid)
+            }
+            
+            print("Aircraft limit exceeded (\(aircraft.count)/\(maxAircraft)). Removing \(excess) oldest aircraft.")
+        }
+        
+        // Remove excess detections
+        if !removedUIDs.isEmpty {
+            parsedMessages.removeAll { removedUIDs.contains($0.uid) }
         }
     }
     
@@ -977,6 +1096,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             onStatus: { [weak self] message in
                 if let data = message.data(using: .utf8) {
                     self?.processIncomingMessage(data)
+                    
+                    // Auto-broadcast system status to TAK (matches Python DragonSync behavior)
+                    Task { @MainActor in
+                        self?.publishSystemStatusToTAK()
+                    }
                 }
             }
         )
@@ -1864,6 +1988,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 var fpvMessage = message
                 fpvMessage.lastUpdated = Date()
                 self.parsedMessages.append(fpvMessage)
+                
+                Task { @MainActor in
+                    self.enforceDetectionLimits()
+                }
+                
                 self.updateAlertRing(for: fpvMessage)
                 self.sendNotification(for: fpvMessage)
                 
@@ -2459,6 +2588,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         } else {
             // New message - add it
             self.parsedMessages.append(updatedMessage)
+            
+            Task { @MainActor in
+                self.enforceDetectionLimits()
+            }
+            
             if !updatedMessage.idType.contains("CAA") {
                 self.sendNotification(for: updatedMessage)
             }
@@ -2746,8 +2880,8 @@ extension CoTViewModel.CoTMessage {
         message.lastUpdated = aircraft.lastSeen
         
         // Set emergency status if applicable
-        if aircraft.isEmergency {
-            message.op_status = "Emergency: \(aircraft.emergency ?? "Unknown")"
+        if aircraft.isEmergency, let emergencyType = aircraft.emergency {
+            message.op_status = "Emergency: \(emergencyType)"
         }
         
         return message
@@ -2981,6 +3115,27 @@ extension CoTViewModel {
         }
     }
     
+    /// Publish system status to TAK server (matches Python DragonSync behavior)
+    func publishSystemStatusToTAK() {
+        Task { @MainActor in
+            guard Settings.shared.takEnabled, let takClient = self.takClient else { return }
+            guard let latestStatus = statusViewModel.statusMessages.last else { return }
+            
+            // Check rate limit
+            guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
+                return
+            }
+            
+            do {
+                let cotXML = latestStatus.toCoTXML()
+                try await takClient.send(cotXML)
+                print("Published system status to TAK")
+            } catch {
+                print("TAK system status publish failed: \(error)")
+            }
+        }
+    }
+    
     /// Publish system status to MQTT (call periodically)
     func publishSystemStatusToMQTT() {
         Task { @MainActor in
@@ -3001,6 +3156,15 @@ extension CoTViewModel {
     private func createMQTTSystemMessage(dronesTracked: Int) -> MQTTSystemMessage {
         // Get latest status message if available
         guard let latestStatus = statusViewModel.statusMessages.last else {
+            // Generate kit serial identifier (fallback case)
+            let kitSerial: String?
+            if let uuid = UIDevice.current.identifierForVendor?.uuidString {
+                let shortId = String(uuid.prefix(8))
+                kitSerial = "wardragon-\(shortId)"
+            } else {
+                kitSerial = nil
+            }
+            
             // Return minimal message if no status available
             return MQTTSystemMessage(
                 timestamp: ISO8601DateFormatter().string(from: Date()),
@@ -3011,8 +3175,32 @@ extension CoTViewModel {
                 zynqTemp: nil,
                 gpsFix: nil,
                 dronesTracked: dronesTracked,
-                uptime: formatUptime()
+                uptime: formatUptime(),
+                timeSource: "unknown",
+                gpsdTimeUtc: nil,
+                kitSerial: kitSerial
             )
+        }
+        
+        // Determine GPS status (matching Python dragonsync.py behavior)
+        let hasGPSFix = latestStatus.gpsData.latitude != 0 && latestStatus.gpsData.longitude != 0
+        let timeSource: String
+        if hasGPSFix {
+            timeSource = "gps" // iOS uses CoreLocation, similar to gpsd
+        } else {
+            timeSource = "static" // Using fallback/manual coordinates
+        }
+        
+        // Format GPS time if available (ISO8601)
+        let gpsdTimeUtc: String? = hasGPSFix ? ISO8601DateFormatter().string(from: Date()) : nil
+        
+        // Generate kit serial identifier
+        let kitSerial: String?
+        if let uuid = UIDevice.current.identifierForVendor?.uuidString {
+            let shortId = String(uuid.prefix(8))
+            kitSerial = "wardragon-\(shortId)"
+        } else {
+            kitSerial = nil
         }
         
         return MQTTSystemMessage(
@@ -3022,9 +3210,12 @@ extension CoTViewModel {
             temperature: latestStatus.systemStats.temperature,
             plutoTemp: latestStatus.antStats.plutoTemp,
             zynqTemp: latestStatus.antStats.zynqTemp,
-            gpsFix: latestStatus.gpsData.latitude != 0 && latestStatus.gpsData.longitude != 0,
+            gpsFix: hasGPSFix,
             dronesTracked: dronesTracked,
-            uptime: formatUptime()
+            uptime: formatUptime(),
+            timeSource: timeSource,
+            gpsdTimeUtc: gpsdTimeUtc,
+            kitSerial: kitSerial
         )
     }
     
