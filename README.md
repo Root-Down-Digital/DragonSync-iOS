@@ -299,7 +299,8 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 **Ingestion**: ZMQ JSON (4224, 4225), Multicast CoT (239.2.3.1:6969), ADS-B HTTP  
 **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting  
 **Output**: REST (8088), MQTT, TAK, webhooks, Kismet, Lattice
----
+
+
 
 ## Connection Choices
 
