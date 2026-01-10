@@ -884,24 +884,32 @@ class DataMigrationManager {
     func deleteAllSwiftData(modelContext: ModelContext) throws {
         logger.warning("Deleting all SwiftData...")
         
-        // Delete all drone encounters (cascade will handle relationships)
+        // Fetch all drone encounters fresh from context to ensure valid references
         let droneDescriptor = FetchDescriptor<StoredDroneEncounter>()
-        let encounters = try modelContext.fetch(droneDescriptor)
+        let droneEncounters = try modelContext.fetch(droneDescriptor)
         
-        for encounter in encounters {
+        logger.info("🗑️ Deleting \(droneEncounters.count) drone encounters...")
+        
+        // Delete all drone encounters (cascade will handle relationships)
+        for encounter in droneEncounters {
             modelContext.delete(encounter)
         }
         
-        // Delete all aircraft encounters
+        // Fetch all aircraft encounters fresh from context
         let aircraftDescriptor = FetchDescriptor<StoredADSBEncounter>()
-        let aircraft = try modelContext.fetch(aircraftDescriptor)
+        let aircraftEncounters = try modelContext.fetch(aircraftDescriptor)
         
-        for aircraftEncounter in aircraft {
-            modelContext.delete(aircraftEncounter)
+        logger.info("🗑️ Deleting \(aircraftEncounters.count) aircraft encounters...")
+        
+        // Delete all aircraft encounters
+        for aircraft in aircraftEncounters {
+            modelContext.delete(aircraft)
         }
         
+        // Save all deletions
         try modelContext.save()
-        logger.info("✅ Deleted \(encounters.count) drone encounters and \(aircraft.count) aircraft from SwiftData")
+        
+        logger.info("✅ Successfully deleted \(droneEncounters.count) drone encounters and \(aircraftEncounters.count) aircraft from SwiftData")
     }
 }
 

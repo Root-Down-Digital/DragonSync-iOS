@@ -21,7 +21,12 @@ struct ADSBHistoryChartView: View {
     }
     
     var sortedEncounters: [StoredADSBEncounter] {
-        let filtered = adsbEncounters.filter { encounter in
+        // Filter out any deleted objects that might still be in the array
+        let validEncounters = adsbEncounters.filter { encounter in
+            !encounter.isDeleted
+        }
+        
+        let filtered = validEncounters.filter { encounter in
             searchText.isEmpty ||
             encounter.id.localizedCaseInsensitiveContains(searchText) ||
             encounter.callsign.localizedCaseInsensitiveContains(searchText)
@@ -56,7 +61,7 @@ struct ADSBHistoryChartView: View {
         .searchable(text: $searchText, prompt: "Search by ICAO or Callsign")
         .navigationTitle("Aircraft History")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
+        .toolbar(content: {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Picker("Sort By", selection: $sortOrder) {
@@ -75,7 +80,7 @@ struct ADSBHistoryChartView: View {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
             }
-        }
+        })
         .alert("Delete All Aircraft History", isPresented: $showingDeleteConfirmation) {
             Button("Delete", role: .destructive) {
                 deleteAllAircraft()
@@ -84,6 +89,10 @@ struct ADSBHistoryChartView: View {
         }
         .onAppear {
             loadAircraftData()
+        }
+        .onDisappear {
+            // Clean up any deleted objects from local array
+            adsbEncounters.removeAll { $0.isDeleted }
         }
         .onChange(of: sortOrder) {
             // Refresh when sort order changes
@@ -121,11 +130,11 @@ struct ADSBHistoryChartView: View {
     }
     
     private var totalSightings: Int {
-        adsbEncounters.reduce(0) { $0 + $1.totalSightings }
+        adsbEncounters.filter { !$0.isDeleted }.reduce(0) { $0 + $1.totalSightings }
     }
     
     private var highestAltitude: Double {
-        adsbEncounters.map { $0.maxAltitude }.max() ?? 0
+        adsbEncounters.filter { !$0.isDeleted }.map { $0.maxAltitude }.max() ?? 0
     }
     
     // MARK: - Chart Section
@@ -218,27 +227,47 @@ struct ADSBHistoryChartView: View {
     // MARK: - Data Management
     
     private func loadAircraftData() {
+        // Clear the existing array first to avoid stale references
+        adsbEncounters.removeAll()
+        
         let descriptor = FetchDescriptor<StoredADSBEncounter>(
             sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
         )
         
         do {
             adsbEncounters = try modelContext.fetch(descriptor)
+            print("✅ Loaded \(adsbEncounters.count) aircraft from SwiftData")
         } catch {
-            print("Failed to fetch ADSB encounters: \(error)")
+            print("❌ Failed to fetch ADSB encounters: \(error)")
+            adsbEncounters = []
         }
     }
     
     private func deleteAllAircraft() {
         do {
+            // Fetch all encounters fresh from context to ensure we have valid references
+            let descriptor = FetchDescriptor<StoredADSBEncounter>()
+            let allEncounters = try modelContext.fetch(descriptor)
+            
+            print("🗑️ Deleting \(allEncounters.count) aircraft encounters...")
+            
             // Delete all ADSB encounters
-            for encounter in adsbEncounters {
+            for encounter in allEncounters {
                 modelContext.delete(encounter)
             }
+            
+            // Save the deletions
             try modelContext.save()
+            
+            // Clear local array after successful save
             adsbEncounters.removeAll()
+            
+            print("✅ Successfully deleted all aircraft")
         } catch {
-            print("Failed to delete all aircraft: \(error)")
+            print("❌ Failed to delete all aircraft: \(error)")
+            
+            // Even if save failed, try to reload to get fresh state
+            loadAircraftData()
         }
     }
 }

@@ -128,10 +128,24 @@ class StatusViewModel: ObservableObject {
         
         // Clear from SwiftData too
         if let context = modelContext {
-            let descriptor = FetchDescriptor<StoredADSBEncounter>()
-            if let all = try? context.fetch(descriptor) {
-                all.forEach { context.delete($0) }
-                try? context.save()
+            do {
+                // Fetch all encounters fresh from context
+                let descriptor = FetchDescriptor<StoredADSBEncounter>()
+                let allEncounters = try context.fetch(descriptor)
+                
+                print("🗑️ Clearing \(allEncounters.count) ADSB encounters from SwiftData...")
+                
+                // Delete all
+                for encounter in allEncounters {
+                    context.delete(encounter)
+                }
+                
+                // Save the deletions
+                try context.save()
+                
+                print("✅ Successfully cleared ADSB history")
+            } catch {
+                print("❌ Failed to clear ADSB history: \(error)")
             }
         }
     }

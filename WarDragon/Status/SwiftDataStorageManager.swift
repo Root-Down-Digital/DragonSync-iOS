@@ -222,15 +222,30 @@ class SwiftDataStorageManager: ObservableObject {
     func deleteAllEncounters() {
         guard let context = modelContext else { return }
         
-        let encounters = fetchAllEncounters()
-        encounters.forEach { context.delete($0) }
-        
         do {
+            // Fetch all encounters fresh from context to ensure we have valid references
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            let encounters = try context.fetch(descriptor)
+            
+            logger.info("🗑️ Deleting \(encounters.count) drone encounters...")
+            
+            // Delete all encounters
+            for encounter in encounters {
+                context.delete(encounter)
+            }
+            
+            // Save the deletions
             try context.save()
+            
+            // Update in-memory cache after successful save
             updateInMemoryCache()
-            logger.info("Deleted all encounters")
+            
+            logger.info("✅ Successfully deleted all encounters")
         } catch {
-            logger.error("Failed to delete all encounters: \(error.localizedDescription)")
+            logger.error("❌ Failed to delete all encounters: \(error.localizedDescription)")
+            
+            // Even if deletion failed, try to sync in-memory cache with actual state
+            updateInMemoryCache()
         }
     }
     
