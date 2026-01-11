@@ -12,7 +12,7 @@
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
-**Professional drone and aircraft detection for iOS/macOS**
+**Professional drone and aircraft detection for iOS/macOS** Built for WarDragon Pro. 
 
 Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone monitoring • Advanced spoof detection
 
@@ -32,21 +32,17 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - Bluetooth Low Energy advertisements
 - SDR-based RF decoding (ANTSDR)
 - Live position, altitude, speed, heading
-- Pilot and home point locations
-- Operator information and serial numbers
+- Pilot and home point locations, FAA lookup
 
 **ADS-B Aircraft**
 - 1090MHz Mode S transponders
 - Real-time aircraft tracking
 - Flight number, altitude, speed
-- Position history and flight paths
-- Commercial and general aviation
 
 **Encrypted Drones (DJI Ocusync)**
 - RSSI-based distance estimation
 - MAC address tracking
 - Signal strength analysis
-- No position data (encrypted protocol)
 
 **FPV Video Transmitters**
 - 5.8GHz analog video detection
@@ -59,7 +55,6 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - Position consistency validation
 - Flight physics anomaly detection
 - MAC randomization attack detection
-- Transmission pattern recognition
 
 </td>
 <td width="40%" valign="top">
@@ -80,9 +75,9 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - **Live Map View** - All detections on unified map with color-coded markers
 - **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer
 - **FAA Registry Lookup** - Real-time drone registration data with operator info
-- **History & Analysis** - Search, filter, export encounters (KML, CSV)
+- **History & Analysis** - Search, filter, export encounters (KML, CSV). Data is stored securely in iOS Keychain (TAK) and the app uses SwiftData. 
 - **System Monitoring** - CPU, memory, temperature, GPS, ANTSDR sensors
-- **Proximity Alerts** - Configurable distance thresholds with notifications
+- **Proximity & System Alerts** - Configurable distance thresholds with notifications. Memory and temperature alert triggers. 
 
 <table>
 <tr>
