@@ -136,7 +136,7 @@ struct Aircraft: Identifiable, Codable, Equatable {
     
     enum CodingKeys: String, CodingKey {
         case hex, lat, lon
-        case altitude = "alt_baro"
+        case altitude = "alt_baro"  // readsb format
         case altitudeGeom = "alt_geom"
         case track
         case groundSpeed = "gs"
@@ -156,6 +156,18 @@ struct Aircraft: Identifiable, Codable, Equatable {
         case tisb
     }
     
+    // Support for dump1090 original format (uses "altitude" instead of "alt_baro")
+    enum Dump1090CodingKeys: String, CodingKey {
+        case hex, lat, lon
+        case altitude  // dump1090 format - simple "altitude" key
+        case track
+        case speed  // dump1090 uses "speed" instead of "gs"
+        case vert_rate  // dump1090 uses "vert_rate" instead of "baro_rate"
+        case flight, squawk, category
+        case rssi, messages, seen
+        case seen_pos
+    }
+    
     // MARK: - Initialization
     
     init(from decoder: Decoder) throws {
@@ -164,11 +176,46 @@ struct Aircraft: Identifiable, Codable, Equatable {
         hex = try container.decode(String.self, forKey: .hex)
         lat = try container.decodeIfPresent(Double.self, forKey: .lat)
         lon = try container.decodeIfPresent(Double.self, forKey: .lon)
+        
+        // Try readsb format first (alt_baro)
         altitude = try container.decodeIfPresent(Double.self, forKey: .altitude)
+        
+        // If readsb format didn't work, try dump1090 format (altitude)
+        if altitude == nil {
+            let dump1090Container = try? decoder.container(keyedBy: Dump1090CodingKeys.self)
+            
+            // dump1090 can send "ground" as a string value for altitude
+            // Try to decode as Double first
+            if let altitudeValue = try dump1090Container?.decodeIfPresent(Double.self, forKey: .altitude) {
+                altitude = altitudeValue
+            } else if let altitudeString = try dump1090Container?.decodeIfPresent(String.self, forKey: .altitude),
+                      altitudeString == "ground" {
+                // If it's the string "ground", set altitude to 0
+                altitude = 0.0
+            }
+        }
+        
         altitudeGeom = try container.decodeIfPresent(Double.self, forKey: .altitudeGeom)
         track = try container.decodeIfPresent(Double.self, forKey: .track)
+        
+        // Try readsb format first (gs)
         groundSpeed = try container.decodeIfPresent(Double.self, forKey: .groundSpeed)
+        
+        // If readsb format didn't work, try dump1090 format (speed)
+        if groundSpeed == nil {
+            let dump1090Container = try? decoder.container(keyedBy: Dump1090CodingKeys.self)
+            groundSpeed = try dump1090Container?.decodeIfPresent(Double.self, forKey: .speed)
+        }
+        
+        // Try readsb format first (baro_rate)
         verticalRate = try container.decodeIfPresent(Int.self, forKey: .verticalRate)
+        
+        // If readsb format didn't work, try dump1090 format (vert_rate)
+        if verticalRate == nil {
+            let dump1090Container = try? decoder.container(keyedBy: Dump1090CodingKeys.self)
+            verticalRate = try dump1090Container?.decodeIfPresent(Int.self, forKey: .vert_rate)
+        }
+        
         ias = try container.decodeIfPresent(Int.self, forKey: .ias)
         tas = try container.decodeIfPresent(Int.self, forKey: .tas)
         flight = try container.decodeIfPresent(String.self, forKey: .flight)
@@ -177,7 +224,16 @@ struct Aircraft: Identifiable, Codable, Equatable {
         rssi = try container.decodeIfPresent(Double.self, forKey: .rssi)
         messages = try container.decodeIfPresent(Int.self, forKey: .messages)
         seen = try container.decodeIfPresent(Double.self, forKey: .seen)
+        
+        // Try readsb format first (seen_pos)
         seenPos = try container.decodeIfPresent(Double.self, forKey: .seenPos)
+        
+        // If readsb format didn't work, try dump1090 format (seen_pos with underscore)
+        if seenPos == nil {
+            let dump1090Container = try? decoder.container(keyedBy: Dump1090CodingKeys.self)
+            seenPos = try dump1090Container?.decodeIfPresent(Double.self, forKey: .seen_pos)
+        }
+        
         navQnh = try container.decodeIfPresent(Double.self, forKey: .navQnh)
         navAltitudeMcp = try container.decodeIfPresent(Int.self, forKey: .navAltitudeMcp)
         navHeading = try container.decodeIfPresent(Double.self, forKey: .navHeading)

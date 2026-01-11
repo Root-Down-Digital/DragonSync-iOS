@@ -157,6 +157,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             trackAttributes = attributes
             track_course   = attributes["course"]
             track_speed    = attributes["speed"]
+            print("DEBUG XML Parser: Extracted track - course: \(String(describing: track_course)), speed: \(String(describing: track_speed))")
         }
         
     }
@@ -354,6 +355,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.runtime = droneData["runtime"] as? String ?? ""
             message.trackCourse  = track_course
             message.trackSpeed   = track_speed
+            print("DEBUG XML Parser: Assigned track to message - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
             message.originalRawString = originalRawString
             
             // Parse Auth Message fields
@@ -791,8 +793,20 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 message.classification = classification?.description
                 message.index = index
                 message.runtime = runtime ?? ""
-                message.trackCourse = trackCourse?.description
-                message.trackSpeed = trackSpeed?.description
+                // Only overwrite track data from remarks if it exists, otherwise preserve <track> element values
+                if let remarksCourse = trackCourse?.description {
+                    message.trackCourse = remarksCourse
+                } else {
+                    message.trackCourse = track_course  // Preserve value from <track> element
+                }
+                
+                if let remarksSpeed = trackSpeed?.description {
+                    message.trackSpeed = remarksSpeed
+                } else {
+                    message.trackSpeed = track_speed  // Preserve value from <track> element
+                }
+                
+                print("DEBUG XML Parser (remarks path): Track data - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
                 message.originalRawString = originalRawString
                 
                 cotMessage = message

@@ -932,13 +932,17 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         print("Settings: Toggle listening to true")
         
+        // Set reconnecting flag to prevent concurrent starts
+        isReconnecting = true
+        
         // Clean up any existing connections with proper delay
         if cotListener != nil || multicastConnection != nil || zmqHandler != nil {
             print("Cleaning up existing connections before restart...")
             stopListening()
             
             // Wait for cleanup to complete before starting new connections
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            // Increased delay to ensure socket unbinding
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.proceedWithStartListening()
             }
         } else {
@@ -972,6 +976,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             // Start background processing if enabled
             if self.cachedEnableBackgroundDetection {
                 self.backgroundManager.startBackgroundProcessing()
+            }
+            
+            // Clear reconnecting flag after a delay to ensure connection is established
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.isReconnecting = false
+                print("✅ Listening started successfully, cleared reconnecting flag")
             }
         }
     }
@@ -1009,16 +1019,25 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     print("Multicast listener failed: \(error)")
                     DispatchQueue.main.async {
                         self?.isListeningCot = false
-                        // Attempt recovery after a delay
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            Task { @MainActor [weak self] in
-                                guard let self = self else { return }
-                                self.updateCachedSettings()
-                                if self.cachedConnectionMode == .multicast &&
-                                   self.cachedIsListening {
-                                    print("Attempting to recover multicast connection...")
-                                    self.startMulticastListening()
-                                }
+                        // REMOVED automatic recovery to prevent reconnection loops
+                        // User can manually restart via UI
+                        print("⚠️ Multicast connection failed. Please stop and restart listening manually.")
+                        
+                        // Optional: Show notification to user
+                        let content = UNMutableNotificationContent()
+                        content.title = "Connection Error"
+                        content.body = "Multicast connection failed. Tap to reconnect."
+                        content.sound = .default
+                        
+                        let request = UNNotificationRequest(
+                            identifier: "multicast-error",
+                            content: content,
+                            trigger: nil
+                        )
+                        
+                        UNUserNotificationCenter.current().add(request) { error in
+                            if let error = error {
+                                print("Failed to show notification: \(error)")
                             }
                         }
                     }
@@ -2072,6 +2091,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
+    @MainActor
     private func updateMessage(_ message: CoTMessage) async {
         
         // Uncomment this to disallow zero-coordinate entries
@@ -2159,6 +2179,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let trackSpeed = message.trackSpeed ?? "0.0"
         let trackCourse = message.trackCourse ?? "0.0"
         
+        print("DEBUG: Track data from message - Speed: \(String(describing: message.trackSpeed)), Course: \(String(describing: message.trackCourse))")
+        print("DEBUG: Track data after defaults - Speed: \(trackSpeed), Course: \(trackCourse)")
+        
         // Prepare updated message
         var updatedMessage = message
         updatedMessage.uid = droneId
@@ -2166,6 +2189,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // CoT XML Track data
         updatedMessage.trackSpeed = trackSpeed
         updatedMessage.trackCourse = trackCourse
+        
+        // If track course is 0.0 or missing, try to calculate from flight path
+        if trackCourse == "0.0" || trackCourse.isEmpty {
+            if let calculatedBearing = await calculateBearingFromFlightPath(droneId: droneId, currentLat: message.lat, currentLon: message.lon) {
+                updatedMessage.trackCourse = String(calculatedBearing)
+                print("DEBUG: Calculated bearing from flight path: \(calculatedBearing)°")
+            }
+        }
         
         // Update alert ring if zero coordinate drone
         self.updateAlertRing(for: updatedMessage)
@@ -2286,6 +2317,50 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     // MARK: - Helper Methods
+    
+    /// Calculate bearing from the last two coordinates in the flight path
+    @MainActor
+    private func calculateBearingFromFlightPath(droneId: String, currentLat: String, currentLon: String) async -> Double? {
+        guard let currentLatDouble = Double(currentLat),
+              let currentLonDouble = Double(currentLon),
+              currentLatDouble != 0.0 && currentLonDouble != 0.0 else {
+            return nil
+        }
+        
+        // Get the encounter from storage
+        let encounters = DroneStorageManager.shared.encounters
+        guard let encounter = encounters[droneId],
+              encounter.flightPath.count > 0 else {
+            return nil
+        }
+        
+        // Get the last coordinate from flight path
+        let lastPoint = encounter.flightPath.last!
+        let lastLat = lastPoint.latitude
+        let lastLon = lastPoint.longitude
+        
+        // Don't calculate if we're at the same position
+        guard lastLat != currentLatDouble || lastLon != currentLonDouble else {
+            return nil
+        }
+        
+        // Calculate bearing using spherical law of cosines
+        let lat1 = lastLat * .pi / 180
+        let lon1 = lastLon * .pi / 180
+        let lat2 = currentLatDouble * .pi / 180
+        let lon2 = currentLonDouble * .pi / 180
+        
+        let dLon = lon2 - lon1
+        
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let bearing = atan2(y, x) * 180 / .pi
+        
+        // Normalize to 0-360
+        return (bearing + 360).truncatingRemainder(dividingBy: 360)
+    }
+    
+    // MARK: - Helper Methods (continued)
     
     
     private func extractMAC(from message: CoTMessage) -> String? {
@@ -2795,9 +2870,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     func stopListening() {
-        guard isListeningCot else { return }
+        guard isListeningCot else { 
+            print("Already stopped, skipping stopListening()")
+            return 
+        }
         
         isListeningCot = false
+        isReconnecting = false // Reset reconnecting flag
         
         print("Stopping all listeners...")
         
@@ -2808,7 +2887,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             object: nil
         )
         
-        // Cancel multicast connection first
+        // Cancel multicast connection first with forced cleanup
         if let connection = multicastConnection {
             connection.stateUpdateHandler = nil
             connection.cancel()
@@ -2816,7 +2895,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             print("Multicast connection cancelled")
         }
         
-        // Cancel listeners with force close
+        // Cancel listeners with force close and nil out handlers
         if let listener = cotListener {
             listener.stateUpdateHandler = nil
             listener.newConnectionHandler = nil
@@ -2840,13 +2919,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             print("ZMQ: Disconnected")
         }
         
-        // Stop background processing
+        // Stop background processing and invalidate timers
         backgroundManager.stopBackgroundProcessing()
+        backgroundMaintenanceTimer?.invalidate()
+        backgroundMaintenanceTimer = nil
         
-        // Give the system a moment to fully release resources
-        // This is critical to prevent "Address already in use" errors
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            print("All listeners stopped and connections cleaned up.")
+        // Give the system MORE time to fully release network resources
+        // Critical: UDP multicast sockets need time to unbind from port
+        // Increased from 0.5s to 1.0s for more reliable cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            print("✅ All listeners stopped and connections cleaned up.")
         }
     }
     
