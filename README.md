@@ -1,6 +1,7 @@
 > [!IMPORTANT]
 > **TestFlight beta has expired**. With rapid DragonSync/DroneID development by @alphafox02, I lack resources to continue this project. Open an issue if you'd like to see development resume.
 
+
 <div align="center">
   
   # DragonSync iOS
@@ -10,210 +11,206 @@
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
-<br>
-<br>
 
-**Real-time drone, aircraft & FPV detection and monitoring for iOS/macOS. Professional-grade detection with advanced signal analysis and intelligence.** 
+**Professional drone and aircraft detection for iOS/macOS**
+
+Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone monitoring • Advanced spoof detection
+
+[Get Started](#installation) • [What It Detects](#what-it-detects) • [Screenshots](#in-action) • [Integrations](#integrations)
 
 </div>
-<br>
-
-### What is it?
-- DragonSync is a user friendly iOS/macOS **alternative/companion app to the Python backend [utility](https://github.com/lukeswitz/DragonSync)**
-- **Relies on ZMQ data** from [DroneID](https://github.com/lukeswitz/DroneID), and can be used with or without additional wrapper scripts
-- **Standalone** WiFi RID [ESP32 firmware](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util) is also an option. Learn more in [installation](#installation) options
-
-### App
-- [Features](#features)
-- [Detection & Tracking](#detection--tracking)
-- [History & Analysis](#history--analysis)
-- [Integrations](#integrations)
-- [Build Instructions](#build-instructions)
-
-### Backend
-- [Installation](#installation)
-- [Connection Choices](#connection-choices)
-- [Command Reference](#command-reference)
-
-### Legal
-- [Credits, Disclaimer & License](#credits-disclaimer--license)
 
 ---
 
-## Features
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="50%" />
-</div>
+## What It Detects
 
-### ADS-B Aircraft Tracking
-- 1090MHz Mode S/ADS-B reception
+<table>
+<tr>
+<td width="50%" valign="top">
 
-### TAK/ATAK, Kismet and Lattice Integrations
-- Multicast forwarding of ZMQ to CoT
-- Output to Kismet, Lattice and API endpoints
-- iOS Keychain support for TAK TLS
+**Remote ID Broadcasts**
+- WiFi 2.4GHz and 5GHz transmissions
+- Bluetooth Low Energy advertisements
+- SDR-based RF decoding (ANTSDR)
+- Live position, altitude, speed, heading
+- Pilot and home point locations
+- Operator information and serial numbers
 
-### Onboard DB Manager
-- Migrage from v1, export and restore backups
-- Uses SwiftData for speed and secure storage
+**ADS-B Aircraft**
+- 1090MHz Mode S transponders
+- Real-time aircraft tracking
+- Flight number, altitude, speed
+- Position history and flight paths
+- Commercial and general aviation
 
-### Real-Time Monitoring
-- Remote/Drone ID tracking (WiFi, Bluetooth, SDR)
-- Ocusync decoding
-- Flight path visualization
-- Multi-protocol support (ZMQ, multicast CoT)
+**Encrypted Drones (DJI Ocusync)**
+- RSSI-based distance estimation
+- MAC address tracking
+- Signal strength analysis
+- No position data (encrypted protocol)
 
-### Detection Capabilities
-- **Spoof Detection**: Signal strength, position consistency, transmission patterns, flight physics analysis
-- **Encrypted Drones**: RSSI-based distance estimation
-- **FPV Cameras**: RX5808 + [FPVWD](https://github.com/alphafox02/FPV_WD/blob/main/fpv_mdn_receiver.py) detection
-- **MAC Randomization Sniffer**: Real-time alerts with origin tracking
-- **ADS-B**: Uses any feed with valid data (readsb,dump1090,tar1090,etc.)
+**FPV Video Transmitters**
+- 5.8GHz analog video detection
+- RX5808 receiver integration
+- Channel and frequency identification
+- Signal strength monitoring
 
-### System Monitoring
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="50%" />
-</div>
+**Threats and Anomalies**
+- Spoof detection via signal analysis
+- Position consistency validation
+- Flight physics anomaly detection
+- MAC randomization attack detection
+- Transmission pattern recognition
 
-- CPU, memory, temperature, GPS status
-- ANTSDR Pluto & Zynq temperatures
-- Configurable health & range alerts
+</td>
+<td width="50%" valign="top">
 
+![3DAE54D1-BD51-40C1-9009-0564F5A41E23_1_201_a](https://github.com/user-attachments/assets/edfbb366-2140-4e1e-88ba-6fe79ee51d40)
 
-
-## Detection & Tracking
-
-<div align="center">
-<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="25%" alt="FAA Lookup"> 
-  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="25%" alt="Encounter History"> <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="25%" />
-</div>
-
-<div align="center">
-  
-</div>
-
-- Swipe-to-delete & untrack
-- Aliases and trust labels
-- Live map view shows unified detections by type
-- Dashboard with signal counts, health, proximity alerts
-
-## History & Analysis
+<img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="100%" />
 
 
+<img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="100%" />
 
-### Detailed History & Mapping
-- Aircraft and drones are stored for analysis
-- FAA RID lookup provides up-to-date drone data
-- Displays operator, takeoff and drone locations
-- Search, sort, review, export (KML, CSV)
+</td>
+</tr>
+</table>
 
+---
+
+## In Action
+
+**Features**
+- **Live Map View** - All detections on unified map with color-coded markers
+- **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer
+- **FAA Registry Lookup** - Real-time drone registration data with operator info
+- **History & Analysis** - Search, filter, export encounters (KML, CSV)
+- **System Monitoring** - CPU, memory, temperature, GPS, ANTSDR sensors
+- **Proximity Alerts** - Configurable distance thresholds with notifications
+
+<table>
+<tr>
+<td width="50%">
+<img src="https://github.com/user-attachments/assets/b702c9d5-a034-4cbb-86a4-2c76c4b641b4" width="100%">
+</td>
+<td width="50%">
+  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="40%">
+<img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="100%">
+</td>
+<td width="50%">
+<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="100%">
+</td>
+</table>
+
+---
 
 ## Integrations
 
-### Data Output
-- **REST API** (port 8088): 7 JSON endpoints (`/drones`, `/aircraft`, `/status`, `/signals`, `/config`, `/health`, `/update/check`)
-- **MQTT**: Home Assistant auto-discovery, TLS, QoS 0-2, configurable topics
-- **TAK/ATAK**: CoT XML over multicast/TCP/TLS with iOS Keychain .p12 support
-- **Webhooks**: Discord, Slack, custom HTTP POST with event filtering
-- **Kismet**: Device tagging via REST API
-- **Lattice DAS**: Structured detection reports
+**Push Detection Data To:**
+- **REST API** - 7 JSON endpoints on port 8088 (`/drones` `/aircraft` `/status` `/signals` `/config` `/health` `/update/check`)
+- **MQTT** - Home Assistant auto-discovery, TLS support, QoS 0-2
+- **TAK/ATAK** - CoT XML via multicast/TCP/TLS with iOS Keychain .p12
+- **Kismet** - Automatic device tagging via REST API
+- **Lattice DAS** - Structured detection reports to Lattice platform
+- **Webhooks** - Discord, Slack, custom HTTP POST with event filtering
 
-### Data Ingestion
-- **ZMQ**: Direct JSON from `zmq_decoder.py` (ports 4224/4225)
-- **Multicast CoT**: Receive from `DragonSync.py` (239.2.3.1:6969)
-- **ADS-B**: HTTP polling from readsb/tar1090/dump1090 endpoints
-- **Background**: Continuous monitoring with local notifications
+**Receive Data From:**
+- **ZMQ** - Ports 4224 (detections) and 4225 (system status) from DroneID backend
+- **Multicast CoT** - 239.2.3.1:6969 from DragonSync.py wrapper
+- **ADS-B HTTP** - readsb, tar1090, dump1090 JSON feeds
+- **Background Mode** - Continuous monitoring with local notifications
 
 ---
 
 # Installation
 
-## Choose Your Setup
+## Hardware Options
 
-| Feature | WarDragon Pro | Drag0net Scanner | Custom Build |
-|---------|---------------|------------------|--------------|
-| **Best For** | Immediate deployment | Portable WiFi RID detection | Full feature set |
-| **Setup Time** | ~5 min | ~15 min | 30-60 min |
-| **WiFi RID (2.4GHz)** | ✓ | ✓ | ✓ |
-| **WiFi RID (5GHz)** | ✓ | ✗ | ✓ (dual-band adapter) |
-| **Bluetooth RID** | ✓ | ✗ | ✓ (Sniffle hardware) |
-| **SDR Decoding** | ✓ (ANTSDR E200) | ✗ | ✓ (ANTSDR E200) |
-| **FPV Detection** | ✓ (RX5808) | ✗ | ✓ (RX5808) |
-| **GPS** | External USB | iOS device | External USB |
-| **System Monitoring** | ✓ | ✗ | ✓ |
-| **TAK Integration** | ✓ | ✗ | ✓ |
-| **Requires Computer** | No | No | Yes |
+| Setup | Time | WiFi RID | BT RID | SDR | FPV | Best For |
+|-------|------|----------|--------|-----|-----|----------|
+| **WarDragon Pro** | 5 min | ✓ | ✓ | ✓ | ✓ | Full-spectrum deployment |
+| **Drag0net ESP32** | 15 min | ✓ 2.4GHz | ✗ | ✗ | ✗ | Portable WiFi RID only |
+| **Custom Build** | 60 min | ✓ | ✓ | ✓ | ✓ | DIY / maximum control |
 
 ---
 
-## Option 1: WarDragon Pro
+## Option 1: WarDragon Pro (Turnkey)
 
-Pre-configured turnkey solution.
+Pre-configured system with ANTSDR E200, RX5808, GPS hardware.
 
+**Quick Start:**
 1. Power on device
 2. Connect iOS device to same network
-3. App → Settings → Enable ZMQ → Enter IP
+3. App → Settings → ZMQ → Enter WarDragon IP
 4. Start monitoring
 
 **Troubleshooting:**
-- System status requires GPS (use `--static_gps` flag or wait for lock)
-- Connection issues? Mod Config: `/home/dragon/WarDragon/DragonSync/config.ini`
-  - `zmq_host = 0.0.0.0` (if localhost fails)
-  - `tak_multicast_addr = 224.0.0.1` (for some networks)
-- No SDR Temps in status: Use the DJI FW on ANTSDR, UHD will not work with this
+```bash
+# Config file: /home/dragon/WarDragon/DragonSync/config.ini
+zmq_host = 0.0.0.0                 # Use if localhost fails
+tak_multicast_addr = 224.0.0.1     # Alternative multicast address
+```
+- System status requires GPS lock (use `--static_gps` flag or wait for fix)
+- SDR temps require DJI firmware on ANTSDR (UHD firmware won't report temps)
+
 ---
 
-## Option 2: Drag0net Scanner (ESP32)
+## Option 2: Drag0net ESP32 (Portable)
 
-Portable WiFi RID without a computer.
+Flash ESP32-C3/S3 or LilyGO T-Dongle for standalone WiFi RID detection.
 
-**Hardware:** ESP32-C3/S3 XIAO or LilyGO T-Dongle
-
-**Flash (Linux/macOS):**
+**Automated Flash:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh && \
-[[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f268d6f6b00400c8ce8d4491da08b94b7844b7aa0414e0dbdd92982a1ed024d6 ]] && \
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh
 chmod +x setup.sh && ./setup.sh
+# Select option 4 (ESP32-C3) or 5 (ESP32-S3)
 ```
-Select option 4 or 5.
 
-**Manual:** [Download firmware](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util)
+**Connect to Device:**
+- SSID: `Dr4g0net`
+- Password: `wardragon1234`
+- IP Address: `192.168.4.1`
+- App Settings → ZMQ IP: `192.168.4.1`
+- Web UI: Navigate to `192.168.4.1` in browser
+
+**Manual Flash:** [Download firmware](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util)
 ```bash
 esptool.py --chip auto --port /dev/YOUR_PORT --baud 115200 \
   --before default_reset --after hard_reset write_flash -z \
   --flash_mode dio --flash_freq 80m --flash_size detect \
-  0x10000 firmwareFile.bin
+  0x10000 firmware.bin
 ```
-
-**Connect:**
-- SSID: `Dr4g0net` | Password: `wardragon1234` | IP: `192.168.4.1`
-- App: Settings → ZMQ IP: `192.168.4.1`
-- Web: `192.168.4.1` in browser
 
 ---
 
-## Option 3: Custom Build
+## Option 3: Custom Build (Full Features)
 
-Full feature set.
+Complete detection stack with all protocols.
 
-**Hardware:**
-- Dual-band WiFi adapter
-- [Sniffle](https://github.com/nccgroup/Sniffle) BT dongle
-- Optional: ANTSDR E200, GPS, RX5808
+**Hardware Requirements:**
+- Dual-band WiFi adapter (2.4/5GHz)
+- Sniffle Bluetooth sniffer dongle
+- Optional: ANTSDR E200 (SDR), GPS module, RX5808 (FPV)
 
-**Install:**
+**Automated Install:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh && \
-[[ $(shasum -a 256 setup.sh 2>/dev/null || sha256sum setup.sh) =~ ^f268d6f6b00400c8ce8d4491da08b94b7844b7aa0414e0dbdd92982a1ed024d6 ]] && \
+curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh
 chmod +x setup.sh && ./setup.sh
+# Follow prompts for your platform
 ```
 
 <details>
-<summary>Manual Install</summary>
+<summary>Manual Installation Steps</summary>
 
 **Linux:**
 ```bash
-sudo apt update && sudo apt install -y python3 python3-pip git gpsd gpsd-clients lm-sensors
+sudo apt update
+sudo apt install -y python3 python3-pip git gpsd gpsd-clients lm-sensors
 git clone https://github.com/alphafox02/DroneID.git
 git clone https://github.com/alphafox02/DragonSync.git
 cd DroneID && git submodule update --init && ./setup.sh
@@ -227,94 +224,84 @@ git clone https://github.com/alphafox02/DragonSync.git
 cd DroneID && git submodule update --init && ./setup.sh
 ```
 
-**Windows:** Use WSL or install Python/Git manually.
+**Windows:** Use WSL2 or manually install Python 3.9+ and Git
 </details>
 
-**Run:**
+**Run Detection Stack:**
 ```bash
-# Terminal 1 - WiFi
+# Terminal 1 - WiFi RID Receiver
 cd DroneID
 python3 wifi_receiver.py --interface wlan0 -z --zmqsetting 127.0.0.1:4223
 
-# Terminal 2 - Bluetooth
+# Terminal 2 - Bluetooth RID Receiver
 cd DroneID/Sniffle
 python3 python_cli/sniff_receiver.py -l -e -a -z -b 2000000
 
-# Terminal 3 - Decoder
+# Terminal 3 - Decoder (aggregates all sources)
 cd DroneID
 python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v
 
-# Terminal 4 - System Monitor
+# Terminal 4 - System Health Monitor
 cd DragonSync
 python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 ```
 
-**App Config:**
-- Settings → ZMQ → Host IP → Port 4224
-- Advanced → Port 4225 for system health
-- Enable ADS-B, MQTT, webhooks as needed
+**iOS App Configuration:**
+- Settings → ZMQ → Host IP address, Port 4224
+- Advanced → Status Port 4225
+- Enable ADS-B, MQTT, TAK, webhooks as needed
 
-**Persist:** Use [service files](https://github.com/alphafox02/DragonSync/tree/main/services)
+**Persistence:** Use [systemd service files](https://github.com/alphafox02/DragonSync/tree/main/services) for auto-start
 
+---
 
-## Architecture
+## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Detection Sources                                  │
-│  • WiFi RID (2.4/5GHz) - wifi_receiver.py           │
-│  • Bluetooth RID - sniff_receiver.py (Sniffle)      │
-│  • SDR/FPV - ANTSDR/RX5808 via fpv_mdn_receiver.py  │
-│  • ESP32 Standalone - Drag0net (WiFi 2.4GHz)        │
+│               Detection Sources                     │
+│                                                     │
+│  WiFi RID (2.4/5GHz) ─── wifi_receiver.py          │
+│  Bluetooth RID ────────── sniff_receiver.py         │
+│  SDR Decode ──────────── ANTSDR E200               │
+│  FPV Video ───────────── RX5808 + fpv_mdn_receiver │
+│  ESP32 Standalone ────── Drag0net WiFi 2.4GHz      │
 └────────────────────┬────────────────────────────────┘
                      │
         ┌────────────┴────────────┐
         │                         │
  ┌──────▼────────┐       ┌────────▼────────┐
  │ zmq_decoder   │       │ DragonSync.py   │
- │ Port: 4224    │       │ Multicast CoT   │
- │ (JSON)        │       │ 239.2.3.1:6969  │
+ │ Port 4224     │       │ (wrapper)       │
+ │ (JSON)        │       │ Multicast CoT   │
  └──────┬────────┘       └────────┬────────┘
         │                         │
         └──────────┬──────────────┘
                    │
         ┌──────────▼──────────┐      ┌────────────────┐
-        │  DragonSync iOS     │◄─────┤ ADS-B (HTTP)   │
-        │  • ZMQ: 4224, 4225  │      │ readsb/tar1090 │
-        │  • Multicast: 6969  │      └────────────────┘
-        │  • API: 8088        │
+        │  DragonSync iOS     │◄─────┤ ADS-B Source   │
+        │                     │      │ HTTP JSON      │
+        │  ZMQ: 4224, 4225    │      │ readsb/tar1090 │
+        │  CoT: 239.2.3.1     │      └────────────────┘
+        │  API: 8088          │
         └──────────┬──────────┘
                    │
         ┌──────────▼──────────┐
         │   Output Channels   │
-        │  • REST API (JSON)  │
-        │  • MQTT             │
-        │  • TAK/ATAK (CoT)   │
-        │  • Webhooks         │
-        │  • Kismet           │
-        │  • Lattice DAS      │
+        │                     │
+        │  REST API (JSON)    │
+        │  MQTT               │
+        │  TAK/ATAK (CoT)     │
+        │  Webhooks           │
+        │  Kismet Tags        │
+        │  Lattice DAS        │
         └─────────────────────┘
 ```
 
-**Ingestion**: ZMQ JSON (4224, 4225), Multicast CoT (239.2.3.1:6969), ADS-B HTTP  
-**Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting  
-**Output**: REST (8088), MQTT, TAK, webhooks, Kismet, Lattice
-
-
-
-## Connection Choices
-
-**ZMQ (Recommended):** JSON-based, full data access
-- Port 4224: Drone detections
-- Port 4225: System health
-
-**Multicast CoT:** TAK/ATAK integration, less detailed
-
-**ADS-B:** Enable in Settings, ingest from a given endpoint
-
-**MQTT:** Home Assistant auto-discovery
-
-**REST API:** JSON endpoints for custom integrations
+**Data Flow:**
+- **Ingestion**: ZMQ JSON (4224 detections, 4225 status), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
+- **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting
+- **Output**: REST API (8088), MQTT, TAK/ATAK, webhooks, Kismet, Lattice
 
 ---
 
@@ -322,62 +309,95 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 
 | Task | Command |
 |------|---------|
-| System Monitor | `python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30` |
-| Static GPS | `python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --static_gps 37.7749,-122.4194,10` |
-| SDR Decode | `python3 zmq_decoder.py --dji -z --zmqsetting 0.0.0.0:4224` |
-| WiFi Sniffer | `python3 wifi_receiver.py --interface wlan0 -z --zmqsetting 127.0.0.1:4223` |
-| BT Sniffer | `python3 Sniffle/python_cli/sniff_receiver.py -l -e -a -z -b 2000000` |
-| Decoder | `python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v` |
-
+| **System Monitor** | `python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30` |
+| **Static GPS** | `python3 wardragon_monitor.py --static_gps 37.7749,-122.4194,10` |
+| **SDR Decode** | `python3 zmq_decoder.py --dji -z --zmqsetting 0.0.0.0:4224` |
+| **WiFi Sniffer** | `python3 wifi_receiver.py --interface wlan0 -z --zmqsetting 127.0.0.1:4223` |
+| **BT Sniffer** | `python3 Sniffle/python_cli/sniff_receiver.py -l -e -a -z -b 2000000` |
+| **Decoder** | `python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v` |
+| **FPV Detection** | `python3 fpv_mdn_receiver.py -z --zmqsetting 127.0.0.1:4222` |
 
 ---
 
-## Build Instructions
+## Connection Protocols
+
+**ZMQ (Recommended)** - Full JSON telemetry with complete detection data
+- Port 4224: Drone and aircraft detections
+- Port 4225: System health and status
+
+**Multicast CoT** - TAK/ATAK integration with reduced detail
+- Address: 239.2.3.1:6969
+- Protocol: CoT XML
+
+**ADS-B HTTP** - Aircraft tracking from standard feeds
+- Endpoints: readsb, tar1090, dump1090
+- Format: JSON
+
+**REST API** - Expose detections via HTTP
+- Port: 8088
+- Format: JSON
+
+**MQTT** - Publish to Home Assistant or broker
+- Formats: JSON, Home Assistant discovery
+- TLS and authentication support
+
+---
+
+## Build from Source
+
 ```bash
 git clone https://github.com/Root-Down-Digital/DragonSync-iOS.git
-cd DragonSync-iOS && pod install
+cd DragonSync-iOS
+pod install
 ```
-Open `WarDragon.xcworkspace` in Xcode.
+
+Open `WarDragon.xcworkspace` in Xcode 15+.
+
+**Requirements:**
+- Xcode 15.0 or later
+- iOS 17.0+ / macOS 14.0+ deployment target
+- CocoaPods for dependencies
 
 ---
 
-## Credits, Disclaimer & License
+## Credits & License
 
-**Credits:** [DroneID](https://github.com/alphafox02/DroneID) [DragonSync](https://github.com/alphafox02/DragonSync)• [Sniffle](https://github.com/nccgroup/Sniffle)
+**Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
 
-**License:** [MIT](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
+**License:** [MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
 
+---
 
 ## Legal Disclaimer
 
-**IMPORTANT: READ BEFORE USE**
-```
+**READ BEFORE USE**
+
 While receiving RF signals is generally legal in most jurisdictions, users are solely responsible for:
 
-- Complying with all applicable local, state, federal, and international laws and regulations
+- Complying with all applicable local, state, federal, and international laws
 - Ensuring proper authorization before monitoring any communications
-- Understanding that monitoring transmissions you are not authorized to receive may be illegal in your jurisdiction
-- Obtaining necessary licenses or permissions required by your local regulatory authority
-- Using appropriate frequencies and power levels in accordance with local regulations
+- Understanding that monitoring transmissions you are not authorized to receive may be illegal
+- Obtaining necessary licenses or permissions from local regulatory authorities
+- Using appropriate frequencies and power levels per local regulations
 
 **The authors, contributors, and maintainers of this software:**
-- Make NO WARRANTIES, express or implied, regarding this software
-- Accept NO RESPONSIBILITY for any use, misuse, or consequences of using this software
-- Accept NO LIABILITY for any legal violations, damages, or harm resulting from use of this software
-- Provide this software "AS IS" without any guarantee of fitness for any particular purpose
+- Make NO WARRANTIES, express or implied
+- Accept NO RESPONSIBILITY for any use, misuse, or consequences
+- Accept NO LIABILITY for any legal violations, damages, or harm
+- Provide this software "AS IS" without guarantee of fitness for any purpose
 
-**By using this software, you acknowledge that:**
-- You are solely responsible for your actions and any consequences
-- You will use this software only in compliance with all applicable laws
-- The authors bear no responsibility for your use of this software
+**By using this software, you acknowledge:**
+- You are solely responsible for your actions and consequences
+- You will use this software only in compliance with applicable laws
+- The authors bear no responsibility for your use
 
-**USE AT YOUR OWN RISK.**
-```
+**USE AT YOUR OWN RISK**
+
+---
 
 
-> [!IMPORTANT]
-> Keep WarDragon DragonOS updated for compatibility.
+> [!NOTE]
+> Keep WarDragon and DragonOS updated for optimal compatibility.
 
 > [!CAUTION]
-> Use in compliance with local regulations.
-
+> Use only in compliance with local regulations and laws.
