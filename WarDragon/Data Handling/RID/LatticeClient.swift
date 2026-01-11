@@ -47,12 +47,14 @@ class LatticeClient: ObservableObject {
     
     func publish(detection: CoTViewModel.CoTMessage) async throws {
         guard var urlComponents = URLComponents(string: configuration.serverURL) else {
+            logger.error("Invalid Lattice server URL: \(self.configuration.serverURL)")
             throw LatticeError.invalidURL
         }
         
         urlComponents.path = "/api/v1/detections"
         
         guard let url = urlComponents.url else {
+            logger.error("Failed to construct Lattice URL")
             throw LatticeError.invalidURL
         }
         
@@ -69,15 +71,19 @@ class LatticeClient: ObservableObject {
         request.httpBody = try encoder.encode(latticeReport)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        logger.debug("Publishing detection \(detection.uid) to Lattice at \(url.absoluteString)")
+        
         let (_, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            logger.error("Lattice publish failed with status code: \(statusCode)")
             throw LatticeError.publishFailed
         }
         
         state = .connected
-        logger.debug("Published detection \(detection.uid) to Lattice")
+        logger.info("✅ Successfully published detection \(detection.uid) to Lattice")
     }
     
     private func createLatticeReport(from detection: CoTViewModel.CoTMessage) -> LatticeReport {

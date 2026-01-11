@@ -808,21 +808,28 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     /// Clean up detections that haven't been updated within inactivityTimeout
-    /// Matches Python DragonSync manager.py send_updates() behavior
+    /// By default, only removes aircraft - drones are kept indefinitely for historical tracking
     @MainActor
     private func cleanupInactiveDetections() async {
         let now = Date()
         let timeout = Settings.shared.inactivityTimeout
+        let persistDrones = Settings.shared.persistDroneDetections
         var removedUIDs: [String] = []
         
         // Find stale detections
         for message in parsedMessages {
+            // If persistDroneDetections is enabled, only apply timeout to aircraft
+            let isAircraft = message.uid.hasPrefix("aircraft-")
+            if persistDrones && !isAircraft {
+                continue // Skip drones, keep them indefinitely
+            }
+            
             let age = now.timeIntervalSince(message.lastUpdated)
             if age > timeout {
                 removedUIDs.append(message.uid)
                 
-                // Publish MQTT offline status before removing (matches Python behavior)
-                if let mac = message.mac, !mac.isEmpty, mqttClient != nil {
+                // Publish MQTT offline status before removing (only for drones with MAC)
+                if !isAircraft, let mac = message.mac, !mac.isEmpty, mqttClient != nil {
                     do {
                         try await mqttClient?.publishDroneOffline(mac)
                         print("Published offline status for \(message.uid)")
@@ -830,6 +837,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         print("Failed to publish offline status for \(message.uid): \(error)")
                     }
                 }
+                
+                let type = isAircraft ? "aircraft" : "drone"
+                print("Removing stale \(type): \(message.uid) (age: \(Int(age))s)")
             }
         }
         
@@ -1095,11 +1105,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             },
             onStatus: { [weak self] message in
                 if let data = message.data(using: .utf8) {
-                    self?.processIncomingMessage(data)
+                    // Parse status JSON directly and send to StatusViewModel
+                    self?.processStatusJSON(data)
                     
-                    // Auto-broadcast system status to TAK (matches Python DragonSync behavior)
+                    // Auto-broadcast system status to TAK and MQTT (matches Python DragonSync behavior)
                     Task { @MainActor in
                         self?.publishSystemStatusToTAK()
+                        self?.publishSystemStatusToMQTT()
                     }
                 }
             }
@@ -1834,6 +1846,112 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Process status JSON directly (from ZMQ status port)
+    /// This bypasses XML conversion and sends status directly to StatusViewModel
+    private func processStatusJSON(_ data: Data) {
+        guard let jsonString = String(data: data, encoding: .utf8),
+              let jsonData = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            print("ERROR: Failed to parse status JSON")
+            return
+        }
+        
+        // Extract status data from JSON
+        guard let uid = json["uid"] as? String,
+              let serialNumber = json["serial_number"] as? String,
+              let timestamp = json["timestamp"] as? Double,
+              let gpsData = json["gps_data"] as? [String: Any],
+              let systemStats = json["system_stats"] as? [String: Any],
+              let antStats = json["ant_sdr_temps"] as? [String: Any] else {
+            print("ERROR: Missing required fields in status JSON")
+            return
+        }
+        
+        // Parse GPS data
+        let latitude = gpsData["latitude"] as? Double ?? 0.0
+        let longitude = gpsData["longitude"] as? Double ?? 0.0
+        let altitude = gpsData["altitude"] as? Double ?? 0.0
+        let speed = gpsData["speed"] as? Double ?? 0.0
+        
+        let gps = StatusViewModel.StatusMessage.GPSData(
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            speed: speed
+        )
+        
+        // Parse system stats
+        let cpuUsage = systemStats["cpu_usage"] as? Double ?? 0.0
+        let temperature = systemStats["temperature"] as? Double ?? 0.0
+        let uptime = systemStats["uptime"] as? Double ?? 0.0
+        
+        // Parse memory stats
+        guard let memoryData = systemStats["memory"] as? [String: Any] else {
+            print("ERROR: Missing memory data in status JSON")
+            return
+        }
+        
+        let memory = StatusViewModel.StatusMessage.SystemStats.MemoryStats(
+            total: memoryData["total"] as? Int64 ?? 0,
+            available: memoryData["available"] as? Int64 ?? 0,
+            percent: memoryData["percent"] as? Double ?? 0.0,
+            used: memoryData["used"] as? Int64 ?? 0,
+            free: memoryData["free"] as? Int64 ?? 0,
+            active: memoryData["active"] as? Int64 ?? 0,
+            inactive: memoryData["inactive"] as? Int64 ?? 0,
+            buffers: memoryData["buffers"] as? Int64 ?? 0,
+            cached: memoryData["cached"] as? Int64 ?? 0,
+            shared: memoryData["shared"] as? Int64 ?? 0,
+            slab: memoryData["slab"] as? Int64 ?? 0
+        )
+        
+        // Parse disk stats
+        guard let diskData = systemStats["disk"] as? [String: Any] else {
+            print("ERROR: Missing disk data in status JSON")
+            return
+        }
+        
+        let disk = StatusViewModel.StatusMessage.SystemStats.DiskStats(
+            total: diskData["total"] as? Int64 ?? 0,
+            used: diskData["used"] as? Int64 ?? 0,
+            free: diskData["free"] as? Int64 ?? 0,
+            percent: diskData["percent"] as? Double ?? 0.0
+        )
+        
+        let systemStatsObj = StatusViewModel.StatusMessage.SystemStats(
+            cpuUsage: cpuUsage,
+            memory: memory,
+            disk: disk,
+            temperature: temperature,
+            uptime: uptime
+        )
+        
+        // Parse ANTSDR temps
+        let plutoTemp = antStats["pluto_temp"] as? Double ?? 0.0
+        let zynqTemp = antStats["zynq_temp"] as? Double ?? 0.0
+        
+        let antStatsObj = StatusViewModel.StatusMessage.ANTStats(
+            plutoTemp: plutoTemp,
+            zynqTemp: zynqTemp
+        )
+        
+        // Create status message
+        let statusMessage = StatusViewModel.StatusMessage(
+            uid: uid,
+            serialNumber: serialNumber,
+            timestamp: timestamp,
+            gpsData: gps,
+            systemStats: systemStatsObj,
+            antStats: antStatsObj
+        )
+        
+        // Send to StatusViewModel on main thread
+        Task { @MainActor in
+            self.statusViewModel.addStatusMessage(statusMessage)
+            print("✅ Status message processed and sent to StatusViewModel")
+        }
+    }
+    
     // Check connection status without heavy processing
     @MainActor
     func checkConnectionStatus() {
@@ -2068,7 +2186,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         if !existingMessage.idType.contains("Serial") {
                             existingMessage.idType = "CAA Assigned Registration ID"
                         }
-                        self.parsedMessages[existingIndex] = existingMessage
+                        // Wrap in MainActor to prevent background thread publishing
+                        Task { @MainActor in
+                            self.parsedMessages[existingIndex] = existingMessage
+                        }
                         print("Updated CAA registration for existing drone with MAC: \(mac)")
                     }
                 }
@@ -2291,13 +2412,15 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         //            return // Skip update if coordinates are 0,0
         //        }
         
-        // Update drone signatures
-        if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
-            self.droneSignatures[index] = signature
-            print("Updating existing signature")
-        } else {
-            print("Added new signature")
-            self.droneSignatures.append(signature)
+        // Update drone signatures - wrap in MainActor to prevent background thread publishing
+        Task { @MainActor in
+            if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
+                self.droneSignatures[index] = signature
+                print("Updating existing signature")
+            } else {
+                print("Added new signature")
+                self.droneSignatures.append(signature)
+            }
         }
         
         //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
@@ -2306,13 +2429,15 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         //            return // Skip update if coordinates are 0,0
         //        }
         
-        /// Update drone signatures
-        if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
-            self.droneSignatures[index] = signature
-            print("📍 Updated existing signature for \(signature.primaryId.id)")
-        } else {
-            print("📍 Added new signature for \(signature.primaryId.id)")
-            self.droneSignatures.append(signature)
+        /// Update drone signatures - wrap in MainActor to prevent background thread publishing
+        Task { @MainActor in
+            if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
+                self.droneSignatures[index] = signature
+                print("📍 Updated existing signature for \(signature.primaryId.id)")
+            } else {
+                print("📍 Added new signature for \(signature.primaryId.id)")
+                self.droneSignatures.append(signature)
+            }
         }
         
         // Update encounters storage with enhanced history preservation
@@ -2385,26 +2510,31 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         distance = signatureGenerator.calculateDistance(rssiValue)
                     }
                     
-                    if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
-                        self.alertRings[index] = AlertRing(
-                            droneId: message.uid,
-                            centerCoordinate: location,
-                            radius: distance,
-                            rssi: message.rssi!
-                        )
-                    } else {
-                        self.alertRings.append(AlertRing(
-                            droneId: message.uid,
-                            centerCoordinate: location,
-                            radius: distance,
-                            rssi: message.rssi!
-                        ))
+                    // Wrap in MainActor to prevent background thread publishing
+                    Task { @MainActor in
+                        if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
+                            self.alertRings[index] = AlertRing(
+                                droneId: message.uid,
+                                centerCoordinate: location,
+                                radius: distance,
+                                rssi: message.rssi!
+                            )
+                        } else {
+                            self.alertRings.append(AlertRing(
+                                droneId: message.uid,
+                                centerCoordinate: location,
+                                radius: distance,
+                                rssi: message.rssi!
+                            ))
+                        }
                     }
                 }
             }
         } else {
-            // Remove alert ring if coordinates are now valid
-            alertRings.removeAll(where: { $0.droneId == message.uid })
+            // Remove alert ring if coordinates are now valid - wrap in MainActor
+            Task { @MainActor in
+                self.alertRings.removeAll(where: { $0.droneId == message.uid })
+            }
         }
     }
 
@@ -2462,7 +2592,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     rssi: consolidated.rssi ?? 0
                 )
                 
-                self.alertRings.append(newRing)
+                // Wrap in MainActor to prevent background thread publishing
+                Task { @MainActor in
+                    self.alertRings.append(newRing)
+                }
             }
         }
     }
@@ -2581,15 +2714,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             existingMessage.isSpoofed = updatedMessage.isSpoofed
             existingMessage.spoofingDetails = updatedMessage.spoofingDetails
             
-            // Update the message
-            self.parsedMessages[existingIndex] = existingMessage
-            self.objectWillChange.send()
+            // Update the message - wrap in MainActor to prevent background thread publishing
+            Task { @MainActor in
+                self.parsedMessages[existingIndex] = existingMessage
+                self.objectWillChange.send()
+            }
             
         } else {
-            // New message - add it
-            self.parsedMessages.append(updatedMessage)
-            
+            // New message - add it - wrap in MainActor to prevent background thread publishing
             Task { @MainActor in
+                self.parsedMessages.append(updatedMessage)
                 self.enforceDetectionLimits()
             }
             
@@ -3254,29 +3388,48 @@ extension CoTViewModel {
     }
     
     private func publishToKismet(_ message: CoTMessage) {
-        guard let kismetClient = kismetClient else { return }
+        guard let kismetClient = kismetClient else {
+            print("⚠️ Kismet publish skipped: kismetClient is nil")
+            return
+        }
         
         Task { @MainActor in
-            guard Settings.shared.kismetEnabled else { return }
+            guard Settings.shared.kismetEnabled else {
+                print("⚠️ Kismet publish skipped: kismetEnabled is false")
+                return
+            }
+            
+            guard message.mac != nil else {
+                print("⚠️ Kismet publish skipped: message has no MAC address")
+                return
+            }
             
             do {
                 try await kismetClient.publish(device: message)
+                print("✅ Published detection \(message.uid) to Kismet")
             } catch {
-                print("Kismet publish failed: \(error)")
+                print("❌ Kismet publish failed: \(error.localizedDescription)")
             }
         }
     }
     
     private func publishToLattice(_ message: CoTMessage) {
-        guard let latticeClient = latticeClient else { return }
+        guard let latticeClient = latticeClient else {
+            print("⚠️ Lattice publish skipped: latticeClient is nil")
+            return
+        }
         
         Task { @MainActor in
-            guard Settings.shared.latticeEnabled else { return }
+            guard Settings.shared.latticeEnabled else {
+                print("⚠️ Lattice publish skipped: latticeEnabled is false")
+                return
+            }
             
             do {
                 try await latticeClient.publish(detection: message)
+                print("✅ Published detection \(message.uid) to Lattice")
             } catch {
-                print("Lattice publish failed: \(error)")
+                print("❌ Lattice publish failed: \(error.localizedDescription)")
             }
         }
     }

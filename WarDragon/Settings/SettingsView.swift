@@ -131,6 +131,21 @@ struct SettingsView: View {
                     set: { settings.updatePreferences(notifications: settings.notificationsEnabled, screenOn: $0) }
                 ))
                 
+                Toggle("Persist Drone Detections", isOn: Binding(
+                    get: { settings.persistDroneDetections },
+                    set: { settings.persistDroneDetections = $0 }
+                ))
+                
+                if !settings.persistDroneDetections {
+                    Text("Drone detections will be removed after \(Int(settings.inactivityTimeout)) seconds of inactivity")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Drone detections will remain visible until manually cleared")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
 //                Toggle("Enable Background Detection", isOn: .init(
 //                    get: { settings.enableBackgroundDetection },
 //                    set: { settings.enableBackgroundDetection = $0 }
@@ -203,7 +218,10 @@ struct SettingsView: View {
                     HStack {
                         Text("Message Processing Interval")
                         Spacer()
-                        Stepper(value: $settings.messageProcessingInterval, in: 50...2500, step: 50) {
+                        Stepper(value: Binding(
+                            get: { settings.messageProcessingInterval },
+                            set: { settings.messageProcessingInterval = $0 }
+                        ), in: 50...2500, step: 50) {
                             Text("\(settings.messageProcessingInterval) ms")
                                 .font(.appCaption)
                                 .bold()
@@ -230,7 +248,10 @@ struct SettingsView: View {
             }
             
             Section("Warning Thresholds") {
-                Toggle("System Warnings", isOn: $settings.systemWarningsEnabled)
+                Toggle("System Warnings", isOn: Binding(
+                    get: { settings.systemWarningsEnabled },
+                    set: { settings.systemWarningsEnabled = $0 }
+                ))
                 
                 if settings.systemWarningsEnabled {
                     ThresholdSlider(
@@ -282,7 +303,10 @@ struct SettingsView: View {
                     )
                 }
                 
-                Toggle("Proximity Warnings", isOn: $settings.enableProximityWarnings)
+                Toggle("Proximity Warnings", isOn: Binding(
+                    get: { settings.enableProximityWarnings },
+                    set: { settings.enableProximityWarnings = $0 }
+                ))
                 
                 if settings.enableProximityWarnings {
                     ThresholdSlider(

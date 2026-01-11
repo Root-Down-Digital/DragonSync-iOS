@@ -712,6 +712,10 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
     
+    @AppStorage("persistDroneDetections") var persistDroneDetections: Bool = true {
+        didSet { objectWillChange.send() }
+    }
+    
     // MARK: - Rate Limiting Settings
     @AppStorage("rateLimitEnabled") var rateLimitEnabled = true {
         didSet { objectWillChange.send() }

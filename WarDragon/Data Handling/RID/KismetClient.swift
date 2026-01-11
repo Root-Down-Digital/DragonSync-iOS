@@ -158,12 +158,19 @@ class KismetClient: ObservableObject {
     }
     
     func publish(device: CoTViewModel.CoTMessage) async throws {
+        guard let mac = device.mac, !mac.isEmpty else {
+            logger.error("Cannot publish to Kismet: device has no MAC address")
+            throw KismetError.invalidConfiguration
+        }
+        
         guard var urlComponents = URLComponents(string: configuration.serverURL) else {
+            logger.error("Invalid Kismet server URL: \(self.configuration.serverURL)")
             throw KismetError.invalidURL
         }
-        urlComponents.path = "/devices/by-mac/\(device.mac ?? "")/set_tag.cmd"
+        urlComponents.path = "/devices/by-mac/\(mac)/set_tag.cmd"
         
         guard let url = urlComponents.url else {
+            logger.error("Failed to construct Kismet URL")
             throw KismetError.invalidURL
         }
         
@@ -182,14 +189,18 @@ class KismetClient: ObservableObject {
         request.httpBody = try JSONSerialization.data(withJSONObject: tagData)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        logger.debug("Tagging device \(device.uid) (MAC: \(mac)) in Kismet at \(url.absoluteString)")
+        
         let (_, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            logger.error("Kismet tag failed with status code: \(statusCode)")
             throw KismetError.publishFailed
         }
         
-        logger.debug("Published device \(device.uid) to Kismet")
+        logger.info("✅ Successfully tagged device \(device.uid) in Kismet")
     }
     
     func updateConfiguration(_ config: KismetConfiguration) {
