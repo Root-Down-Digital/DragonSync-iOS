@@ -251,6 +251,11 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 - Advanced → Status Port 4225
 - Enable ADS-B, MQTT, TAK, webhooks as needed
 
+
+
+<img width="736" height="848" alt="63D3EB3E-ACFC-481D-8E17-954FA5F22D40" src="https://github.com/user-attachments/assets/70b2b109-21bd-4de2-a702-7427acb9fc02" />
+
+
 **Persistence:** Use [systemd service files](https://github.com/alphafox02/DragonSync/tree/main/services) for auto-start
 
 ---
