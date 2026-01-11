@@ -21,8 +21,11 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 </div>
 
 ---
-
 ## What It Detects
+
+<table>
+<tr>
+<td width="60%" valign="top">
 
 **Remote ID Broadcasts**
 - WiFi 2.4GHz and 5GHz transmissions
@@ -58,11 +61,16 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - MAC randomization attack detection
 - Transmission pattern recognition
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 24px;">
-  <img src="https://github.com/user-attachments/assets/edfbb366-2140-4e1e-88ba-6fe79ee51d40" alt="Detection interface" style="width: 100%; height: auto;" />
-  <img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" alt="Signal analysis" style="width: 100%; height: auto;" />
-  <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" alt="Tracking display" style="width: 100%; height: auto;" />
-</div>
+</td>
+<td width="40%" valign="top">
+
+![Detection interface](https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b)
+![Signal analysis](https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635)
+![Tracking display](https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42)
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -82,17 +90,17 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 <img src="https://github.com/user-attachments/assets/b702c9d5-a034-4cbb-86a4-2c76c4b641b4" width="100%">
 </td>
 <td width="50%">
-  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
-
+<img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
 </td>
 </tr>
 <tr>
-<td width="40%">
+<td width="50%">
 <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="100%">
 </td>
 <td width="50%">
 <img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="100%">
 </td>
+</tr>
 </table>
 
 ---
