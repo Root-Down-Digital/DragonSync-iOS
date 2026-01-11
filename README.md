@@ -24,10 +24,6 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ## What It Detects
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
 **Remote ID Broadcasts**
 - WiFi 2.4GHz and 5GHz transmissions
 - Bluetooth Low Energy advertisements
@@ -62,19 +58,11 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - MAC randomization attack detection
 - Transmission pattern recognition
 
-</td>
-<td width="50%" valign="top">
-
-![3DAE54D1-BD51-40C1-9009-0564F5A41E23_1_201_a](https://github.com/user-attachments/assets/edfbb366-2140-4e1e-88ba-6fe79ee51d40)
-
-<img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="100%" />
-
-
-<img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" width="100%" />
-
-</td>
-</tr>
-</table>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 24px;">
+  <img src="https://github.com/user-attachments/assets/edfbb366-2140-4e1e-88ba-6fe79ee51d40" alt="Detection interface" style="width: 100%; height: auto;" />
+  <img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" alt="Signal analysis" style="width: 100%; height: auto;" />
+  <img src="https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42" alt="Tracking display" style="width: 100%; height: auto;" />
+</div>
 
 ---
 
