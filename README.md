@@ -125,7 +125,12 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - **ADS-B HTTP** - readsb, tar1090, dump1090 JSON feeds
 - **Background Mode** - Continuous monitoring with local notifications
 
+### Reference 
+
+- A database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md)
+- Data flow and system information is [here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/DATA_FLOW_DIAGRAM.md)
 ---
+
 
 # Installation
 
