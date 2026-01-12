@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> **TestFlight beta has expired**. With rapid DragonSync/DroneID development by @alphafox02, I lack resources to continue this project. Open an issue if you'd like to see development resume.
+> **TestFlight beta has expired**. Look out for a new App Store test build soon!
 
 
 <div align="center">
