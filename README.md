@@ -106,7 +106,6 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - **REST API** - 7 JSON endpoints on port 8088 (`/drones` `/aircraft` `/status` `/signals` `/config` `/health` `/update/check`)
 - **MQTT** - Home Assistant auto-discovery, TLS support, QoS 0-2
 - **TAK/ATAK** - CoT XML via multicast/TCP/TLS with iOS Keychain .p12
-- **Kismet** - Automatic device tagging via REST API
 - **Lattice DAS** - Structured detection reports to Lattice platform
 - **Webhooks** - Discord, Slack, custom HTTP POST with event filtering
 
@@ -294,7 +293,6 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
         │  MQTT               │
         │  TAK/ATAK (CoT)     │
         │  Webhooks           │
-        │  Kismet Tags        │
         │  Lattice DAS        │
         └─────────────────────┘
 ```
@@ -302,7 +300,7 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 **Data Flow:**
 - **Ingestion**: ZMQ JSON (4224 detections, 4225 status), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
 - **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting
-- **Output**: REST API (8088), MQTT, TAK/ATAK, webhooks, Kismet, Lattice
+- **Output**: REST API (8088), MQTT, TAK/ATAK, Webhooks & Lattice
 
 ---
 
