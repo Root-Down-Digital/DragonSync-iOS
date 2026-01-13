@@ -144,11 +144,16 @@ Pre-configured system with ANTSDR E200, RX5808, GPS hardware.
 4. Start monitoring
 
 **Troubleshooting:**
+
+- Toggling app connection off and on is sometimes needed first run for Apple to begin connections.  
+- Backend connection settings that may need modification:
+
 ```bash
-# Config file: /home/dragon/WarDragon/DragonSync/config.ini
+# Edit Config file: /home/dragon/WarDragon/DragonSync/config.ini
 zmq_host = 0.0.0.0                 # Use if localhost fails
 tak_multicast_addr = 224.0.0.1     # Alternative multicast address
 ```
+
 - System status requires GPS lock (use `--static_gps` flag or wait for fix)
 - SDR temps require DJI firmware on ANTSDR (UHD firmware won't report temps)
 
