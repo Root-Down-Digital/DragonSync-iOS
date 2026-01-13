@@ -73,7 +73,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cancellables = Set<AnyCancellable>()
     private var publishedDrones: Set<String> = []
     
-    private var kismetClient: KismetClient?
     private var latticeClient: LatticeClient? // Track drones for HA discovery
     
     // MARK: - ADS-B Integration
@@ -626,7 +625,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.checkPermissions()
             self.setupMQTTClient()
             self.setupTAKClient()
-            self.setupKismetClient()
             self.setupLatticeClient()
             
             // Delay ADS-B setup to give the server time to be ready
@@ -2139,7 +2137,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 if let cotXML = self.generateCoTXML(from: fpvMessage) {
                     self.publishCoTToTAK(cotXML)
                 }
-                self.publishToKismet(fpvMessage)
                 self.publishToLattice(fpvMessage)
             }
             
@@ -2811,7 +2808,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             if let cotXML = self.generateCoTXML(from: updatedMessage) {
                 self.publishCoTToTAK(cotXML)
             }
-            self.publishToKismet(updatedMessage)
             self.publishToLattice(updatedMessage)
         }
     }
@@ -3217,36 +3213,6 @@ extension CoTViewModel {
         }
     }
     
-    func setupKismetClient() {
-        Task { @MainActor in
-            let config = Settings.shared.kismetConfiguration
-            guard config.enabled && config.isValid else {
-                self.kismetClient?.stop()
-                self.kismetClient = nil
-                return
-            }
-            
-            self.kismetClient = KismetClient(configuration: config)
-            self.kismetClient?.start()
-            
-            NotificationCenter.default.publisher(for: .kismetSettingsChanged)
-                .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    Task { @MainActor in
-                        if Settings.shared.kismetEnabled {
-                            self.setupKismetClient()
-                        } else {
-                            self.kismetClient?.stop()
-                            self.kismetClient = nil
-                        }
-                    }
-                }
-                .store(in: &self.cancellables)
-        }
-    }
-    
     func setupLatticeClient() {
         Task { @MainActor in
             let config = Settings.shared.latticeConfiguration
@@ -3467,32 +3433,6 @@ extension CoTViewModel {
         """
         
         return xml
-    }
-    
-    private func publishToKismet(_ message: CoTMessage) {
-        guard let kismetClient = kismetClient else {
-            print("⚠️ Kismet publish skipped: kismetClient is nil")
-            return
-        }
-        
-        Task { @MainActor in
-            guard Settings.shared.kismetEnabled else {
-                print("⚠️ Kismet publish skipped: kismetEnabled is false")
-                return
-            }
-            
-            guard message.mac != nil else {
-                print("⚠️ Kismet publish skipped: message has no MAC address")
-                return
-            }
-            
-            do {
-                try await kismetClient.publish(device: message)
-                print("✅ Published detection \(message.uid) to Kismet")
-            } catch {
-                print("❌ Kismet publish failed: \(error.localizedDescription)")
-            }
-        }
     }
     
     private func publishToLattice(_ message: CoTMessage) {

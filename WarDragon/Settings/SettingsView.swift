@@ -323,7 +323,7 @@ struct SettingsView: View {
                 }
             }
             
-            Section("Output") {
+            Section("Output - Beta Features") {
                 NavigationLink {
                     TAKServerSettingsView()
                 } label: {
@@ -348,21 +348,6 @@ struct SettingsView: View {
                         Text("MQTT Broker")
                         Spacer()
                         if settings.mqttEnabled {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        }
-                    }
-                }
-                
-                NavigationLink {
-                    KismetSettingsView()
-                } label: {
-                    HStack {
-                        Image(systemName: "wifi.circle.fill")
-                            .foregroundColor(.cyan)
-                        Text("Kismet Server")
-                        Spacer()
-                        if settings.kismetEnabled {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
                         }

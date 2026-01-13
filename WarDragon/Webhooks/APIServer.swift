@@ -278,11 +278,6 @@ class APIServer: ObservableObject {
                 "min_altitude": Settings.shared.adsbConfiguration.minAltitude as Any,
                 "max_altitude": Settings.shared.adsbConfiguration.maxAltitude as Any
             ],
-            "kismet": [
-                "enabled": Settings.shared.kismetEnabled,
-                "url": Settings.shared.kismetConfiguration.serverURL,
-                "poll_interval": Settings.shared.kismetConfiguration.pollInterval
-            ],
             "lattice": [
                 "enabled": Settings.shared.latticeEnabled,
                 "url": Settings.shared.latticeConfiguration.serverURL

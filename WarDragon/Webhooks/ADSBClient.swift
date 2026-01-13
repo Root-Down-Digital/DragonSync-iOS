@@ -33,8 +33,8 @@ enum ADSBConnectionState: Equatable {
 /// Configuration for ADS-B client
 struct ADSBConfiguration: Codable, Equatable {
     var enabled: Bool
-    var readsbURL: String  // e.g., "http://192.168.1.100:8080"
-    var dataPath: String   // e.g., "/data/aircraft.json" - must end in .json
+    var readsbURL: String
+    var dataPath: String
     var pollInterval: TimeInterval  // Seconds between polls
     var maxDistance: Double?  // Maximum distance in km (optional filter)
     var minAltitude: Double?  // Minimum altitude in feet (optional filter)
