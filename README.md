@@ -103,7 +103,6 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 ## Integrations
 
 **Push Detection Data To:**
-- **REST API** - 7 JSON endpoints on port 8088 (`/drones` `/aircraft` `/status` `/signals` `/config` `/health` `/update/check`)
 - **MQTT** - Home Assistant auto-discovery, TLS support, QoS 0-2
 - **TAK/ATAK** - CoT XML via multicast/TCP/TLS with iOS Keychain .p12
 - **Lattice DAS** - Structured detection reports to Lattice platform
@@ -283,13 +282,11 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
         │                     │      │ HTTP JSON      │
         │  ZMQ: 4224, 4225    │      │ readsb/tar1090 │
         │  CoT: 239.2.3.1     │      └────────────────┘
-        │  API: 8088          │
         └──────────┬──────────┘
                    │
         ┌──────────▼──────────┐
         │   Output Channels   │
         │                     │
-        │  REST API (JSON)    │
         │  MQTT               │
         │  TAK/ATAK (CoT)     │
         │  Webhooks           │
@@ -300,7 +297,7 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 **Data Flow:**
 - **Ingestion**: ZMQ JSON (4224 detections, 4225 status), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
 - **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting
-- **Output**: REST API (8088), MQTT, TAK/ATAK, Webhooks & Lattice
+- **Output**: MQTT, TAK/ATAK, Webhooks & Lattice
 
 ---
 
@@ -330,10 +327,6 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 
 **ADS-B HTTP** - Aircraft tracking from standard feeds
 - Endpoints: readsb, tar1090, dump1090
-- Format: JSON
-
-**REST API** - Expose detections via HTTP
-- Port: 8088
 - Format: JSON
 
 **MQTT** - Publish to Home Assistant or broker
