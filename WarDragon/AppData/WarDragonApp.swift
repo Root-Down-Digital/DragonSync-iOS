@@ -27,7 +27,9 @@ struct WarDragonApp: App {
             StoredDroneEncounter.self,
             StoredFlightPoint.self,
             StoredSignature.self,
-            StoredADSBEncounter.self
+            StoredADSBEncounter.self,
+            OpenSkySettings.self,
+            CachedAircraft.self
         ])
         
         let modelConfiguration = ModelConfiguration(
@@ -62,7 +64,7 @@ struct WarDragonApp: App {
                 
                 // Try creating container again
                 let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-                print("✅ Successfully recovered SwiftData store")
+                print("Successfully recovered SwiftData store")
                 
                 // Reset migration flag so data gets re-migrated
                 UserDefaults.standard.set(false, forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
@@ -82,10 +84,18 @@ struct WarDragonApp: App {
             ContentView()
                 .modelContainer(modelContainer)
                 .task {
+                    // Configure OpenSky service with model context
+                    await configureOpenSkyService()
                     // Perform migration after view appears
                     await performMigrationIfNeeded()
                 }
         }
+    }
+    
+    @MainActor
+    private func configureOpenSkyService() async {
+        let context = modelContainer.mainContext
+        OpenSkyService.shared.configure(with: context)
     }
     
     @MainActor
@@ -95,7 +105,7 @@ struct WarDragonApp: App {
         print("Migration Status: \(migrationManager.migrationStatus)")
         
         guard migrationManager.needsMigration else {
-            print("✅ No migration needed - data already in SwiftData")
+            print("No migration needed - data already in SwiftData")
             DroneStorageManager.shared.loadFromStorage()
             return
         }
@@ -111,7 +121,7 @@ struct WarDragonApp: App {
             if !hasLegacyBackup {
                 do {
                     let backupURL = try migrationManager.createBackup()
-                    print("✅ Backup created at: \(backupURL.path)")
+                    print("Backup created at: \(backupURL.path)")
                 } catch {
                     print("⚠️ Warning: Backup creation failed (non-fatal): \(error.localizedDescription)")
                     print("   Migration will continue, but you may want to manually backup your data")
@@ -145,14 +155,14 @@ struct WarDragonApp: App {
             }
             
             if migrationSucceeded {
-                print("✅ Migration completed successfully!")
+                print("Migration completed successfully!")
                 print("   Your data has been migrated to the new storage system")
                 print("   New Migration Status: \(migrationManager.migrationStatus)")
                 
                 // Verify migration by checking data count
                 let descriptor = FetchDescriptor<StoredDroneEncounter>()
                 let count = try context.fetchCount(descriptor)
-                print("✅ Verification: \(count) encounters now stored in SwiftData")
+                print("Verification: \(count) encounters now stored in SwiftData")
                 
                 // Force DroneStorageManager to reload from SwiftData
                 DroneStorageManager.shared.loadFromStorage()

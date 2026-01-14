@@ -979,7 +979,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             // Clear reconnecting flag after a delay to ensure connection is established
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.isReconnecting = false
-                print("✅ Listening started successfully, cleared reconnecting flag")
+                print("Listening started successfully, cleared reconnecting flag")
             }
         }
     }
@@ -1965,7 +1965,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Send to StatusViewModel on main thread
         Task { @MainActor in
             self.statusViewModel.addStatusMessage(statusMessage)
-            print("✅ Status message processed and sent to StatusViewModel")
+            print("Status message processed and sent to StatusViewModel")
         }
     }
     
@@ -2924,7 +2924,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Critical: UDP multicast sockets need time to unbind from port
         // Increased from 0.5s to 1.0s for more reliable cleanup
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            print("✅ All listeners stopped and connections cleaned up.")
+            print("All listeners stopped and connections cleaned up.")
         }
     }
     
@@ -3449,7 +3449,7 @@ extension CoTViewModel {
             
             do {
                 try await latticeClient.publish(detection: message)
-                print("✅ Published detection \(message.uid) to Lattice")
+                print("Published detection \(message.uid) to Lattice")
             } catch {
                 print("❌ Lattice publish failed: \(error.localizedDescription)")
             }
@@ -3597,6 +3597,42 @@ extension CoTViewModel {
     func clearAllDetections() {
         clearDroneDetections()
         clearAircraftTracks()
+    }
+    
+    /// Update aircraft tracks from OpenSky Network
+    @MainActor
+    func updateOpenSkyAircraft(_ aircraft: [Aircraft]) {
+        let openSkyAircraft = aircraft.filter { $0.hex.count == 6 }
+        
+        var existingAircraft = aircraftTracks.filter { $0.hex.count != 6 }
+        
+        existingAircraft.append(contentsOf: openSkyAircraft)
+        
+        aircraftTracks = existingAircraft
+        
+        for ac in openSkyAircraft {
+            statusViewModel.trackAircraft(
+                hex: ac.hex,
+                callsign: ac.flight,
+                altitude: ac.altitude
+            )
+        }
+        
+        print("Updated OpenSky aircraft: \(openSkyAircraft.count) aircraft")
+        
+        objectWillChange.send()
+        
+        if Settings.shared.notificationsEnabled {
+            checkNearbyAircraft(openSkyAircraft)
+        }
+        
+        if Settings.shared.mqttEnabled {
+            publishAircraftToMQTT(openSkyAircraft)
+        }
+        
+        if Settings.shared.takEnabled {
+            publishAircraftToTAK(openSkyAircraft)
+        }
     }
     
     /// Handle aircraft data updates

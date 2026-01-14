@@ -385,6 +385,21 @@ struct SettingsView: View {
                         }
                     }
                 }
+                
+                NavigationLink {
+                    OpenSkySettingsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "airplane.departure")
+                            .foregroundColor(.blue)
+                        Text("OpenSky Network")
+                        Spacer()
+                        if OpenSkyService.shared.isEnabled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
             }
             
             Section("Ports") {

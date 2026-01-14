@@ -83,7 +83,7 @@ class LatticeClient: ObservableObject {
         }
         
         state = .connected
-        logger.info("✅ Successfully published detection \(detection.uid) to Lattice")
+        logger.info("Successfully published detection \(detection.uid) to Lattice")
     }
     
     private func createLatticeReport(from detection: CoTViewModel.CoTMessage) -> LatticeReport {

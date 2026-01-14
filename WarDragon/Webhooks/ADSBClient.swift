@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import CoreLocation
 import os.log
 
 /// ADS-B client connection state
@@ -39,6 +40,7 @@ struct ADSBConfiguration: Codable, Equatable {
     var maxDistance: Double?  // Maximum distance in km (optional filter)
     var minAltitude: Double?  // Minimum altitude in feet (optional filter)
     var maxAltitude: Double?  // Maximum altitude in feet (optional filter)
+    var maxAircraftCount: Int  // Maximum number of aircraft to display (sorted by distance)
     
     init(
         enabled: Bool = false,
@@ -47,7 +49,8 @@ struct ADSBConfiguration: Codable, Equatable {
         pollInterval: TimeInterval = 2.0,
         maxDistance: Double? = nil,
         minAltitude: Double? = nil,
-        maxAltitude: Double? = nil
+        maxAltitude: Double? = nil,
+        maxAircraftCount: Int = 25
     ) {
         self.enabled = enabled
         self.readsbURL = readsbURL
@@ -56,6 +59,7 @@ struct ADSBConfiguration: Codable, Equatable {
         self.maxDistance = maxDistance
         self.minAltitude = minAltitude
         self.maxAltitude = maxAltitude
+        self.maxAircraftCount = maxAircraftCount
     }
     
     var isValid: Bool {
@@ -219,8 +223,16 @@ class ADSBClient: ObservableObject {
             // Filter aircraft based on configuration
             var filteredAircraft = readsbResponse.aircraft.filter { $0.coordinate != nil }
             
-            if configuration.maxDistance != nil {
-                // TODO: Add distance filtering if user location available
+            // Distance filtering if enabled and user location is available
+            if let maxDistance = configuration.maxDistance,
+               maxDistance > 0,
+               let userLocation = LocationManager.shared.userLocation {
+                filteredAircraft = filteredAircraft.filter { aircraft in
+                    guard let aircraftCoord = aircraft.coordinate else { return false }
+                    let aircraftLocation = CLLocation(latitude: aircraftCoord.latitude, longitude: aircraftCoord.longitude)
+                    let distance = userLocation.distance(from: aircraftLocation) / 1000.0 // Convert to km
+                    return distance <= maxDistance
+                }
             }
             
             if let minAlt = configuration.minAltitude {
@@ -229,6 +241,23 @@ class ADSBClient: ObservableObject {
             
             if let maxAlt = configuration.maxAltitude {
                 filteredAircraft = filteredAircraft.filter { ($0.altitude ?? 0) <= maxAlt }
+            }
+            
+            // Limit to closest N aircraft if user location is available
+            if let userLocation = LocationManager.shared.userLocation, configuration.maxAircraftCount > 0 {
+                // Calculate distance for each aircraft and sort by proximity
+                let aircraftWithDistance = filteredAircraft.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
+                    guard let coord = aircraft.coordinate else { return nil }
+                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let distance = userLocation.distance(from: aircraftLocation)
+                    return (aircraft, distance)
+                }
+                
+                // Sort by distance and take the closest N
+                filteredAircraft = aircraftWithDistance
+                    .sorted { $0.distance < $1.distance }
+                    .prefix(configuration.maxAircraftCount)
+                    .map { $0.aircraft }
             }
             
             // Update state

@@ -25,14 +25,24 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     
     func requestLocationPermission() {
+        // Don't request if already authorized
+        if locationPermissionStatus == .authorizedWhenInUse || locationPermissionStatus == .authorizedAlways {
+            startLocationUpdates()
+            return
+        }
+        
         locationManager.requestWhenInUseAuthorization()
     }
     
-    private func startLocationUpdates() {
+    func startLocationUpdates() {
         guard locationPermissionStatus == .authorizedWhenInUse || locationPermissionStatus == .authorizedAlways else {
             return
         }
         locationManager.startUpdatingLocation()
+    }
+    
+    func stopLocationUpdates() {
+        locationManager.stopUpdatingLocation()
     }
     
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {

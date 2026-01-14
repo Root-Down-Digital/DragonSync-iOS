@@ -45,6 +45,11 @@ struct ContentView: View {
         self._statusViewModel = StateObject(wrappedValue: statusVM)
         self._cotViewModel = StateObject(wrappedValue: cotVM)
         self._selectedTab = State(initialValue: Settings.shared.isListening ? 0 : 3)
+        
+        // Connect OpenSkyService to CoTViewModel
+        Task { @MainActor in
+            OpenSkyService.shared.cotViewModel = cotVM
+        }
     }
     
 
@@ -102,6 +107,9 @@ struct ContentView: View {
             // Inject ModelContext into storage managers
             SwiftDataStorageManager.shared.modelContext = modelContext
             statusViewModel.modelContext = modelContext
+            
+            // Configure OpenSkyService with ModelContext
+            OpenSkyService.shared.configure(with: modelContext)
             
             // Reload encounters from SwiftData now that ModelContext is set
             // This is important because DroneStorageManager.init() runs before

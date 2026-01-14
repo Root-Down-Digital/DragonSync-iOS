@@ -240,7 +240,7 @@ class SwiftDataStorageManager: ObservableObject {
             // Update in-memory cache after successful save
             updateInMemoryCache()
             
-            logger.info("✅ Successfully deleted all encounters")
+            logger.info("Successfully deleted all encounters")
         } catch {
             logger.error("❌ Failed to delete all encounters: \(error.localizedDescription)")
             

@@ -197,7 +197,7 @@ extension KeychainManager {
                     // Remove from UserDefaults
                     UserDefaults.standard.removeObject(forKey: key)
                     
-                    print("✅ Migrated \(key) to Keychain")
+                    print("Migrated \(key) to Keychain")
                 } catch {
                     print("❌ Failed to migrate \(key): \(error)")
                 }

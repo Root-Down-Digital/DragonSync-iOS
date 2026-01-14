@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ADSBSettingsView: View {
     @StateObject private var settings = Settings.shared
+    @ObservedObject private var locationManager = LocationManager.shared
     @State private var testResult: String?
     @State private var isTesting = false
     @State private var aircraftCount: Int = 0
@@ -78,10 +79,35 @@ struct ADSBSettingsView: View {
                 Section("Filters") {
                     Toggle("Filter by Distance", isOn: .init(
                         get: { settings.adsbMaxDistance > 0 },
-                        set: { settings.adsbMaxDistance = $0 ? 50 : 0 }
+                        set: { enabled in
+                            settings.adsbMaxDistance = enabled ? 50 : 0
+                            if enabled {
+                                requestLocationIfNeeded()
+                            }
+                        }
                     ))
                     
                     if settings.adsbMaxDistance > 0 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: locationStatusIcon)
+                                    .foregroundColor(locationStatusColor)
+                                Text(locationStatusText)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                if locationManager.locationPermissionStatus == .notDetermined {
+                                    Spacer()
+                                    Button("Enable Location") {
+                                        requestLocationIfNeeded()
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text("Max Distance")
@@ -91,6 +117,33 @@ struct ADSBSettingsView: View {
                             }
                             Slider(value: $settings.adsbMaxDistance, in: 10...500, step: 10)
                         }
+                        
+                        if locationManager.userLocation != nil {
+                            Text("Distance filtering active")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else if locationManager.locationPermissionStatus == .authorizedWhenInUse || locationManager.locationPermissionStatus == .authorizedAlways {
+                            Text("Waiting for location...")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Max Aircraft to Display")
+                            Spacer()
+                            Text("\(settings.adsbMaxAircraftCount)")
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: .init(
+                            get: { Double(settings.adsbMaxAircraftCount) },
+                            set: { settings.adsbMaxAircraftCount = Int($0) }
+                        ), in: 10...200, step: 5)
+                        
+                        Text("Shows the \(settings.adsbMaxAircraftCount) closest aircraft")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     
                     Toggle("Filter by Altitude", isOn: .init(
@@ -320,6 +373,63 @@ struct ADSBSettingsView: View {
                 }
                 isTesting = false
             }
+        }
+    }
+    
+    // MARK: - Location Helpers
+    
+    private func requestLocationIfNeeded() {
+        switch locationManager.locationPermissionStatus {
+        case .notDetermined:
+            locationManager.requestLocationPermission()
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationManager.startLocationUpdates()
+        default:
+            break
+        }
+    }
+    
+    private var locationStatusIcon: String {
+        switch locationManager.locationPermissionStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            return locationManager.userLocation != nil ? "location.fill" : "location"
+        case .denied, .restricted:
+            return "location.slash"
+        case .notDetermined:
+            return "location"
+        @unknown default:
+            return "location"
+        }
+    }
+    
+    private var locationStatusColor: Color {
+        switch locationManager.locationPermissionStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            return locationManager.userLocation != nil ? .green : .orange
+        case .denied, .restricted:
+            return .red
+        case .notDetermined:
+            return .gray
+        @unknown default:
+            return .gray
+        }
+    }
+    
+    private var locationStatusText: String {
+        switch locationManager.locationPermissionStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            if let location = locationManager.userLocation {
+                return "Location active (\(String(format: "%.4f", location.coordinate.latitude)), \(String(format: "%.4f", location.coordinate.longitude)))"
+            }
+            return "Location authorized, waiting for fix..."
+        case .denied:
+            return "Location access denied - go to Settings to enable"
+        case .restricted:
+            return "Location access restricted"
+        case .notDetermined:
+            return "Location permission required for distance filtering"
+        @unknown default:
+            return "Location status unknown"
         }
     }
 }

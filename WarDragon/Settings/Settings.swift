@@ -510,6 +510,13 @@ class Settings: ObservableObject {
         }
     }
     
+    @AppStorage("adsbMaxAircraftCount") var adsbMaxAircraftCount: Int = 25 {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
+    }
+    
     @AppStorage("adsbMinAltitude") var adsbMinAltitude: Double = 0 {
         didSet {
             objectWillChange.send()
@@ -533,7 +540,8 @@ class Settings: ObservableObject {
                 pollInterval: adsbPollInterval,
                 maxDistance: adsbMaxDistance > 0 ? adsbMaxDistance : nil,
                 minAltitude: adsbMinAltitude > 0 ? adsbMinAltitude : nil,
-                maxAltitude: adsbMaxAltitude < 50000 ? adsbMaxAltitude : nil
+                maxAltitude: adsbMaxAltitude < 50000 ? adsbMaxAltitude : nil,
+                maxAircraftCount: adsbMaxAircraftCount
             )
         }
         set {
@@ -544,6 +552,7 @@ class Settings: ObservableObject {
             adsbMaxDistance = newValue.maxDistance ?? 0
             adsbMinAltitude = newValue.minAltitude ?? 0
             adsbMaxAltitude = newValue.maxAltitude ?? 50000
+            adsbMaxAircraftCount = newValue.maxAircraftCount
         }
     }
     

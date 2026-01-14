@@ -143,7 +143,7 @@ class StatusViewModel: ObservableObject {
                 // Save the deletions
                 try context.save()
                 
-                print("✅ Successfully cleared ADSB history")
+                print("Successfully cleared ADSB history")
             } catch {
                 print("❌ Failed to clear ADSB history: \(error)")
             }

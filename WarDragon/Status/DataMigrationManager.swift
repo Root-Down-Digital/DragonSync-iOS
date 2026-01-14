@@ -84,9 +84,9 @@ class DataMigrationManager {
                 // This prevents creating duplicate backups on retry
             } else {
                 if count > 0 {
-                    logger.info("✅ Data verification passed - SwiftData has \(count) encounters")
+                    logger.info("Data verification passed - SwiftData has \(count) encounters")
                 } else {
-                    logger.info("✅ Data verification passed - both SwiftData and UserDefaults are empty (clean state)")
+                    logger.info("Data verification passed - both SwiftData and UserDefaults are empty (clean state)")
                 }
                 return
             }
@@ -107,7 +107,7 @@ class DataMigrationManager {
             UserDefaults.standard.set(currentMigrationVersion, forKey: migrationVersionKey)
             UserDefaults.standard.synchronize() // Force immediate save
             
-            logger.info("✅ Migration completed successfully - will not run again")
+            logger.info("Migration completed successfully - will not run again")
         } catch {
             logger.error("❌ Migration failed: \(error.localizedDescription)")
             // Don't mark as complete if migration failed - will retry next launch
@@ -168,7 +168,7 @@ class DataMigrationManager {
         // Final save
         do {
             try modelContext.save()
-            logger.info("✅ Migration complete: \(migratedCount) migrated, \(skippedCount) skipped, \(errorCount) errors")
+            logger.info("Migration complete: \(migratedCount) migrated, \(skippedCount) skipped, \(errorCount) errors")
             
             if errorCount > 0 {
                 logger.warning("⚠️ Some encounters failed to migrate, but others succeeded")
@@ -228,7 +228,7 @@ class DataMigrationManager {
         // Check for existing recent backup (within last hour) unless forced
         if !forceNew {
             if let existingBackup = try findRecentValidBackup() {
-                logger.info("✅ Using existing recent backup: \(existingBackup.lastPathComponent)")
+                logger.info("Using existing recent backup: \(existingBackup.lastPathComponent)")
                 return existingBackup
             }
         }
@@ -271,7 +271,7 @@ class DataMigrationManager {
         // Immediately verify the backup can be read back
         do {
             try validateBackupFile(backupURL)
-            logger.info("✅ Backup created and verified at: \(backupURL.lastPathComponent)")
+            logger.info("Backup created and verified at: \(backupURL.lastPathComponent)")
         } catch {
             logger.error("❌ Backup verification failed: \(error.localizedDescription)")
             // Delete the bad backup
@@ -324,7 +324,7 @@ class DataMigrationManager {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = strategy
                 let encounters = try decoder.decode([String: DroneEncounter].self, from: data)
-                logger.info("✅ Data is valid - contains \(encounters.count) encounters (decoded with \(self.strategyName(strategy)))")
+                logger.info("Data is valid - contains \(encounters.count) encounters (decoded with \(self.strategyName(strategy)))")
                 return true
             } catch {
                 continue
@@ -392,7 +392,7 @@ class DataMigrationManager {
                     throw MigrationError.decodingFailed("Backup file missing 'droneEncounters' field or wrong type")
                 }
                 
-                logger.info("✅ Legacy backup file validation passed")
+                logger.info("Legacy backup file validation passed")
                 return
             }
             
@@ -408,7 +408,7 @@ class DataMigrationManager {
                     decoder.dateDecodingStrategy = strategy
                     _ = try decoder.decode([String: DroneEncounter].self, from: jsonData)
                     decodedSuccessfully = true
-                    logger.info("✅ SwiftData export validation passed (strategy: \(self.strategyName(strategy)))")
+                    logger.info("SwiftData export validation passed (strategy: \(self.strategyName(strategy)))")
                     return
                 } catch {
                     continue
@@ -438,7 +438,7 @@ class DataMigrationManager {
         let backupURL = documentsPath.appendingPathComponent("wardragon_backup_empty_\(Int(Date().timeIntervalSince1970)).json")
         
         try jsonData.write(to: backupURL)
-        logger.info("✅ Empty backup marker created at: \(backupURL.lastPathComponent)")
+        logger.info("Empty backup marker created at: \(backupURL.lastPathComponent)")
         
         return backupURL
     }
@@ -478,7 +478,7 @@ class DataMigrationManager {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let validated = try decoder.decode([String: DroneEncounter].self, from: jsonData)
-            logger.info("✅ Validation passed - \(validated.count) encounters can be decoded")
+            logger.info("Validation passed - \(validated.count) encounters can be decoded")
         } catch {
             logger.error("❌ Validation failed: \(error.localizedDescription)")
             throw MigrationError.backupFailed(NSError(
@@ -500,7 +500,7 @@ class DataMigrationManager {
         var mutableURL = backupURL
         try? mutableURL.setResourceValues(resourceValues)
         
-        logger.info("✅ SwiftData export created and validated at: \(backupURL.lastPathComponent) (\(encounters.count) encounters)")
+        logger.info("SwiftData export created and validated at: \(backupURL.lastPathComponent) (\(encounters.count) encounters)")
         
         return backupURL
     }
@@ -591,7 +591,7 @@ class DataMigrationManager {
             
             switch result.status {
             case .valid:
-                logger.info("✅ \(backupURL.lastPathComponent): Valid (\(result.encounterCount) encounters)")
+                logger.info("\(backupURL.lastPathComponent): Valid (\(result.encounterCount) encounters)")
             case .empty:
                 logger.info("⚠️  \(backupURL.lastPathComponent): Empty (no encounters)")
             case .corrupted:
@@ -698,7 +698,7 @@ class DataMigrationManager {
                 decoder.dateDecodingStrategy = strategy
                 let encounters = try decoder.decode([String: DroneEncounter].self, from: jsonData)
                 
-                logger.info("✅ Successfully decoded \(encounters.count) encounters using \(self.strategyName(strategy))")
+                logger.info("Successfully decoded \(encounters.count) encounters using \(self.strategyName(strategy))")
                 
                 // Check if backup is empty
                 if encounters.isEmpty {
@@ -715,7 +715,7 @@ class DataMigrationManager {
                 }
                 
                 try modelContext.save()
-                logger.info("✅ Successfully restored \(importedCount) encounters from backup")
+                logger.info("Successfully restored \(importedCount) encounters from backup")
                 return
                 
             } catch let decodeError as DecodingError {
@@ -761,7 +761,7 @@ class DataMigrationManager {
                         decoder.dateDecodingStrategy = strategy
                         let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersData)
                         
-                        logger.info("✅ Successfully decoded \(encounters.count) encounters from base64 using \(self.strategyName(strategy))")
+                        logger.info("Successfully decoded \(encounters.count) encounters from base64 using \(self.strategyName(strategy))")
                         
                         if encounters.isEmpty {
                             logger.warning("⚠️ Backup file contains no encounters")
@@ -776,7 +776,7 @@ class DataMigrationManager {
                         }
                         
                         try modelContext.save()
-                        logger.info("✅ Successfully restored \(importedCount) encounters from legacy backup")
+                        logger.info("Successfully restored \(importedCount) encounters from legacy backup")
                         return
                     } catch let migrationError as MigrationError {
                         throw migrationError
@@ -806,7 +806,7 @@ class DataMigrationManager {
                         decoder.dateDecodingStrategy = strategy
                         let encounters = try decoder.decode([String: DroneEncounter].self, from: encountersJSON)
                         
-                        logger.info("✅ Successfully decoded \(encounters.count) encounters from dictionary using \(self.strategyName(strategy))")
+                        logger.info("Successfully decoded \(encounters.count) encounters from dictionary using \(self.strategyName(strategy))")
                         
                         if encounters.isEmpty {
                             logger.warning("⚠️ Backup file contains no encounters")
@@ -821,7 +821,7 @@ class DataMigrationManager {
                         }
                         
                         try modelContext.save()
-                        logger.info("✅ Successfully restored \(importedCount) encounters from legacy backup")
+                        logger.info("Successfully restored \(importedCount) encounters from legacy backup")
                         return
                     } catch let migrationError as MigrationError {
                         throw migrationError
@@ -909,7 +909,7 @@ class DataMigrationManager {
         // Save all deletions
         try modelContext.save()
         
-        logger.info("✅ Successfully deleted \(droneEncounters.count) drone encounters and \(aircraftEncounters.count) aircraft from SwiftData")
+        logger.info("Successfully deleted \(droneEncounters.count) drone encounters and \(aircraftEncounters.count) aircraft from SwiftData")
     }
 }
 
