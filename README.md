@@ -367,6 +367,9 @@ Open `WarDragon.xcworkspace` in Xcode 15+.
 
 **Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
 
+**Third-party frameworks used:** SwiftyZeroMQ5, CocoaMQTT, CocoaAsyncSocket, Starscream
+
+
 **License:** [MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
 
 ---
