@@ -26,6 +26,15 @@ except ImportError:
     print("⚠️  paho-mqtt not installed. MQTT features disabled.")
     print("   Install with: pip3 install paho-mqtt")
 
+# Try to import requests for OpenSky API testing
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    print("⚠️  requests not installed. OpenSky API testing disabled.")
+    print("   Install with: pip3 install requests")
+
 class Config:
     def __init__(self):
         # Multicast/ZMQ settings
@@ -50,6 +59,10 @@ class Config:
         
         # ADS-B settings
         self.adsb_port = 8080  # HTTP port for readsb-compatible API
+        
+        # OpenSky Network settings
+        self.opensky_username = None  # Optional: for authenticated requests
+        self.opensky_password = None
         
 class DroneMessageGenerator:
     def __init__(self):
@@ -528,7 +541,7 @@ def test_mqtt_connection(config):
         # Connection callback
         def on_connect(client, userdata, flags, rc):
             if rc == 0:
-                print("✅ Connected to MQTT broker successfully!")
+                print("Connected to MQTT broker successfully!")
             else:
                 print(f"❌ Connection failed with code: {rc}")
         
@@ -582,7 +595,7 @@ def test_mqtt_connection(config):
         })
         client.publish(system_topic, system_payload, qos=0)
         
-        print("\n✅ Test messages published successfully!")
+        print("\nTest messages published successfully!")
         print(f"\n📊 Published to:")
         print(f"   • {drone_topic}")
         print(f"   • {status_topic}")
@@ -616,13 +629,13 @@ def test_tak_connection(config, generator):
             
             print(f"\n🔄 Connecting to {config.tak_host}:{config.tak_port}...")
             sock.connect((config.tak_host, config.tak_port))
-            print("✅ Connected successfully!")
+            print("Connected successfully!")
             
             # Send test CoT message
             print("\n📡 Sending test CoT XML...")
             cot_xml = generator.generate_drone_cot_with_track()
             sock.sendall(cot_xml.encode('utf-8'))
-            print("✅ CoT message sent!")
+            print("CoT message sent!")
             
             time.sleep(1)
             
@@ -630,7 +643,7 @@ def test_tak_connection(config, generator):
             print("📡 Sending system status CoT...")
             status_xml = generator.generate_status_message()
             sock.sendall(status_xml.encode('utf-8'))
-            print("✅ Status message sent!")
+            print("Status message sent!")
             
             sock.close()
             
@@ -643,17 +656,17 @@ def test_tak_connection(config, generator):
             # Send test messages
             cot_xml = generator.generate_drone_cot_with_track()
             sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print("✅ CoT message sent!")
+            print("CoT message sent!")
             
             time.sleep(0.5)
             
             status_xml = generator.generate_status_message()
             sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print("✅ Status message sent!")
+            print("Status message sent!")
             
             sock.close()
         
-        print("\n✅ TAK server test completed successfully!")
+        print("\nTAK server test completed successfully!")
         
     except socket.timeout:
         print("\n❌ Connection timeout")
@@ -727,7 +740,7 @@ def start_adsb_server(config):
     
     try:
         server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
-        print("\n✅ Server started successfully!")
+        print("\nServer started successfully!")
         print("\n📡 Serving random aircraft data...")
         print("   Press Ctrl+C to stop\n")
         
@@ -823,9 +836,287 @@ def configure_adsb_settings(config):
     
     if choice == '1':
         try:
-            config.adsb_port = int(input("Enter port: "))
+            new_port = int(input(f"Enter port [{config.adsb_port}]: "))
+            config.adsb_port = new_port
+            print(f"Port updated to {config.adsb_port}")
         except ValueError:
-            print("Invalid port")
+            print("❌ Invalid port number")
+    
+    input("\nPress Enter to continue...")
+
+def configure_opensky_settings(config):
+    """Configure OpenSky Network settings"""
+    clear_screen()
+    print("🔧 OpenSky Network Configuration")
+    print(f"\nCurrent Settings:")
+    print(f"  Username: {config.opensky_username or 'Not set (anonymous)'}")
+    print(f"  Password: {'*' * len(config.opensky_password) if config.opensky_password else 'Not set'}")
+    
+    print("\n📝 Note: OpenSky Network allows anonymous requests but has rate limits.")
+    print("   Authenticated requests get higher rate limits and more features.")
+    print("   Register at: https://opensky-network.org\n")
+    
+    print("1. Set/Change Username")
+    print("2. Set/Change Password")
+    print("3. Clear Credentials (use anonymous)")
+    print("4. Back")
+    
+    choice = input("\nEnter choice (1-4): ")
+    
+    if choice == '1':
+        username = input("Enter OpenSky username (blank to cancel): ").strip()
+        if username:
+            config.opensky_username = username
+            print(f"Username set to: {username}")
+    elif choice == '2':
+        password = input("Enter OpenSky password (blank to cancel): ").strip()
+        if password:
+            config.opensky_password = password
+            print("Password updated")
+    elif choice == '3':
+        config.opensky_username = None
+        config.opensky_password = None
+        print("Credentials cleared - will use anonymous access")
+    
+    input("\nPress Enter to continue...")
+
+# ============================================================================
+# OPENSKY NETWORK TEST FUNCTIONS
+# ============================================================================
+
+def get_approximate_location():
+    """Try to get approximate location from IP geolocation (requires internet)"""
+    try:
+        # Using a free IP geolocation service
+        response = requests.get('http://ip-api.com/json/', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                return {
+                    'lat': data.get('lat'),
+                    'lon': data.get('lon'),
+                    'city': data.get('city'),
+                    'country': data.get('country')
+                }
+    except:
+        pass
+    return None
+
+def test_opensky_api(config):
+    """Test OpenSky Network API and display live aircraft data"""
+    if not REQUESTS_AVAILABLE:
+        print("❌ OpenSky testing requires requests: pip3 install requests")
+        input("\nPress Enter to continue...")
+        return
+    
+    clear_screen()
+    print("✈️  OpenSky Network API Test")
+    print("\nOpenSky provides LIVE aircraft data from real ADS-B receivers worldwide.")
+    print("Note: This is separate from the local ADS-B readsb simulator.\n")
+    
+    # Try to get user's location
+    print("🔍 Attempting to detect your location...")
+    location = get_approximate_location()
+    
+    if location:
+        print(f"Detected: {location['city']}, {location['country']}")
+        print(f"   Coordinates: {location['lat']:.2f}, {location['lon']:.2f}")
+        default_lat = location['lat']
+        default_lon = location['lon']
+    else:
+        print("⚠️  Could not detect location, using Area 51 region as default")
+        default_lat = 37.25
+        default_lon = -115.75
+    
+    # Get user's area of interest
+    print("\nEnter geographic bounds to search for aircraft:")
+    print("(Leave blank to use detected/default location)\n")
+    
+    try:
+        lat_input = input(f"Center Latitude [{default_lat}]: ").strip()
+        lon_input = input(f"Center Longitude [{default_lon}]: ").strip()
+        radius_input = input("Radius in degrees [0.5]: ").strip()
+        
+        center_lat = float(lat_input) if lat_input else default_lat
+        center_lon = float(lon_input) if lon_input else default_lon
+        radius = float(radius_input) if radius_input else 0.5
+        
+        # Calculate bounding box
+        lamin = center_lat - radius
+        lamax = center_lat + radius
+        lomin = center_lon - radius
+        lomax = center_lon + radius
+        
+        print(f"\n🔍 Searching for aircraft in area:")
+        print(f"   Latitude: {lamin:.2f} to {lamax:.2f}")
+        print(f"   Longitude: {lomin:.2f} to {lomax:.2f}")
+        
+        # Build OpenSky API URL
+        # API documentation: https://openskynetwork.github.io/opensky-api/rest.html
+        url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
+        
+        print(f"\n🔄 Fetching data from OpenSky Network...")
+        print(f"   URL: {url}")
+        
+        # Make API request with authentication if available
+        auth = None
+        if config.opensky_username and config.opensky_password:
+            auth = (config.opensky_username, config.opensky_password)
+            print(f"   Using authenticated access as: {config.opensky_username}")
+        else:
+            print(f"   Using anonymous access (rate limited)")
+        
+        response = requests.get(url, timeout=10, auth=auth)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if not data or 'states' not in data or not data['states']:
+                print("\n⚠️  No aircraft found in this area")
+                print("   Try a different location or larger radius")
+                print("   Note: Not all areas have ADS-B coverage")
+            else:
+                aircraft_count = len(data['states'])
+                timestamp = data.get('time', 'unknown')
+                
+                print(f"\nSuccessfully retrieved data!")
+                print(f"   Timestamp: {datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                print(f"   Aircraft found: {aircraft_count}")
+                print("\n" + "="*80)
+                
+                # Display aircraft details
+                for i, state in enumerate(data['states'][:10]):  # Limit to first 10
+                    icao24 = state[0] or "Unknown"
+                    callsign = (state[1] or "").strip() or "N/A"
+                    origin_country = state[2] or "Unknown"
+                    longitude = state[5]
+                    latitude = state[6]
+                    baro_altitude = state[7]
+                    velocity = state[9]
+                    true_track = state[10]
+                    
+                    print(f"\n✈️  Aircraft #{i+1}:")
+                    print(f"   ICAO24: {icao24}")
+                    print(f"   Callsign: {callsign}")
+                    print(f"   Country: {origin_country}")
+                    
+                    if latitude and longitude:
+                        print(f"   Position: {latitude:.6f}, {longitude:.6f}")
+                    else:
+                        print(f"   Position: Not available")
+                    
+                    if baro_altitude:
+                        print(f"   Altitude: {baro_altitude:.0f} m ({baro_altitude * 3.28084:.0f} ft)")
+                    else:
+                        print(f"   Altitude: Not available")
+                    
+                    if velocity:
+                        print(f"   Speed: {velocity:.1f} m/s ({velocity * 1.94384:.1f} knots)")
+                    else:
+                        print(f"   Speed: Not available")
+                    
+                    if true_track:
+                        print(f"   Heading: {true_track:.1f}°")
+                    else:
+                        print(f"   Heading: Not available")
+                
+                if aircraft_count > 10:
+                    print(f"\n   ... and {aircraft_count - 10} more aircraft")
+                
+                print("\n" + "="*80)
+                
+                # Offer to convert to CoT format
+                convert = input("\n📡 Convert to CoT XML format? (y/n): ").lower()
+                if convert == 'y':
+                    print("\n🔄 Generating CoT messages...")
+                    cot_messages = []
+                    
+                    for state in data['states']:
+                        if state[6] and state[5]:  # Has valid lat/lon
+                            lat = state[6]
+                            lon = state[5]
+                            alt = state[7] or 0
+                            speed = (state[9] or 0) * 1.94384  # m/s to knots
+                            track = state[10] or 0
+                            callsign = (state[1] or "").strip() or state[0]
+                            
+                            now = datetime.now(timezone.utc)
+                            time_str = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                            stale_str = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                            
+                            cot = f"""<?xml version='1.0' encoding='UTF-8'?>
+<event version="2.0" uid="ADSB-{state[0]}" type="a-f-A-C-F" time="{time_str}" start="{time_str}" stale="{stale_str}" how="m-g">
+    <point lat="{lat:.6f}" lon="{lon:.6f}" hae="{alt:.1f}" ce="100.0" le="999999"/>
+    <detail>
+        <contact callsign="{callsign}"/>
+        <track course="{track:.1f}" speed="{speed:.1f}"/>
+        <remarks>OpenSky Network: {state[2]}, ICAO24: {state[0]}</remarks>
+        <color argb="-256"/>
+    </detail>
+</event>"""
+                            cot_messages.append(cot)
+                    
+                    print(f"Generated {len(cot_messages)} CoT messages")
+                    print(f"\nSample CoT message:")
+                    print(cot_messages[0] if cot_messages else "No messages generated")
+                    
+                    # Offer to broadcast
+                    if cot_messages:
+                        broadcast = input(f"\n📤 Broadcast these to {config.broadcast_mode}? (y/n): ").lower()
+                        if broadcast == 'y':
+                            if config.broadcast_mode == 'multicast':
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                                ttl = struct.pack('b', 1)
+                                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+                                
+                                for cot in cot_messages:
+                                    sock.sendto(cot.encode(), (config.multicast_group, config.cot_port))
+                                    time.sleep(0.1)
+                                
+                                sock.close()
+                                print(f"Broadcast {len(cot_messages)} messages via multicast")
+                            else:
+                                context = zmq.Context()
+                                sock = context.socket(zmq.PUB)
+                                sock.bind(f"tcp://{config.zmq_host}:{config.cot_port}")
+                                time.sleep(0.5)  # Let socket bind
+                                
+                                for cot in cot_messages:
+                                    sock.send_string(cot)
+                                    time.sleep(0.1)
+                                
+                                context.destroy()
+                                print(f"Broadcast {len(cot_messages)} messages via ZMQ")
+        
+        elif response.status_code == 401:
+            print("\n❌ Authentication failed")
+            print("   OpenSky API requires authentication for some queries")
+            print("   You may need to register at https://opensky-network.org")
+        
+        elif response.status_code == 404:
+            print("\n❌ API endpoint not found")
+            print("   Check that you have internet connectivity")
+        
+        else:
+            print(f"\n❌ API request failed with status code: {response.status_code}")
+            print(f"   Response: {response.text}")
+    
+    except requests.exceptions.Timeout:
+        print("\n❌ Request timed out")
+        print("   Check your internet connection")
+    
+    except requests.exceptions.ConnectionError:
+        print("\n❌ Connection error")
+        print("   Check your internet connection")
+        print("   OpenSky Network may be unavailable")
+    
+    except ValueError as e:
+        print(f"\n❌ Invalid input: {e}")
+    
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+    
+    input("\n\nPress Enter to continue...")
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -915,7 +1206,7 @@ def quick_test_mode(config, generator):
                         mqtt_client.username_pw_set(config.mqtt_username, config.mqtt_password)
                     mqtt_client.connect(config.mqtt_broker, config.mqtt_port, 60)
                     mqtt_client.loop_start()
-                    print("✅ MQTT client connected")
+                    print("MQTT client connected")
                 except Exception as e:
                     print(f"⚠️  MQTT connection failed: {e}")
                     mqtt_client = None
@@ -927,7 +1218,7 @@ def quick_test_mode(config, generator):
                     tak_socket.connect((config.tak_host, config.tak_port))
                 else:
                     tak_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                print(f"✅ TAK {config.tak_protocol.upper()} connection established")
+                print(f"TAK {config.tak_protocol.upper()} connection established")
             except Exception as e:
                 print(f"⚠️  TAK connection failed: {e}")
                 tak_socket = None
@@ -938,7 +1229,7 @@ def quick_test_mode(config, generator):
                 adsb_server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
                 adsb_thread = threading.Thread(target=adsb_server.serve_forever, daemon=True)
                 adsb_thread.start()
-                print(f"✅ ADS-B server started on port {config.adsb_port}")
+                print(f"ADS-B server started on port {config.adsb_port}")
             except Exception as e:
                 print(f"⚠️  ADS-B server failed: {e}")
                 adsb_server = None
@@ -955,7 +1246,7 @@ def quick_test_mode(config, generator):
             if adsb_server:
                 print(f"   • ADS-B → http://localhost:{config.adsb_port}/data/aircraft.json")
         
-        print(f"\n✅ Your app should now show detections!")
+        print(f"\nYour app should now show detections!")
         print("\nPress Ctrl+C to stop\n")
         
         # Setup sockets
@@ -1212,21 +1503,21 @@ def quick_test_mode(config, generator):
                 try:
                     mqtt_client.loop_stop()
                     mqtt_client.disconnect()
-                    print("✅ MQTT disconnected")
+                    print("MQTT disconnected")
                 except:
                     pass
             
             if tak_socket:
                 try:
                     tak_socket.close()
-                    print("✅ TAK connection closed")
+                    print("TAK connection closed")
                 except:
                     pass
             
             if adsb_server:
                 try:
                     adsb_server.shutdown()
-                    print("✅ ADS-B server stopped")
+                    print("ADS-B server stopped")
                 except:
                     pass
         
@@ -1245,6 +1536,7 @@ def main_menu():
         print(f"  MQTT: {config.mqtt_broker}:{config.mqtt_port} | Topic: {config.mqtt_base_topic}")
         print(f"  TAK: {config.tak_protocol.upper()}://{config.tak_host}:{config.tak_port}")
         print(f"  ADS-B: HTTP Port {config.adsb_port}")
+        print(f"  OpenSky: {'Authenticated (' + config.opensky_username + ')' if config.opensky_username else 'Anonymous (rate limited)'}")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
         print("\n🚀 QUICK TEST (No External Services Required)")
@@ -1267,13 +1559,17 @@ def main_menu():
         print("  T. Test TAK Server Connection & Send CoT")
         
         print("\n✈️  ADS-B TESTS")
-        print("  A. Start ADS-B Readsb Simulator")
+        print("  A. Start ADS-B Readsb Simulator (Local HTTP Server)")
+        
+        print("\n🌐 OPENSKY NETWORK TESTS")
+        print("  O. Test OpenSky API (Live Internet Aircraft Data)")
         
         print("\n⚙️  CONFIGURATION")
         print("  C. Configure Multicast/ZMQ Settings")
         print("  Q. Configure MQTT Settings")
         print("  K. Configure TAK Settings")
         print("  B. Configure ADS-B Settings")
+        print("  S. Configure OpenSky Network Settings")
         
         print("\n  0. Exit")
         
@@ -1301,6 +1597,9 @@ def main_menu():
         elif choice == 'B':
             configure_adsb_settings(config)
             continue
+        elif choice == 'S':
+            configure_opensky_settings(config)
+            continue
         
         # MQTT test
         elif choice == 'M':
@@ -1315,6 +1614,11 @@ def main_menu():
         # ADS-B test
         elif choice == 'A':
             start_adsb_server(config)
+            continue
+        
+        # OpenSky test
+        elif choice == 'O':
+            test_opensky_api(config)
             continue
         
         if choice in ['1', '2', '3', '4', '5', '6', '7', '8']:

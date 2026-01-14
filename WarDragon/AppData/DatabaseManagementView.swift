@@ -380,7 +380,7 @@ struct DatabaseManagementView: View {
             let encountersAdded = encountersAfter - encountersBefore
             
             // Build success message
-            var message = "✅ Backup restored successfully!\n\n"
+            var message = "Backup restored successfully!\n\n"
             message += "File: \(fileURL.lastPathComponent)\n"
             if encountersAdded > 0 {
                 message += "Added: \(encountersAdded) new encounter\(encountersAdded == 1 ? "" : "s")\n"

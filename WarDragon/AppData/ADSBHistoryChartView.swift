@@ -236,7 +236,7 @@ struct ADSBHistoryChartView: View {
         
         do {
             adsbEncounters = try modelContext.fetch(descriptor)
-            print("✅ Loaded \(adsbEncounters.count) aircraft from SwiftData")
+            print("Loaded \(adsbEncounters.count) aircraft from SwiftData")
         } catch {
             print("❌ Failed to fetch ADSB encounters: \(error)")
             adsbEncounters = []
@@ -262,7 +262,7 @@ struct ADSBHistoryChartView: View {
             // Clear local array after successful save
             adsbEncounters.removeAll()
             
-            print("✅ Successfully deleted all aircraft")
+            print("Successfully deleted all aircraft")
         } catch {
             print("❌ Failed to delete all aircraft: \(error)")
             
