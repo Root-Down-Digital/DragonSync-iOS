@@ -111,7 +111,7 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 **Receive Data From:**
 - **ZMQ** - Ports 4224 (detections) and 4225 (system status) from DroneID backend
 - **Multicast CoT** - 239.2.3.1:6969 from DragonSync.py wrapper
-- **ADS-B HTTP** - readsb, tar1090, dump1090 JSON feeds
+- **ADS-B** - readsb, tar1090, dump1090 JSON feeds and [OpenSky Network](https://opensky-network.org)
 - **Background Mode** - Continuous monitoring with local notifications
 
 ### Reference 
@@ -329,16 +329,16 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 ## Connection Protocols
 
 **ZMQ (Recommended)** - Full JSON telemetry with complete detection data
-- Port 4224: Drone and aircraft detections
+- Port 4224: Drone detections
 - Port 4225: System health and status
-
+  
 **Multicast CoT** - TAK/ATAK integration with reduced detail
 - Address: 239.2.3.1:6969
 - Protocol: CoT XML
 
-**ADS-B HTTP** - Aircraft tracking from standard feeds
+**ADS-B HTTP** - Aircraft tracking from standard feeds or OpenSky
 - Endpoints: readsb, tar1090, dump1090
-- Format: JSON
+- OpenSky Network: Use with or without an account
 
 **MQTT** - Publish to Home Assistant or broker
 - Formats: JSON, Home Assistant discovery
@@ -367,8 +367,17 @@ Open `WarDragon.xcworkspace` in Xcode 15+.
 
 **Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
 
-**Third-party frameworks used:** SwiftyZeroMQ5, CocoaMQTT, CocoaAsyncSocket, Starscream
+**Third-party frameworks used:** 
+```
+SwiftyZeroMQ5
+CocoaMQTT
+CocoaAsyncSocket
+Starscream
+```
 
+API Data Sources: 
+- faa.gov
+- opensky-network.org
 
 **License:** [MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
 
