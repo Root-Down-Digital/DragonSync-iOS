@@ -16,6 +16,11 @@ struct DashboardView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     @ObservedObject var spectrumViewModel: SpectrumData.SpectrumViewModel
     
+    // Check if OpenSky is enabled by looking at the service
+    private var isOpenSkyEnabled: Bool {
+        OpenSkyService.shared.isEnabled
+    }
+    
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -25,8 +30,9 @@ struct DashboardView: View {
                 // Active Drones Card
                 DronesOverviewCard(cotViewModel: cotViewModel)
                 
-                // ADS-B Aircraft Card (if enabled)
-                if Settings.shared.adsbEnabled {
+                // Aircraft Card (ADS-B or OpenSky)
+                // Show if either ADS-B is enabled OR OpenSky is enabled OR we have aircraft tracks
+                if Settings.shared.adsbEnabled || isOpenSkyEnabled || !cotViewModel.aircraftTracks.isEmpty {
                     AircraftOverviewCard(cotViewModel: cotViewModel)
                 }
                 
@@ -559,6 +565,28 @@ struct AircraftOverviewCard: View {
         cotViewModel.aircraftTracks.filter { !$0.isStale }
     }
     
+    // Separate OpenSky aircraft (ICAO24 is 6 chars) from ADS-B (other hex formats)
+    private var openSkyAircraft: [Aircraft] {
+        activeAircraft.filter { $0.hex.count == 6 }
+    }
+    
+    private var adsbAircraft: [Aircraft] {
+        activeAircraft.filter { $0.hex.count != 6 }
+    }
+    
+    private var cardTitle: String {
+        let hasOpenSky = !openSkyAircraft.isEmpty
+        let hasADSB = !adsbAircraft.isEmpty
+        
+        if hasOpenSky && hasADSB {
+            return "AIRCRAFT (ADS-B + OPENSKY)"
+        } else if hasOpenSky {
+            return "AIRCRAFT (OPENSKY)"
+        } else {
+            return "ADS-B AIRCRAFT"
+        }
+    }
+    
     private var nearbyAircraft: [Aircraft] {
         guard let userLocation = LocationManager.shared.userLocation else { return [] }
         
@@ -587,7 +615,7 @@ struct AircraftOverviewCard: View {
             HStack {
                 Image(systemName: "airplane.departure")
                     .foregroundColor(.cyan)
-                Text("ADS-B AIRCRAFT")
+                Text(cardTitle)
                     .font(.appHeadline)
                 Spacer()
                 Text("\(activeAircraft.count)")
@@ -604,19 +632,36 @@ struct AircraftOverviewCard: View {
                     color: .cyan
                 )
                 
-                StatBox(
-                    title: "NEARBY",
-                    value: "\(nearbyAircraft.count)",
-                    icon: "location.fill",
-                    color: .blue
-                )
-                
-                StatBox(
-                    title: "LOW ALT",
-                    value: "\(lowFlying.count)",
-                    icon: "arrow.down.circle",
-                    color: lowFlying.isEmpty ? .gray : .orange
-                )
+                // Show breakdown if we have both sources
+                if !openSkyAircraft.isEmpty && !adsbAircraft.isEmpty {
+                    StatBox(
+                        title: "OPENSKY",
+                        value: "\(openSkyAircraft.count)",
+                        icon: "globe",
+                        color: .blue
+                    )
+                    
+                    StatBox(
+                        title: "ADS-B",
+                        value: "\(adsbAircraft.count)",
+                        icon: "antenna.radiowaves.left.and.right",
+                        color: .green
+                    )
+                } else {
+                    StatBox(
+                        title: "NEARBY",
+                        value: "\(nearbyAircraft.count)",
+                        icon: "location.fill",
+                        color: .blue
+                    )
+                    
+                    StatBox(
+                        title: "LOW ALT",
+                        value: "\(lowFlying.count)",
+                        icon: "arrow.down.circle",
+                        color: lowFlying.isEmpty ? .gray : .orange
+                    )
+                }
                 
                 if !emergencyAircraft.isEmpty {
                     StatBox(
