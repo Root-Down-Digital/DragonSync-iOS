@@ -24,7 +24,6 @@ struct WarDragonApp: App {
     // SwiftData model container with recovery
     let modelContainer: ModelContainer = {
         let schema = Schema([
-            AppSettings.self,
             StoredDroneEncounter.self,
             StoredFlightPoint.self,
             StoredSignature.self,
@@ -97,7 +96,6 @@ struct WarDragonApp: App {
     private func configureOpenSkyService() async {
         let context = modelContainer.mainContext
         OpenSkyService.shared.configure(with: context)
-        Settings.shared.configure(with: context)
     }
     
     @MainActor
