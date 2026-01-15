@@ -29,7 +29,8 @@ struct WarDragonApp: App {
             StoredSignature.self,
             StoredADSBEncounter.self,
             OpenSkySettings.self,
-            CachedAircraft.self
+            CachedAircraft.self,
+            AppSettings.self
         ])
         
         let modelConfiguration = ModelConfiguration(
@@ -96,6 +97,7 @@ struct WarDragonApp: App {
     private func configureOpenSkyService() async {
         let context = modelContainer.mainContext
         OpenSkyService.shared.configure(with: context)
+        Settings.shared.configure(with: context)
     }
     
     @MainActor

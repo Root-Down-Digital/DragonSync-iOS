@@ -2505,9 +2505,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         Task { @MainActor in
             if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
                 self.droneSignatures[index] = signature
-                print("📍 Updated existing signature for \(signature.primaryId.id)")
+                print(" Updated existing signature for \(signature.primaryId.id)")
             } else {
-                print("📍 Added new signature for \(signature.primaryId.id)")
+                print(" Added new signature for \(signature.primaryId.id)")
                 self.droneSignatures.append(signature)
             }
         }
@@ -2527,12 +2527,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 existing.flightPath.last?.altitude != signature.position.altitude
                 
                 if hasNewPosition {
-                    print("📍 Added new position to existing encounter: \(signature.primaryId.id)")
+                    print(" Added new position to existing encounter: \(signature.primaryId.id)")
                 } else {
-                    print("📍 Updated existing encounter data: \(signature.primaryId.id)")
+                    print(" Updated existing encounter data: \(signature.primaryId.id)")
                 }
             } else {
-                print("📍 Created new encounter: \(signature.primaryId.id)")
+                print(" Created new encounter: \(signature.primaryId.id)")
             }
         }
     }
