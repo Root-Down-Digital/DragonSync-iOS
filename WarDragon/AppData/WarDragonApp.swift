@@ -24,13 +24,13 @@ struct WarDragonApp: App {
     // SwiftData model container with recovery
     let modelContainer: ModelContainer = {
         let schema = Schema([
+            AppSettings.self,
             StoredDroneEncounter.self,
             StoredFlightPoint.self,
             StoredSignature.self,
             StoredADSBEncounter.self,
             OpenSkySettings.self,
-            CachedAircraft.self,
-            AppSettings.self
+            CachedAircraft.self
         ])
         
         let modelConfiguration = ModelConfiguration(

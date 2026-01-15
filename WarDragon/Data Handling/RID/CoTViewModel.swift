@@ -628,8 +628,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.setupLatticeClient()
             
             // Delay ADS-B setup to give the server time to be ready
-            // This prevents timeouts when app launches before readsb is fully running
-            // Increased to 5 seconds to give more time for external servers to start
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
             await self.setupADSBClient()
             
