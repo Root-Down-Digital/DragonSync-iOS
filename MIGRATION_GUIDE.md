@@ -44,7 +44,7 @@ This app has been upgraded to use SwiftData for persistent storage instead of Us
 - Logs detailed information about what was migrated
 - Ensures no data was lost in the process
 
-```
+
 
 ## For Developers
 
