@@ -2161,6 +2161,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             return
         }
         
+        // IMPORTANT: Filter out aircraft messages - these should NOT be treated as drones
+        // Aircraft messages have UIDs like "aircraft-HEXCODE" or contain "adsb" in them
+        if message.uid.hasPrefix("aircraft-") || 
+           message.uid.contains("adsb") ||
+           message.idType == "ADS-B Aircraft" ||
+           message.idType.contains("Aircraft") {
+            print("⚠️ Filtering out aircraft message - UID: \(message.uid), Type: \(message.idType)")
+            return
+        }
+        
         let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
         var mac: String? = nil
         if let basicIdMac = (message.rawMessage["Basic ID"] as? [String: Any])?["MAC"] as? String {
