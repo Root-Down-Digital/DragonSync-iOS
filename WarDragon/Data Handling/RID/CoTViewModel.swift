@@ -3689,19 +3689,85 @@ extension CoTViewModel {
             let proximityThreshold: Double = 5000 // 5km in meters
             let minAltitude: Double = 1000 // Only alert for low-flying aircraft below 1000ft
             
+            // Track which aircraft have alert rings
+            var activeAircraftIds = Set<String>()
+            
             for ac in aircraft {
-                guard let coord = ac.coordinate,
-                      let altitude = ac.altitudeFeet,
-                      altitude < Int(minAltitude) else { continue }
+                let aircraftId = "aircraft-\(ac.hex)"
                 
-                let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-                let distance = userLocation.distance(from: aircraftLocation)
-                
-                if distance <= proximityThreshold {
-                    self.sendAircraftProximityNotification(for: ac, distance: distance)
+                // Check if aircraft has coordinates
+                if let coord = ac.coordinate,
+                   let altitude = ac.altitudeFeet,
+                   altitude < Int(minAltitude) {
+                    
+                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let distance = userLocation.distance(from: aircraftLocation)
+                    
+                    if distance <= proximityThreshold {
+                        self.sendAircraftProximityNotification(for: ac, distance: distance)
+                        
+                        // Create alert ring for aircraft with RSSI data
+                        if let rssi = ac.rssi {
+                            self.updateAircraftAlertRing(for: ac, coordinate: coord, rssi: rssi)
+                            activeAircraftIds.insert(aircraftId)
+                        }
+                    }
+                }
+                // Also handle aircraft with RSSI but no coordinates (similar to drones)
+                else if ac.rssi != nil && ac.rssi! != 0 {
+                    self.updateAircraftAlertRing(for: ac, coordinate: userLocation.coordinate, rssi: ac.rssi!)
+                    activeAircraftIds.insert(aircraftId)
                 }
             }
+            
+            // Clean up alert rings for aircraft no longer in proximity or without RSSI
+            self.alertRings.removeAll { ring in
+                ring.droneId.hasPrefix("aircraft-") && !activeAircraftIds.contains(ring.droneId)
+            }
         }
+    }
+    
+    /// Create or update alert ring for aircraft based on RSSI
+    @MainActor
+    private func updateAircraftAlertRing(for aircraft: Aircraft, coordinate: CLLocationCoordinate2D, rssi: Double) {
+        let aircraftId = "aircraft-\(aircraft.hex)"
+        
+        // Calculate distance/radius from RSSI
+        // ADS-B RSSI is typically in dBFS (negative values, similar to dBm)
+        let distance: Double
+        
+        // ADS-B RSSI is usually in dBFS format (e.g., -10 to -40)
+        // Convert to approximate distance using path loss model
+        if rssi >= -10 {
+            distance = 100.0  // Very close, strong signal
+        } else if rssi >= -20 {
+            distance = 500.0  // Close
+        } else if rssi >= -30 {
+            distance = 1000.0  // Medium distance
+        } else if rssi >= -40 {
+            distance = 2000.0  // Far
+        } else {
+            distance = 5000.0  // Very far/weak signal
+        }
+        
+        // Create or update alert ring
+        if let index = self.alertRings.firstIndex(where: { $0.droneId == aircraftId }) {
+            self.alertRings[index] = AlertRing(
+                droneId: aircraftId,
+                centerCoordinate: coordinate,
+                radius: distance,
+                rssi: Int(rssi)
+            )
+        } else {
+            self.alertRings.append(AlertRing(
+                droneId: aircraftId,
+                centerCoordinate: coordinate,
+                radius: distance,
+                rssi: Int(rssi)
+            ))
+        }
+        
+        print("Created/Updated alert ring for aircraft \(aircraft.displayName): radius \(Int(distance))m, RSSI: \(Int(rssi))dBFS")
     }
     
     /// Send notification for nearby aircraft
@@ -3760,6 +3826,12 @@ extension CoTViewModel {
         
         if let track = aircraft.track {
             data["track"] = track
+        }
+        
+        // Include RSSI data if available
+        if let rssi = aircraft.rssi {
+            data["rssi"] = rssi
+            data["rssi_dbfs"] = rssi
         }
         
         var metadata: [String: String] = [
