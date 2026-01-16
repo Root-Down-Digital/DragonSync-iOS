@@ -133,9 +133,14 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ---
 
-## Option 1: WarDragon Pro (Turnkey)
+## Option 1: WarDragon Pro
 
-Pre-configured system with ANTSDR E200, RX5808, GPS hardware.
+Pre-configured system with ANTSDR E200, RX5808, GPS hardware. 
+
+Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes. 
+
+The hardware may also have other issues working with the app if commands are not used as referenced below
+
 
 **Quick Start:**
 1. Power on device
