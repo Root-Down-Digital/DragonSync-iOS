@@ -137,9 +137,9 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 Pre-configured system with ANTSDR E200, RX5808, GPS hardware. 
 
-Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes. 
+Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes, but should be working with the latest version on the WarDragon. Be sure to `git pull` in both DroneID and DragonSync directories. 
 
-The hardware may also have other issues working with the app if commands are not used as referenced below
+The hardware may also have other issues working with the app if commands are not used as referenced below. Use the troubleshooting guide to fix common issues. 
 
 
 **Quick Start:**
