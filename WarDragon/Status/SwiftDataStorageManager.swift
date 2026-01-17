@@ -23,9 +23,108 @@ class SwiftDataStorageManager: ObservableObject {
     // Reference to model context (will be set from ContentView)
     var modelContext: ModelContext?
     
-    private init() {}
+    // Batch saving optimization
+    private var needsSave = false
+    private var saveTimer: Timer?
+    
+    private init() {
+        // Setup auto-save timer (saves every 3 seconds if there are changes)
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.saveIfNeeded()
+        }
+    }
+    
+    private func saveIfNeeded() {
+        guard needsSave, let context = modelContext else { return }
+        
+        do {
+            try context.save()
+            needsSave = false
+            
+            // Update in-memory cache after save
+            updateInMemoryCache()
+            
+            #if DEBUG
+            logger.debug("Auto-saved pending changes")
+            #endif
+        } catch {
+            logger.error("Auto-save failed: \(error.localizedDescription)")
+        }
+    }
+    
+    func forceSave() {
+        guard let context = modelContext else { return }
+        do {
+            try context.save()
+            needsSave = false
+            logger.info("Force saved all changes")
+        } catch {
+            logger.error("Force save failed: \(error.localizedDescription)")
+        }
+    }
     
     // MARK: - Save Operations
+    
+    /// Save an encounter directly from the legacy DroneEncounter format
+    /// This is optimized to avoid re-parsing and re-fetching
+    func saveEncounterDirect(_ encounter: DroneEncounter) {
+        guard let context = modelContext else {
+            logger.error("ModelContext not set")
+            return
+        }
+        
+        // Fetch or create SwiftData encounter
+        let stored = fetchOrCreateEncounter(id: encounter.id, message: nil, context: context)
+        
+        // Update scalar fields
+        stored.firstSeen = encounter.firstSeen
+        stored.lastSeen = encounter.lastSeen
+        stored.customName = encounter.customName
+        stored.trustStatus = encounter.trustStatus
+        stored.metadata = encounter.metadata
+        stored.macAddresses = Array(encounter.macHistory)
+        
+        // Only update flight points if count changed (optimization)
+        if stored.flightPoints.count != encounter.flightPath.count {
+            stored.flightPoints.forEach { context.delete($0) }
+            stored.flightPoints.removeAll()
+            
+            for point in encounter.flightPath {
+                let storedPoint = StoredFlightPoint(
+                    latitude: point.latitude,
+                    longitude: point.longitude,
+                    altitude: point.altitude,
+                    timestamp: point.timestamp,
+                    homeLatitude: point.homeLatitude,
+                    homeLongitude: point.homeLongitude,
+                    isProximityPoint: point.isProximityPoint,
+                    proximityRssi: point.proximityRssi,
+                    proximityRadius: point.proximityRadius
+                )
+                stored.flightPoints.append(storedPoint)
+            }
+        }
+        
+        // Only update signatures if count changed (optimization)
+        if stored.signatures.count != encounter.signatures.count {
+            stored.signatures.forEach { context.delete($0) }
+            stored.signatures.removeAll()
+            
+            for sig in encounter.signatures {
+                let storedSig = StoredSignature(
+                    timestamp: sig.timestamp,
+                    rssi: sig.rssi,
+                    speed: sig.speed,
+                    height: sig.height,
+                    mac: sig.mac
+                )
+                stored.signatures.append(storedSig)
+            }
+        }
+        
+        // Mark that we need to save
+        needsSave = true
+    }
     
     func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
         guard let context = modelContext else {
@@ -158,16 +257,10 @@ class SwiftDataStorageManager: ObservableObject {
         // Update last seen
         encounter.lastSeen = Date()
         
-        // Save context
-        do {
-            try context.save()
-            logger.debug("Saved encounter: \(encounter.id)")
-            
-            // Update in-memory cache for backward compatibility
-            updateInMemoryCache()
-        } catch {
-            logger.error("Failed to save encounter: \(error.localizedDescription)")
-        }
+        // Mark that we need to save, but don't save immediately
+        needsSave = true
+        
+        // Don't update in-memory cache on every update - let the timer handle it
     }
     
     // MARK: - Query Operations
@@ -368,7 +461,7 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    private func fetchOrCreateEncounter(id: String, message: CoTViewModel.CoTMessage, context: ModelContext) -> StoredDroneEncounter {
+    private func fetchOrCreateEncounter(id: String, message: CoTViewModel.CoTMessage?, context: ModelContext) -> StoredDroneEncounter {
         if let existing = fetchEncounter(id: id) {
             return existing
         }

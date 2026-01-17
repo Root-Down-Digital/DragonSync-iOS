@@ -29,12 +29,12 @@ struct ADSBSettingsView: View {
             if settings.adsbEnabled {
                 Section("Readsb Configuration") {
                     VStack(alignment: .leading, spacing: 2) {
-                        TextField("Base URL", text: $settings.adsbReadsbURL, prompt: Text("http://192.168.1.100:8080"))
+                        TextField("Base URL", text: $settings.adsbReadsbURL, prompt: Text("192.168.1.100:8080"))
                             .textContentType(.URL)
                             .autocapitalization(.none)
                             .keyboardType(.URL)
                         
-                        Text("Server address without path")
+                        Text("Server address without path (http:// optional)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -271,7 +271,7 @@ struct ADSBSettingsView: View {
                         
                         Text("3. Enter base URL and data path above:")
                             .font(.caption)
-                        Text("   Base: http://your-pi-ip:8080")
+                        Text("   Base: your-pi-ip:8080")
                             .font(.caption)
                             .fontDesign(.monospaced)
                         Text("   Path: /data/aircraft.json")

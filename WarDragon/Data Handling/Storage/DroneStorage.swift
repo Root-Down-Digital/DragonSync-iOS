@@ -264,10 +264,81 @@ class DroneStorageManager: ObservableObject {
     // Published encounters dictionary for backward compatibility
     @Published private(set) var encounters: [String: DroneEncounter] = [:]
     
+    // Performance optimization: batch saves
+    private var pendingSaves: Set<String> = []
+    private var saveTimer: Timer?
+    private let saveInterval: TimeInterval = 30.0  // Save every 30 seconds instead of constantly
+    private var lastUpdateTimes: [String: Date] = [:]  // Track when each encounter was last updated
+    
     init() {
         // Migration will happen automatically in WarDragonApp
         // Don't load here - wait for ModelContext to be set in ContentView.onAppear()
         // loadFromStorage() will be called after ModelContext is injected
+        
+        // Start the batch save timer
+        setupBatchSaveTimer()
+    }
+    
+    private func setupBatchSaveTimer() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: saveInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.flushPendingSaves()
+            }
+        }
+    }
+    
+    private func flushPendingSaves() {
+        guard !pendingSaves.isEmpty else { return }
+        
+        // Only save encounters that haven't been updated recently (5 seconds)
+        let now = Date()
+        let staleThreshold: TimeInterval = 5.0
+        
+        var idsToSave: [String] = []
+        var idsToKeep: Set<String> = []
+        
+        for id in pendingSaves {
+            if let lastUpdate = lastUpdateTimes[id],
+               now.timeIntervalSince(lastUpdate) < staleThreshold {
+                // Still actively updating, don't save yet
+                idsToKeep.insert(id)
+            } else {
+                // Hasn't been updated recently, safe to save
+                idsToSave.append(id)
+            }
+        }
+        
+        pendingSaves = idsToKeep
+        
+        guard !idsToSave.isEmpty else { return }
+        
+        print("💾 Saving \(idsToSave.count) stale encounters to SwiftData (keeping \(idsToKeep.count) active)")
+        
+        // Save in background to avoid blocking UI
+        Task.detached(priority: .background) { [weak self] in
+            guard let self = self else { return }
+            
+            for id in idsToSave {
+                await MainActor.run {
+                    if let encounter = self.encounters[id] {
+                        // Save directly without re-fetching everything
+                        self.swiftDataManager.saveEncounterDirect(encounter)
+                    }
+                }
+            }
+        }
+    }
+    
+    deinit {
+        saveTimer?.invalidate()
+        // Can't call main actor methods from deinit
+        // Pending saves will be handled by the timer or explicit forceSave() calls
+    }
+    
+    // Force save (call when app goes to background)
+    func forceSave() {
+        flushPendingSaves()
     }
     
     nonisolated func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
@@ -288,7 +359,6 @@ class DroneStorageManager: ObservableObject {
             if let existingPair = encounters.first(where: { $0.value.metadata["mac"] == mac }) {
                 targetId = existingPair.key
                 targetEncounter = existingPair.value
-                print("Found existing encounter by MAC: \(mac) -> \(targetId)")
             } else {
                 targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
             }
@@ -296,7 +366,6 @@ class DroneStorageManager: ObservableObject {
             if let existingPair = encounters.first(where: { $0.value.metadata["caaRegistration"] == caaReg }) {
                 targetId = existingPair.key
                 targetEncounter = existingPair.value
-                print("Found existing encounter by CAA: \(caaReg) -> \(targetId)")
             } else {
                 targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
             }
@@ -329,12 +398,10 @@ class DroneStorageManager: ObservableObject {
                 if distance > 0.1 || timeGap > 2 {
                     targetEncounter.flightPath.append(newPoint)
                     didAddPoint = true
-                    print("Added flight point: (\(lat), \(lon)) - moved \(String(format: "%.1f", distance))m")
                 }
             } else {
                 targetEncounter.flightPath.append(newPoint)
                 didAddPoint = true
-                print("Added first flight point: (\(lat), \(lon))")
             }
         }
         
@@ -360,7 +427,6 @@ class DroneStorageManager: ObservableObject {
                 if existingProximityPoints.count < 3 {
                     targetEncounter.flightPath.append(proximityPoint)
                     targetEncounter.metadata["hasProximityPoints"] = "true"
-                    print("Added proximity point with RSSI: \(message.rssi!)dBm (Total detections: \(currentCount + 1))")
                 } else {
                     let currentRssi = Double(message.rssi!)
                     let rssiValues = existingProximityPoints.compactMap { $0.proximityRssi }
@@ -372,7 +438,6 @@ class DroneStorageManager: ObservableObject {
                         point.proximityRssi != minRssi && point.proximityRssi != maxRssi
                     }) {
                         targetEncounter.flightPath[replaceIndex] = proximityPoint
-                        print("Replaced proximity point with latest RSSI: \(message.rssi!)dBm (Total detections: \(currentCount + 1))")
                     }
                 }
             }
@@ -432,11 +497,9 @@ class DroneStorageManager: ObservableObject {
                     let existingEntries = Set(existingHistory.components(separatedBy: ";"))
                     if !existingEntries.contains(where: { $0.hasSuffix(":\(pilotLat),\(pilotLon)") }) {
                         updatedMetadata["pilotHistory"] = existingHistory + ";" + pilotEntry
-                        print("Saved NEW pilot location: (\(pilotLat), \(pilotLon))")
                     }
                 } else {
                     updatedMetadata["pilotHistory"] = pilotEntry
-                    print("Saved FIRST pilot location: (\(pilotLat), \(pilotLon))")
                 }
             }
         }
@@ -462,11 +525,9 @@ class DroneStorageManager: ObservableObject {
                     let existingEntries = Set(existingHistory.components(separatedBy: ";"))
                     if !existingEntries.contains(where: { $0.hasSuffix(":\(homeLat),\(homeLon)") }) {
                         updatedMetadata["homeHistory"] = existingHistory + ";" + homeEntry
-                        print("Saved NEW home location: (\(homeLat), \(homeLon))")
                     }
                 } else {
                     updatedMetadata["homeHistory"] = homeEntry
-                    print("Saved FIRST home location: (\(homeLat), \(homeLon))")
                 }
             }
         }
@@ -489,13 +550,18 @@ class DroneStorageManager: ObservableObject {
         
         encounters[targetId] = targetEncounter
         
-        // Save to SwiftData via manager
-        swiftDataManager.saveEncounter(message, monitorStatus: monitorStatus)
+        // Track last update time
+        lastUpdateTimes[targetId] = Date()
         
-        // Update in-memory cache
-        updateInMemoryCache()
+        // Queue this encounter for batched save instead of saving immediately
+        pendingSaves.insert(targetId)
         
-        print("Saved encounter \(targetId) - \(targetEncounter.flightPath.count) total points")
+        // Only log significant events, not every update
+        #if DEBUG
+        if didAddPoint {
+            print("✈️ \(targetId): Added point - \(targetEncounter.flightPath.count) total")
+        }
+        #endif
     }
     
     private func createNewEncounter(_ id: String, _ message: CoTViewModel.CoTMessage) -> DroneEncounter {

@@ -298,17 +298,13 @@ class ZMQHandler: ObservableObject {
                                     self.isSubscriptionActive = true
                                     
                                     if socket === self.telemetrySocket {
-                                        // MARK: Check for FPV messages and pass them directly
-                                        if jsonString.contains("AUX_ADV_IND") || jsonString.contains("FPV Detection") {
-                                            print("FPV message detected in ZMQ telemetry")
-                                            DispatchQueue.main.async {
-                                                onTelemetry(jsonString)
-                                            }
-                                        } else if let xmlMessage = self.convertTelemetryToXML(jsonString) {
+                                        // Try to convert any telemetry message to XML
+                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
                                             DispatchQueue.main.async {
                                                 onTelemetry(xmlMessage)
                                             }
                                         }
+                                        // If conversion fails, message is silently skipped (likely invalid/incomplete)
                                     } else if socket === self.statusSocket {
                                         if let xmlMessage = self.convertStatusToXML(jsonString) {
                                             DispatchQueue.main.async {
@@ -378,15 +374,30 @@ class ZMQHandler: ObservableObject {
             messageFormat = .sdr
         }
         
-        guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        // Try to parse as array first (BLE messages)
+        if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            // Only log if we get a valid result (filtering happens in processJsonArray)
+            if let result = processJsonArray(jsonArray) {
+                print("→ Processed BLE message successfully")
+                return result
+            }
             return nil
         }
         
-        return processJsonObject(jsonObject)
+        // Fallback to dictionary parsing (WiFi/SDR messages)
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            // Silently fail - likely corrupt or empty data
+            return nil
+        }
+        
+        if let result = processJsonObject(jsonObject) {
+            print("→ Processed WiFi/SDR message successfully")
+            return result
+        }
+        return nil
     }
     
     func processJsonObject(_ jsonObject: [String: Any]) -> String? {
-        print("→ processJsonObject CALLED")
         
         // Extract messages from the object - try both with and without spaces
         var basicId = jsonObject["Basic ID"] as? [String: Any]
@@ -452,7 +463,7 @@ class ZMQHandler: ObservableObject {
         }
         
         if basicId == nil {
-            print("ERROR: No Basic ID in JSON")
+            // Silently skip - this is expected for incomplete message fragments
             return nil
         }
         
@@ -619,7 +630,8 @@ class ZMQHandler: ObservableObject {
         </event>
         """
         
-        print("GENERATED XML: \(xmlOutput)")
+        // Only log if debug mode is needed (comment out for production)
+        // print("GENERATED XML: \(xmlOutput)")
         return xmlOutput
     }
     
@@ -691,15 +703,38 @@ class ZMQHandler: ObservableObject {
         var index: Int?
         var runtime: Int?
         
-        // Find first Basic ID with a valid id field
+        // Find best Basic ID with a valid id field
+        // Priority: Serial Number > CAA Registration > any other with valid ID
+        var serialNumberId: [String: Any]?
+        var caaId: [String: Any]?
+        var fallbackId: [String: Any]?
+        
         for obj in jsonArray {
             if let basicIdMsg = obj["Basic ID"] as? [String: Any],
                let id = basicIdMsg["id"] as? String,
                !id.isEmpty {
-                basicId = basicIdMsg
-                break
+                let idType = basicIdMsg["id_type"] as? String ?? ""
+                
+                if idType.contains("Serial Number") {
+                    serialNumberId = basicIdMsg
+                    break // Serial Number is highest priority, use it immediately
+                } else if idType.contains("CAA") {
+                    caaId = basicIdMsg
+                } else if fallbackId == nil {
+                    fallbackId = basicIdMsg
+                }
             }
         }
+        
+        // Select the best available Basic ID
+        basicId = serialNumberId ?? caaId ?? fallbackId
+        
+        // If no valid Basic ID found, skip this message silently
+        guard basicId != nil else {
+            // Silently skip - these are incomplete message fragments (MAC-only beacons)
+            return nil
+        }
+        
         // Collect other messages
         for obj in jsonArray {
             if let locationMsg = obj["Location/Vector Message"] as? [String: Any] { location = locationMsg }

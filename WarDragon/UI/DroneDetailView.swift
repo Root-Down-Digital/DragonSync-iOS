@@ -15,6 +15,21 @@ struct DroneDetailView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     @State private var mapCameraPosition: MapCameraPosition
     @State private var showAllLocations = true
+    @State private var selectedMapStyle: MapStyleOption = .standard
+    
+    enum MapStyleOption {
+        case standard
+        case hybrid
+        case satellite
+        
+        var mapStyle: MapStyle {
+            switch self {
+            case .standard: return .standard
+            case .hybrid: return .hybrid
+            case .satellite: return .imagery
+            }
+        }
+    }
     
     init(message: CoTViewModel.CoTMessage, flightPath: [CLLocationCoordinate2D], cotViewModel: CoTViewModel) {
         self.message = message
@@ -92,6 +107,35 @@ struct DroneDetailView: View {
                 Text(message.isFPVDetection ? "Signal Range Map" : "Flight Map")
                     .font(.headline)
                 Spacer()
+                
+                // Map Style Picker
+                Menu {
+                    Button {
+                        selectedMapStyle = .standard
+                    } label: {
+                        Label("Standard", systemImage: selectedMapStyle == .standard ? "checkmark" : "map")
+                    }
+                    
+                    Button {
+                        selectedMapStyle = .hybrid
+                    } label: {
+                        Label("Hybrid", systemImage: selectedMapStyle == .hybrid ? "checkmark" : "map.fill")
+                    }
+                    
+                    Button {
+                        selectedMapStyle = .satellite
+                    } label: {
+                        Label("Satellite", systemImage: selectedMapStyle == .satellite ? "checkmark" : "globe.americas.fill")
+                    }
+                } label: {
+                    Image(systemName: "map")
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                }
+                
                 if !message.isFPVDetection {
                     Button {
                         showAllLocations.toggle()
@@ -187,6 +231,7 @@ struct DroneDetailView: View {
                     }
                 }
             }
+            .mapStyle(selectedMapStyle.mapStyle)
             .frame(height: 300)
             .cornerRadius(12)
             .onAppear {

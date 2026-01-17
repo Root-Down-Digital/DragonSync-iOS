@@ -19,8 +19,23 @@ struct LiveMapView: View {
     @State private var lastProcessedDrones: [String: CoTViewModel.CoTMessage] = [:]
     @State private var shouldUpdateMapView: Bool = false
     @State private var userHasMovedMap = false
+    @State private var selectedMapStyle: MapStyleOption = .standard
     let filterMode: FilterMode
     let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+    
+    enum MapStyleOption {
+        case standard
+        case hybrid
+        case satellite
+        
+        var mapStyle: MapStyle {
+            switch self {
+            case .standard: return .standard
+            case .hybrid: return .hybrid
+            case .satellite: return .imagery
+            }
+        }
+    }
     
     enum FilterMode {
         case drones
@@ -375,6 +390,7 @@ struct LiveMapView: View {
                     }
                 }
             }
+            .mapStyle(selectedMapStyle.mapStyle)
             .gesture(
                 DragGesture(minimumDistance: 10)
                     .onChanged { _ in
@@ -389,9 +405,40 @@ struct LiveMapView: View {
             )
             
             VStack {
-                // Fit to View button - always visible
+                // Top buttons - Fit to View and Map Style
                 HStack {
                     Spacer()
+                    
+                    // Map Style Picker
+                    Menu {
+                        Button {
+                            selectedMapStyle = .standard
+                        } label: {
+                            Label("Standard", systemImage: selectedMapStyle == .standard ? "checkmark" : "map")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .hybrid
+                        } label: {
+                            Label("Hybrid", systemImage: selectedMapStyle == .hybrid ? "checkmark" : "map.fill")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .satellite
+                        } label: {
+                            Label("Satellite", systemImage: selectedMapStyle == .satellite ? "checkmark" : "globe.americas.fill")
+                        }
+                    } label: {
+                        Label("Map", systemImage: "map")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
+                    // Fit to View button
                     Button(action: resetMapView) {
                         Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
                             .font(.caption)
@@ -520,7 +567,7 @@ struct LiveMapView: View {
                 }
                 
                 if !validCoords.isEmpty {
-                    print("Rendering new flightpaths & map...")
+                    // Only update if something meaningful has changed
                     let latitudes = validCoords.map(\.latitude)
                     let longitudes = validCoords.map(\.longitude)
                     let minLat = latitudes.min()!

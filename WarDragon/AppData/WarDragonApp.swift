@@ -250,6 +250,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     @objc private func appMovingToBackground() {
+        // Force save all pending data before backgrounding
+        Task { @MainActor in
+            DroneStorageManager.shared.forceSave()
+            SwiftDataStorageManager.shared.forceSave()
+        }
+        
         if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
             BackgroundManager.shared.startBackgroundProcessing()
         }

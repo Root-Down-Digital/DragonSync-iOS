@@ -68,9 +68,17 @@ struct ADSBConfiguration: Codable, Equatable {
     
     /// Full URL for aircraft data endpoint
     var aircraftDataURL: URL? {
+        // Clean up the base URL
+        var urlString = readsbURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // If no scheme is provided, prepend http://
+        if !urlString.lowercased().hasPrefix("http://") && !urlString.lowercased().hasPrefix("https://") {
+            urlString = "http://" + urlString
+        }
+        
         // First, ensure the base URL is valid
-        guard let baseURL = URL(string: readsbURL) else {
-            print("DEBUG: Failed to create URL from readsbURL: '\(readsbURL)'")
+        guard let baseURL = URL(string: urlString) else {
+            print("DEBUG: Failed to create URL from readsbURL: '\(urlString)'")
             return nil
         }
         
