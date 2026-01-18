@@ -306,10 +306,10 @@ class ZMQHandler: ObservableObject {
                                         }
                                         // If conversion fails, message is silently skipped (likely invalid/incomplete)
                                     } else if socket === self.statusSocket {
-                                        if let xmlMessage = self.convertStatusToXML(jsonString) {
-                                            DispatchQueue.main.async {
-                                                onStatus(xmlMessage)
-                                            }
+                                        // Send original JSON directly to CoTViewModel - it will parse it
+                                        print("ZMQ: Status JSON received, dispatching to CoTViewModel")
+                                        DispatchQueue.main.async {
+                                            onStatus(jsonString)
                                         }
                                     }
                                 }
@@ -797,20 +797,49 @@ class ZMQHandler: ObservableObject {
     }
     
     func convertStatusToXML(_ jsonString: String) -> String? {
-        guard let jsonData = jsonString.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+        print("📥 ZMQ: Received status JSON of length \(jsonString.count)")
+        
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            print("❌ ZMQ: Failed to convert status string to Data")
             return nil
         }
-        return createStatusXML(json)
+        
+        guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            print("❌ ZMQ: Failed to parse status JSON")
+            print("First 500 chars: \(jsonString.prefix(500))")
+            return nil
+        }
+        
+        print("✅ ZMQ: Status JSON parsed, keys: \(json.keys.joined(separator: ", "))")
+        let xml = createStatusXML(json)
+        print("✅ ZMQ: Status XML created (\(xml.count) chars)")
+        return xml
     }
     
     
     private func createStatusXML(_ json: [String: Any]) -> String {
+        // DEBUG: Print the full JSON structure
+        print("🔍 DEBUG STATUS JSON STRUCTURE:")
+        print("================================================")
+        if let jsonData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            print(jsonString)
+        }
+        print("================================================")
+        
         // top level
         let serialNumber = json["serial_number"] as? String ?? ""
         let gpsData = json["gps_data"] as? [String: Any] ?? [:]
         let systemStats = json["system_stats"] as? [String: Any] ?? [:]
         let antSDRTemps = json["ant_sdr_temps"] as? [String: Any] ?? [:]
+        
+        print("📊 DEBUG STATUS PARSING:")
+        print("  Serial Number: \(serialNumber)")
+        print("  GPS Data keys: \(gpsData.keys.joined(separator: ", "))")
+        print("  System Stats keys: \(systemStats.keys.joined(separator: ", "))")
+        print("  ANT SDR Temps keys: \(antSDRTemps.keys.joined(separator: ", "))")
+        print("  ANT SDR Temps raw: \(antSDRTemps)")
+        print("================================================")
         
         let memory = systemStats["memory"] as? [String: Any] ?? [:]
         let memoryTotal = Double(memory["total"] as? Int64 ?? 0)
@@ -894,7 +923,7 @@ class ZMQHandler: ObservableObject {
         // Debug log to verify temps are being extracted
         print("DEBUG: AntSDR Temps - Pluto: \(plutoTemp)°C, Zynq: \(zynqTemp)°C")
         
-        return """
+        let xml = """
         <event version="2.0" uid="\(serialNumber)" type="b-m-p-s-m">
             <point lat="\(gpsData["latitude"] as? Double ?? 0.0)" lon="\(gpsData["longitude"] as? Double ?? 0.0)" hae="\(gpsData["altitude"] as? Double ?? 0.0)" ce="9999999" le="9999999"/>
             <detail>
@@ -904,6 +933,13 @@ class ZMQHandler: ObservableObject {
             </detail>
         </event>
         """
+
+//        print("DEBUG GENERATED STATUS XML:")
+//        print("================================================")
+//        print(xml)
+//        print("================================================")
+        
+        return xml
     }
     
     //MARK: - Services Manager

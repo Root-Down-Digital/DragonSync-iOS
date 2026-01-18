@@ -1872,21 +1872,43 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         // Extract status data from JSON
-        guard let uid = json["uid"] as? String,
-              let serialNumber = json["serial_number"] as? String,
+        // Python DragonSync sends serial_number (not uid) - use it for both
+        guard let serialNumber = json["serial_number"] as? String,
               let timestamp = json["timestamp"] as? Double,
               let gpsData = json["gps_data"] as? [String: Any],
               let systemStats = json["system_stats"] as? [String: Any],
               let antStats = json["ant_sdr_temps"] as? [String: Any] else {
             print("ERROR: Missing required fields in status JSON")
+            print("  Available keys: \(json.keys.joined(separator: ", "))")
             return
         }
         
+        // Use serial_number as uid for compatibility
+        let uid = serialNumber
+        
         // Parse GPS data
+        // Handle both Double values and "N/A" strings from Python
         let latitude = gpsData["latitude"] as? Double ?? 0.0
         let longitude = gpsData["longitude"] as? Double ?? 0.0
-        let altitude = gpsData["altitude"] as? Double ?? 0.0
-        let speed = gpsData["speed"] as? Double ?? 0.0
+        
+        // Altitude and speed can be "N/A" strings from Python
+        let altitude: Double = {
+            if let doubleVal = gpsData["altitude"] as? Double {
+                return doubleVal
+            } else if let strVal = gpsData["altitude"] as? String, strVal != "N/A" {
+                return Double(strVal) ?? 0.0
+            }
+            return 0.0
+        }()
+        
+        let speed: Double = {
+            if let doubleVal = gpsData["speed"] as? Double {
+                return doubleVal
+            } else if let strVal = gpsData["speed"] as? String, strVal != "N/A" {
+                return Double(strVal) ?? 0.0
+            }
+            return 0.0
+        }()
         
         let gps = StatusViewModel.StatusMessage.GPSData(
             latitude: latitude,
@@ -1897,7 +1919,17 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         // Parse system stats
         let cpuUsage = systemStats["cpu_usage"] as? Double ?? 0.0
-        let temperature = systemStats["temperature"] as? Double ?? 0.0
+        
+        // Temperature can be "N/A" string from Python
+        let temperature: Double = {
+            if let doubleVal = systemStats["temperature"] as? Double {
+                return doubleVal
+            } else if let strVal = systemStats["temperature"] as? String, strVal != "N/A" {
+                return Double(strVal) ?? 0.0
+            }
+            return 0.0
+        }()
+        
         let uptime = systemStats["uptime"] as? Double ?? 0.0
         
         // Parse memory stats
@@ -1941,9 +1973,24 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             uptime: uptime
         )
         
-        // Parse ANTSDR temps
-        let plutoTemp = antStats["pluto_temp"] as? Double ?? 0.0
-        let zynqTemp = antStats["zynq_temp"] as? Double ?? 0.0
+        // Parse ANTSDR temps - handle both Double values and "N/A" strings from Python
+        let plutoTemp: Double = {
+            if let doubleVal = antStats["pluto_temp"] as? Double {
+                return doubleVal
+            } else if let strVal = antStats["pluto_temp"] as? String, strVal != "N/A" {
+                return Double(strVal) ?? 0.0
+            }
+            return 0.0
+        }()
+        
+        let zynqTemp: Double = {
+            if let doubleVal = antStats["zynq_temp"] as? Double {
+                return doubleVal
+            } else if let strVal = antStats["zynq_temp"] as? String, strVal != "N/A" {
+                return Double(strVal) ?? 0.0
+            }
+            return 0.0
+        }()
         
         let antStatsObj = StatusViewModel.StatusMessage.ANTStats(
             plutoTemp: plutoTemp,
@@ -1963,7 +2010,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Send to StatusViewModel on main thread
         Task { @MainActor in
             self.statusViewModel.addStatusMessage(statusMessage)
-            print("Status message processed and sent to StatusViewModel")
+            print("✅ Status message processed successfully and sent to StatusViewModel")
+            print("   Serial: \(serialNumber), CPU: \(String(format: "%.1f", cpuUsage))%, Uptime: \(Int(uptime))s")
         }
     }
     

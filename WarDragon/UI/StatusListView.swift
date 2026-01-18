@@ -9,8 +9,6 @@ import SwiftUI
 
 struct StatusListView: View {
     @ObservedObject var statusViewModel: StatusViewModel
-    @StateObject private var serviceViewModel = ServiceViewModel()
-    @State private var showServiceManagement = false
     @State private var showingDeleteConfirmation = false
     @State private var messageToDelete: StatusViewModel.StatusMessage?
     
@@ -49,7 +47,9 @@ struct StatusListView: View {
                                     }
                                 }
                         }
-                        .onDelete(perform: statusViewModel.deleteStatusMessages)
+                        .onDelete { indexSet in
+                            statusViewModel.statusMessages.remove(atOffsets: indexSet)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -68,25 +68,11 @@ struct StatusListView: View {
             }
         }
         .navigationTitle("System Status")
-        .sheet(isPresented: $showServiceManagement) {
-            NavigationView {
-                ServiceManagementView(viewModel: serviceViewModel)
-                    .navigationTitle("Service Management")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Done") {
-                                showServiceManagement = false
-                            }
-                        }
-                    }
-            }
-        }
         .alert("Delete Message", isPresented: $showingDeleteConfirmation) {
             Button("Delete", role: .destructive) {
                 if let message = messageToDelete,
                    let index = statusViewModel.statusMessages.firstIndex(where: { $0.id == message.id }) {
-                    statusViewModel.deleteStatusMessages(at: IndexSet([index]))
+                    statusViewModel.statusMessages.remove(at: index)
                 }
                 messageToDelete = nil
             }
@@ -214,46 +200,3 @@ struct StatusConnectionHeaderView: View {
     }
 }
 
-struct ServiceStatusWidget: View {
-    let healthReport: ServiceViewModel.HealthReport?
-    let criticalServices: [ServiceControl]
-    @Binding var showServiceManagement: Bool
-    
-    var body: some View {
-        Button(action: { showServiceManagement = true }) {
-            VStack(spacing: 4) {
-                // Health Status Bar
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(healthReport?.statusColor ?? .gray)
-                        .frame(width: 12, height: 12)
-                    
-                    Text(healthReport?.overallHealth.uppercased() ?? "NO CONNECTION")
-                        .font(.appHeadline)
-                    
-                    Spacer()
-                    
-                    Text(healthReport?.timestamp.formatted(date: .omitted, time: .standard) ?? "")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-                .padding()
-                .background(Color(UIColor.secondarySystemBackground))
-                
-                // Critical Services Summary
-                if !criticalServices.isEmpty {
-                    HStack {
-                        Text("Critical Issues: \(criticalServices.count)")
-                            .font(.appCaption)
-                            .foregroundColor(.red)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(12)
-    }
-}

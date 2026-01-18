@@ -604,6 +604,9 @@ final class OpenSkyService: ObservableObject {
     func updateSettings(_ update: (OpenSkySettings) -> Void) {
         guard let settings = settings, let context = modelContext else { return }
         
+        // Send will change notification BEFORE the update
+        objectWillChange.send()
+        
         update(settings)
         
         do {
@@ -935,26 +938,15 @@ struct OpenSkySettingsView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var errorMessage: String?
+    @State private var cachedPermissionStatus: CLAuthorizationStatus = .notDetermined
+    @State private var cachedPermissionText: String = "Not Set"
     
     private var settings: OpenSkySettings? {
         settingsQuery.first
     }
     
-    private var locationPermissionText: String {
-        switch service.locationManager.locationPermissionStatus {
-        case .authorizedWhenInUse:
-            return "Authorized"
-        case .authorizedAlways:
-            return "Authorized"
-        case .denied:
-            return "Denied"
-        case .restricted:
-            return "Restricted"
-        case .notDetermined:
-            return "Not Set"
-        @unknown default:
-            return "Unknown"
-        }
+    private var isLocationAuthorized: Bool {
+        cachedPermissionStatus == .authorizedWhenInUse || cachedPermissionStatus == .authorizedAlways
     }
     
     var body: some View {
@@ -967,6 +959,7 @@ struct OpenSkySettingsView: View {
                         service.updateSettings { $0.isEnabled = newValue }
                         if newValue {
                             service.locationManager.requestLocationPermission()
+                            updatePermissionStatus()
                         }
                     }
                 ))
@@ -1009,20 +1002,25 @@ struct OpenSkySettingsView: View {
                 Section {
                     HStack {
                         Image(systemName: "location.fill")
-                            .foregroundStyle(service.locationManager.locationPermissionStatus == .authorizedWhenInUse || service.locationManager.locationPermissionStatus == .authorizedAlways ? .green : .orange)
+                            .foregroundStyle(isLocationAuthorized ? .green : .orange)
                         
                         Text("Location Permission")
                         
                         Spacer()
                         
-                        Text(locationPermissionText)
+                        Text(cachedPermissionText)
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
                     
-                    if service.locationManager.locationPermissionStatus != .authorizedWhenInUse && service.locationManager.locationPermissionStatus != .authorizedAlways {
+                    if !isLocationAuthorized {
                         Button("Request Permission") {
                             service.locationManager.requestLocationPermission()
+                            // Immediately update after requesting
+                            Task {
+                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s delay
+                                updatePermissionStatus()
+                            }
                         }
                     }
                 } header: {
@@ -1234,6 +1232,35 @@ struct OpenSkySettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAuthSheet) {
             authSheet
+        }
+        .task {
+            // Initialize permission status
+            updatePermissionStatus()
+            
+            // Update permission status every 10 seconds
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                updatePermissionStatus()
+            }
+        }
+    }
+    
+    /// Update the cached permission status (called periodically)
+    private func updatePermissionStatus() {
+        let status = service.locationManager.locationPermissionStatus
+        cachedPermissionStatus = status
+        
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            cachedPermissionText = "Authorized"
+        case .denied:
+            cachedPermissionText = "Denied"
+        case .restricted:
+            cachedPermissionText = "Restricted"
+        case .notDetermined:
+            cachedPermissionText = "Not Set"
+        @unknown default:
+            cachedPermissionText = "Unknown"
         }
     }
     

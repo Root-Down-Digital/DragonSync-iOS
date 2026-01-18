@@ -2,7 +2,7 @@
 //  ADSBClient.swift
 //  WarDragon
 //
-//  ADS-B client for fetching aircraft data from readsb HTTP API
+//  ADS-B client for fetching aircraft data from readsb and other HTTP APIs
 //
 
 import Foundation

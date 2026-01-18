@@ -13,6 +13,7 @@ import Network
 struct SettingsView: View {
     @ObservedObject var cotHandler : CoTViewModel
     @StateObject private var settings = Settings.shared
+    @StateObject private var openSkyService = OpenSkyService.shared
     
     var body: some View {
         Form {
@@ -394,7 +395,7 @@ struct SettingsView: View {
                             .foregroundColor(.blue)
                         Text("OpenSky Network")
                         Spacer()
-                        if OpenSkyService.shared.isEnabled {
+                        if openSkyService.isEnabled {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
                         }

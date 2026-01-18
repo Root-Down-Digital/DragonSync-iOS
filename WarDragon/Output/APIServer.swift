@@ -12,6 +12,7 @@ import UIKit
 
 /// HTTP API Server for exposing drone detections, system status, and configuration
 /// to the WarDragon ATAK companion plugin
+/// NOT YET IMPLEMENTED
 @MainActor
 class APIServer: ObservableObject {
     @Published private(set) var isRunning = false

@@ -4,6 +4,11 @@
 //
 //  Created by Luke on 1/10/25.
 //
+// NOTE: This file is currently disabled because ServiceViewModel and ServiceControl
+// were removed from the project. If you need service management functionality,
+// you'll need to re-implement these classes with proper ZMQ port separation.
+
+/*
 
 import SwiftUI
 
@@ -332,3 +337,5 @@ struct ServiceRowView: View {
         }
     }
 }
+*/
+

@@ -23,14 +23,34 @@ class SwiftDataStorageManager: ObservableObject {
     // Reference to model context (will be set from ContentView)
     var modelContext: ModelContext?
     
+    // Cache for MAC to ID lookups to avoid repeated database queries
+    private var macToIdCache: [String: String] = [:]
+    private var caaToIdCache: [String: String] = [:]
+    
     // Batch saving optimization
     private var needsSave = false
     private var saveTimer: Timer?
+    private var cacheUpdateCounter = 0
     
-    private init() {
-        // Setup auto-save timer (saves every 3 seconds if there are changes)
-        saveTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            self?.saveIfNeeded()
+    nonisolated private init() {
+        // Setup auto-save timer - will be initialized when first accessed
+    }
+    
+    nonisolated private static func startTimer() -> Timer {
+        let timer = Timer(timeInterval: 3.0, repeats: true) { _ in
+            Task { @MainActor in
+                SwiftDataStorageManager.shared.saveIfNeeded()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
+    }
+    
+    private func ensureTimerStarted() {
+        if saveTimer == nil {
+            Task { @MainActor in
+                self.saveTimer = Self.startTimer()
+            }
         }
     }
     
@@ -41,12 +61,13 @@ class SwiftDataStorageManager: ObservableObject {
             try context.save()
             needsSave = false
             
-            // Update in-memory cache after save
-            updateInMemoryCache()
-            
-            #if DEBUG
-            logger.debug("Auto-saved pending changes")
-            #endif
+            // Only do full cache update every 5 saves (15 seconds)
+            // This reduces toLegacy() overhead significantly
+            cacheUpdateCounter += 1
+            if cacheUpdateCounter >= 5 {
+                updateInMemoryCache()
+                cacheUpdateCounter = 0
+            }
         } catch {
             logger.error("Auto-save failed: \(error.localizedDescription)")
         }
@@ -132,20 +153,29 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         
+        // Ensure timer is running
+        ensureTimerStarted()
+        
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
         let droneId = message.uid
         
         var targetId: String = droneId
         
-        // Check for existing encounter by MAC or CAA
+        // Check cache first for MAC lookup (fast path)
         if let mac = message.mac, !mac.isEmpty {
-            if let existing = findEncounterByMAC(mac, context: context) {
+            if let cachedId = macToIdCache[mac] {
+                targetId = cachedId
+            } else if let existing = findEncounterByMAC(mac, context: context) {
                 targetId = existing.id
+                macToIdCache[mac] = existing.id
             }
         } else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
-            if let existing = findEncounterByCAA(caaReg, context: context) {
+            if let cachedId = caaToIdCache[caaReg] {
+                targetId = cachedId
+            } else if let existing = findEncounterByCAA(caaReg, context: context) {
                 targetId = existing.id
+                caaToIdCache[caaReg] = existing.id
             }
         }
         
@@ -223,46 +253,55 @@ class SwiftDataStorageManager: ObservableObject {
             }
         }
         
-        // Track MAC addresses
+        // Track MAC addresses (optimize with Set)
+        if let mac = message.mac, !mac.isEmpty && !encounter.macAddresses.contains(mac) {
+            encounter.macAddresses.append(mac)
+            macToIdCache[mac] = encounter.id // Update cache
+        }
         for source in message.signalSources {
             if !source.mac.isEmpty && !encounter.macAddresses.contains(source.mac) {
                 encounter.macAddresses.append(source.mac)
+                macToIdCache[source.mac] = encounter.id // Update cache
             }
         }
-        if let mac = message.mac, !mac.isEmpty && !encounter.macAddresses.contains(mac) {
-            encounter.macAddresses.append(mac)
-        }
         
-        // Add signature
+        // Add signature (only if RSSI changed significantly to reduce bloat)
         if let rssi = message.rssi, rssi != 0 {
-            let sig = StoredSignature(
-                timestamp: Date().timeIntervalSince1970,
-                rssi: Double(rssi),
-                speed: Double(message.speed) ?? 0.0,
-                height: Double(message.height ?? "0.0") ?? 0.0,
-                mac: message.mac
-            )
-            encounter.signatures.append(sig)
+            let shouldAdd: Bool
+            if let lastSig = encounter.signatures.last {
+                // Only add if RSSI changed by 3dBm or time gap > 5 seconds
+                let rssiDelta = abs(Double(rssi) - lastSig.rssi)
+                let timeGap = Date().timeIntervalSince1970 - lastSig.timestamp
+                shouldAdd = rssiDelta > 3.0 || timeGap > 5.0
+            } else {
+                shouldAdd = true
+            }
             
-            // Limit signatures to prevent bloat
-            if encounter.signatures.count > 500 {
-                let toRemove = encounter.signatures.prefix(100)
-                toRemove.forEach { context.delete($0) }
+            if shouldAdd {
+                let sig = StoredSignature(
+                    timestamp: Date().timeIntervalSince1970,
+                    rssi: Double(rssi),
+                    speed: Double(message.speed) ?? 0.0,
+                    height: Double(message.height ?? "0.0") ?? 0.0,
+                    mac: message.mac
+                )
+                encounter.signatures.append(sig)
+                
+                // Limit signatures to prevent bloat (batch delete for performance)
+                if encounter.signatures.count > 500 {
+                    let toRemove = Array(encounter.signatures.prefix(100))
+                    toRemove.forEach { context.delete($0) }
+                    encounter.signatures.removeFirst(100)
+                }
             }
         }
         
-        // Update metadata
+        // Updates
         updateMetadata(encounter: encounter, message: message)
-        
-        // Update last seen
         encounter.lastSeen = Date()
-        
-        // Mark that we need to save, but don't save immediately
         needsSave = true
-        
-        // Don't update in-memory cache on every update - let the timer handle it
+        updateInMemoryCacheForEncounterFast(encounter)
     }
-    
     // MARK: - Query Operations
     
     func fetchAllEncounters() -> [StoredDroneEncounter] {
@@ -330,6 +369,10 @@ class SwiftDataStorageManager: ObservableObject {
             // Save the deletions
             try context.save()
             
+            // Clear caches
+            macToIdCache.removeAll()
+            caaToIdCache.removeAll()
+            
             // Update in-memory cache after successful save
             updateInMemoryCache()
             
@@ -380,6 +423,56 @@ class SwiftDataStorageManager: ObservableObject {
             logger.info("Marked as do not track: \(possibleIds)")
         } catch {
             logger.error("Failed to mark as do not track: \(error.localizedDescription)")
+        }
+    }
+    
+    func clearDoNotTrack(id: String) {
+        let baseId = id.replacingOccurrences(of: "drone-", with: "")
+        let possibleIds = [id, "drone-\(id)", baseId, "drone-\(baseId)"]
+        
+        var cleared = false
+        for possibleId in possibleIds {
+            if let encounter = fetchEncounter(id: possibleId) {
+                encounter.metadata.removeValue(forKey: "doNotTrack")
+                cleared = true
+                logger.info("✅ Cleared do not track for: \(possibleId)")
+            }
+        }
+        
+        if cleared {
+            do {
+                try modelContext?.save()
+                updateInMemoryCache()
+                logger.info("Successfully cleared do not track for: \(possibleIds)")
+            } catch {
+                logger.error("Failed to save after clearing do not track: \(error.localizedDescription)")
+            }
+        } else {
+            logger.warning("No encounter found to clear do not track: \(possibleIds)")
+        }
+    }
+    
+    func clearAllDoNotTrack() {
+        let allEncounters = fetchAllEncounters()
+        var clearedCount = 0
+        
+        for encounter in allEncounters {
+            if encounter.metadata["doNotTrack"] != nil {
+                encounter.metadata.removeValue(forKey: "doNotTrack")
+                clearedCount += 1
+            }
+        }
+        
+        if clearedCount > 0 {
+            do {
+                try modelContext?.save()
+                updateInMemoryCache()
+                logger.info("✅ Cleared do not track for \(clearedCount) encounters")
+            } catch {
+                logger.error("Failed to save after clearing all do not track: \(error.localizedDescription)")
+            }
+        } else {
+            logger.info("No encounters had do not track set")
         }
     }
     
@@ -558,5 +651,26 @@ class SwiftDataStorageManager: ObservableObject {
         // Update the in-memory encounters dictionary for backward compatibility
         let stored = fetchAllEncounters()
         encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacy()) })
+    }
+    
+    private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
+        // Fast path: update just one encounter in the dictionary
+        encounters[encounter.id] = encounter.toLegacy()
+    }
+    
+    private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter) {
+        // Ultra-fast path: only update if it's a new encounter or every 10th update
+        // This reduces toLegacy() calls significantly
+        if encounters[encounter.id] == nil {
+            // New encounter - must update
+            encounters[encounter.id] = encounter.toLegacy()
+        } else {
+            // Existing encounter - defer full update to timer
+            // Just touch the lastSeen to keep it alive in UI
+            if var existing = encounters[encounter.id] {
+                existing.lastSeen = encounter.lastSeen
+                encounters[encounter.id] = existing
+            }
+        }
     }
 }
