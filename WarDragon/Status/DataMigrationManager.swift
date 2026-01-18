@@ -79,9 +79,6 @@ class DataMigrationManager {
                !legacyEncounters.isEmpty && count == 0 {
                 logger.warning("⚠️ Migration marked complete but SwiftData is empty while UserDefaults has \(legacyEncounters.count) encounters")
                 logger.warning("🔄 Data inconsistency detected - will attempt to re-migrate WITHOUT creating new backup")
-                
-                // Don't reset flag here - just continue with migration
-                // This prevents creating duplicate backups on retry
             } else {
                 if count > 0 {
                     logger.info("Data verification passed - SwiftData has \(count) encounters")
@@ -189,7 +186,6 @@ class DataMigrationManager {
         // Note: ADS-B encounters are currently in-memory only in StatusViewModel
         // This is a placeholder for when we add persistent storage for them
         
-        // For now, we'll just log that there's nothing to migrate from UserDefaults
         logger.info("ADS-B encounters are in-memory only, no migration needed")
     }
     

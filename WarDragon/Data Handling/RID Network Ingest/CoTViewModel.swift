@@ -2018,7 +2018,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     // Check connection status without heavy processing
     @MainActor
     func checkConnectionStatus() {
-        // Just verify that connections are still responsive
         if !isListeningCot && Settings.shared.isListening {
             reconnectIfNeeded()
         }
@@ -2036,7 +2035,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         // For ZMQ reduce activity but maintain connection
         if let zmqHandler = self.zmqHandler {
-            // Don't fully disconnect ZMQ, just reduce activity
             if zmqHandler.isConnected {
                 print("Reducing ZMQ activity for background mode")
                 zmqHandler.setBackgroundMode(true)

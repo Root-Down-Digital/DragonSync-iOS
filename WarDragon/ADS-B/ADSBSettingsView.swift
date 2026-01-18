@@ -336,7 +336,6 @@ struct ADSBSettingsView: View {
             }
             Button("Open Settings") {
                 showAutoDisabledAlert = false
-                // Settings is already open, just acknowledge
             }
         } message: {
             Text("ADS-B tracking has been disabled because the connection to readsb failed after multiple attempts.\n\nReason: \(autoDisabledReason)\n\nPlease check that your readsb server is running and accessible, then re-enable ADS-B tracking.")

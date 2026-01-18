@@ -654,7 +654,6 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
-        // Fast path: update just one encounter in the dictionary
         encounters[encounter.id] = encounter.toLegacy()
     }
     
@@ -665,8 +664,6 @@ class SwiftDataStorageManager: ObservableObject {
             // New encounter - must update
             encounters[encounter.id] = encounter.toLegacy()
         } else {
-            // Existing encounter - defer full update to timer
-            // Just touch the lastSeen to keep it alive in UI
             if var existing = encounters[encounter.id] {
                 existing.lastSeen = encounter.lastSeen
                 encounters[encounter.id] = existing

@@ -737,7 +737,6 @@ public final class DroneSignatureGenerator {
                 print("DEBUG extractTransmissionInfo Actual RSSI: \(String(describing: signalStrength)))")
                 print("DEBUG extractTransmissionInfo Expected RSSI: \(String(describing: expectedSignalStrength)))")
             } else {
-                // Don't print error - just skip expected signal calculation if no monitor location
                 expectedSignalStrength = nil
             }
         }

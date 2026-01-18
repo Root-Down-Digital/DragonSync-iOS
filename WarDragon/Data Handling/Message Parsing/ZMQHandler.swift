@@ -32,6 +32,10 @@ class ZMQHandler: ObservableObject {
     private var pollingLock = NSLock()
     private var isPollingActive = false
     
+    // Status message deduplication - track last message per serial number
+    private var lastStatusMessageBySN: [String: (timestamp: Date, jsonString: String)] = [:]
+    private let statusDedupeInterval: TimeInterval = 1.0  // Don't send duplicate within 1 second
+    
     typealias MessageHandler = (String) -> Void
     
     @Published var isConnected = false {
@@ -306,10 +310,14 @@ class ZMQHandler: ObservableObject {
                                         }
                                         // If conversion fails, message is silently skipped (likely invalid/incomplete)
                                     } else if socket === self.statusSocket {
-                                        // Send original JSON directly to CoTViewModel - it will parse it
-                                        print("ZMQ: Status JSON received, dispatching to CoTViewModel")
-                                        DispatchQueue.main.async {
-                                            onStatus(jsonString)
+                                        // Deduplicate status messages
+                                        if self.shouldDispatchStatusMessage(jsonString) {
+                                            print("ZMQ: Status JSON received, dispatching to CoTViewModel")
+                                            DispatchQueue.main.async {
+                                                onStatus(jsonString)
+                                            }
+                                        } else {
+                                            print("ZMQ: Status message deduplicated (too soon after last)")
                                         }
                                     }
                                 }
@@ -344,6 +352,48 @@ class ZMQHandler: ObservableObject {
             
             print("ZMQ: Polling stopped")
         }
+    }
+    
+    //MARK: - Message Deduplication
+    
+    /// Check if we should dispatch this status message or if it's a duplicate
+    private func shouldDispatchStatusMessage(_ jsonString: String) -> Bool {
+        // Extract serial number from JSON to use as key
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let serialNumber = json["serial_number"] as? String else {
+            // If we can't parse it, let it through - the parser will handle it
+            return true
+        }
+        
+        let now = Date()
+        
+        // Check if we've seen this serial number recently
+        if let lastMessage = lastStatusMessageBySN[serialNumber] {
+            let timeSinceLastMessage = now.timeIntervalSince(lastMessage.timestamp)
+            
+            // If less than deduplication interval, check if content is identical
+            if timeSinceLastMessage < statusDedupeInterval {
+                // If the content is exactly the same, skip it
+                if lastMessage.jsonString == jsonString {
+                    return false
+                }
+                // If content changed, allow it through (rapid update is legitimate)
+            }
+        }
+        
+        // Update tracking
+        lastStatusMessageBySN[serialNumber] = (timestamp: now, jsonString: jsonString)
+        
+        // Clean up old entries (keep only last 10 devices)
+        if lastStatusMessageBySN.count > 10 {
+            let sortedKeys = lastStatusMessageBySN.sorted { $0.value.timestamp < $1.value.timestamp }.map { $0.key }
+            for key in sortedKeys.prefix(lastStatusMessageBySN.count - 10) {
+                lastStatusMessageBySN.removeValue(forKey: key)
+            }
+        }
+        
+        return true
     }
     
     //MARK: - Message Parsing & Conversion
@@ -1001,6 +1051,9 @@ class ZMQHandler: ObservableObject {
         
         connectionMonitorTimer?.invalidate()
         connectionMonitorTimer = nil
+        
+        // Clear deduplication cache
+        lastStatusMessageBySN.removeAll()
         
         if let queue = pollingQueue {
             queue.sync {

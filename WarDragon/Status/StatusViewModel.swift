@@ -199,7 +199,7 @@ class StatusViewModel: ObservableObject {
     }
     
     struct StatusMessage: Identifiable  {
-        var id: String { uid }
+        var id: String { serialNumber }  // Use serial number as unique ID
         let uid: String
         var serialNumber: String
         var timestamp: Double
@@ -258,13 +258,24 @@ class StatusViewModel: ObservableObject {
     
     func addStatusMessage(_ message: StatusMessage) {
         let processedMessage = processStatusMessage(message)
-        statusMessages.append(processedMessage)
+        
+        // Check if we already have a message from this device
+        if let index = statusMessages.firstIndex(where: { $0.serialNumber == processedMessage.serialNumber }) {
+            // Update existing message
+            statusMessages[index] = processedMessage
+            print("📝 Updated existing status message for \(processedMessage.serialNumber)")
+        } else {
+            // Add new message
+            statusMessages.append(processedMessage)
+            print("➕ Added new status message for \(processedMessage.serialNumber)")
+        }
+        
         lastStatusMessageReceived = Date()
         
         // Debug log to verify antStats values
         print("DEBUG StatusViewModel: Received status message with antStats - Pluto: \(processedMessage.antStats.plutoTemp)°C, Zynq: \(processedMessage.antStats.zynqTemp)°C")
         
-        // Keep only the last 100 messages to prevent memory issues
+        // Keep only the last 100 unique devices to prevent memory issues
         if statusMessages.count > 100 {
             statusMessages.removeFirst(statusMessages.count - 100)
         }
@@ -274,14 +285,7 @@ class StatusViewModel: ObservableObject {
     }
     
     func updateExistingStatusMessage(_ message: StatusMessage) {
-        let processedMessage = processStatusMessage(message)
-        
-        if let index = statusMessages.firstIndex(where: { $0.uid == message.uid }) {
-            statusMessages[index] = processedMessage
-        } else {
-            addStatusMessage(processedMessage)
-        }
-        lastStatusMessageReceived = Date()
+        addStatusMessage(message)
     }
     
     private func processStatusMessage(_ message: StatusMessage) -> StatusMessage {
