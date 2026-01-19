@@ -21,6 +21,13 @@ final class StoredDroneEncounter {
     var metadata: [String: String]
     var macAddresses: [String]
     
+    // Cached computed values for performance
+    var cachedMaxAltitude: Double = 0
+    var cachedMaxSpeed: Double = 0
+    var cachedAverageRSSI: Double = 0
+    var cachedFlightPointCount: Int = 0
+    var cachedSignatureCount: Int = 0
+    
     @Relationship(deleteRule: .cascade) var flightPoints: [StoredFlightPoint] = []
     @Relationship(deleteRule: .cascade) var signatures: [StoredSignature] = []
     
@@ -42,9 +49,24 @@ final class StoredDroneEncounter {
         self.macAddresses = macAddresses
         self.flightPoints = flightPoints
         self.signatures = signatures
+        
+        // Initialize cached values
+        self.updateCachedStats()
     }
     
-    // Computed properties
+    // Call this after modifying flightPoints or signatures
+    func updateCachedStats() {
+        cachedFlightPointCount = flightPoints.count
+        cachedSignatureCount = signatures.count
+        cachedMaxAltitude = flightPoints.filter { !$0.isProximityPoint }.lazy.map { $0.altitude }.max() ?? 0
+        cachedMaxSpeed = signatures.lazy.map { $0.speed }.max() ?? 0
+        
+        let validRSSI = signatures.lazy.map { $0.rssi }.filter { $0 != 0 }
+        let rssiArray = Array(validRSSI)
+        cachedAverageRSSI = rssiArray.isEmpty ? 0 : rssiArray.reduce(0, +) / Double(rssiArray.count)
+    }
+    
+    // Computed properties - now use cached values for performance
     var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus {
         get {
             DroneSignature.UserDefinedInfo.TrustStatus(rawValue: trustStatusRaw) ?? .unknown
@@ -55,17 +77,21 @@ final class StoredDroneEncounter {
     }
     
     var maxAltitude: Double {
-        flightPoints.filter { !$0.isProximityPoint }.map { $0.altitude }.max() ?? 0
+        // ALWAYS use cached value - NEVER access relationships in computed properties
+        // Relationships can fault in SwiftData and cause crashes
+        return cachedMaxAltitude
     }
     
     var maxSpeed: Double {
-        signatures.map { $0.speed }.max() ?? 0
+        // ALWAYS use cached value - NEVER access relationships in computed properties
+        // Relationships can fault in SwiftData and cause crashes
+        return cachedMaxSpeed
     }
     
     var averageRSSI: Double {
-        let validRSSI = signatures.map { $0.rssi }.filter { $0 != 0 }
-        guard !validRSSI.isEmpty else { return 0 }
-        return validRSSI.reduce(0, +) / Double(validRSSI.count)
+        // ALWAYS use cached value - NEVER access relationships in computed properties
+        // Relationships can fault in SwiftData and cause crashes
+        return cachedAverageRSSI
     }
     
     var totalFlightTime: TimeInterval {
@@ -257,6 +283,8 @@ extension StoredDroneEncounter {
     }
     
     /// Convert back to legacy format (for compatibility during migration)
+    /// WARNING: This is expensive for encounters with many flight points/signatures
+    /// Consider using toLegacyLightweight() for list views
     func toLegacy() -> DroneEncounter {
         let flightPath = flightPoints.map { point in
             FlightPathPoint(
@@ -288,6 +316,50 @@ extension StoredDroneEncounter {
             lastSeen: lastSeen,
             flightPath: flightPath,
             signatures: sigs,
+            metadata: metadata,
+            macHistory: Set(macAddresses)
+        )
+    }
+    
+    /// Lightweight conversion that only includes essential data for list views
+    /// This avoids converting thousands of flight points and signatures
+    func toLegacyLightweight() -> DroneEncounter {
+        // Only include last few flight points for preview (e.g., last 10)
+        let recentFlightPoints = flightPoints
+            .suffix(10)
+            .map { point in
+                FlightPathPoint(
+                    latitude: point.latitude,
+                    longitude: point.longitude,
+                    altitude: point.altitude,
+                    timestamp: point.timestamp,
+                    homeLatitude: point.homeLatitude,
+                    homeLongitude: point.homeLongitude,
+                    isProximityPoint: point.isProximityPoint,
+                    proximityRssi: point.proximityRssi,
+                    proximityRadius: point.proximityRadius
+                )
+            }
+        
+        // Only include last few signatures (e.g., last 10)
+        let recentSignatures = signatures
+            .suffix(10)
+            .compactMap { sig in
+                SignatureData(
+                    timestamp: sig.timestamp,
+                    rssi: sig.rssi,
+                    speed: sig.speed,
+                    height: sig.height,
+                    mac: sig.mac
+                )
+            }
+        
+        return DroneEncounter(
+            id: id,
+            firstSeen: firstSeen,
+            lastSeen: lastSeen,
+            flightPath: recentFlightPoints,
+            signatures: recentSignatures,
             metadata: metadata,
             macHistory: Set(macAddresses)
         )

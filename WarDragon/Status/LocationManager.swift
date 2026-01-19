@@ -16,11 +16,15 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     
     @Published var userLocation: CLLocation?
     @Published var locationPermissionStatus: CLAuthorizationStatus = .notDetermined
+    @Published private(set) var isUpdatingLocation = false
     
     override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters  // Lower accuracy for battery life
+        locationManager.distanceFilter = 50  // Only update every 50 meters
+        locationManager.pausesLocationUpdatesAutomatically = true  // Save battery
+        locationManager.activityType = .other
         locationPermissionStatus = locationManager.authorizationStatus
     }
     
@@ -38,11 +42,19 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard locationPermissionStatus == .authorizedWhenInUse || locationPermissionStatus == .authorizedAlways else {
             return
         }
+        guard !isUpdatingLocation else { return } // Prevent duplicate starts
+        
+        print("📍 LocationManager: Starting location updates")
         locationManager.startUpdatingLocation()
+        isUpdatingLocation = true
     }
     
     func stopLocationUpdates() {
+        guard isUpdatingLocation else { return } // Only stop if running
+        
+        print("📍 LocationManager: Stopping location updates")
         locationManager.stopUpdatingLocation()
+        isUpdatingLocation = false
     }
     
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -57,9 +69,11 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             
             switch status {
             case .authorizedWhenInUse, .authorizedAlways:
-                startLocationUpdates()
+                // Don't auto-start - let the app control when location is needed
+                print("📍 LocationManager: Location authorized but not auto-starting")
             case .denied, .restricted:
                 userLocation = nil
+                stopLocationUpdates()
             default:
                 break
             }

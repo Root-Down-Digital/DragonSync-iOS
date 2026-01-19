@@ -61,8 +61,6 @@ class SwiftDataStorageManager: ObservableObject {
             try context.save()
             needsSave = false
             
-            // Only do full cache update every 5 saves (15 seconds)
-            // This reduces toLegacy() overhead significantly
             cacheUpdateCounter += 1
             if cacheUpdateCounter >= 5 {
                 updateInMemoryCache()
@@ -142,6 +140,9 @@ class SwiftDataStorageManager: ObservableObject {
                 stored.signatures.append(storedSig)
             }
         }
+        
+        // PERFORMANCE: Update cached stats after modifications
+        stored.updateCachedStats()
         
         // Mark that we need to save
         needsSave = true
@@ -299,6 +300,10 @@ class SwiftDataStorageManager: ObservableObject {
         // Updates
         updateMetadata(encounter: encounter, message: message)
         encounter.lastSeen = Date()
+        
+        // PERFORMANCE: Update cached stats after modifications
+        encounter.updateCachedStats()
+        
         needsSave = true
         updateInMemoryCacheForEncounterFast(encounter)
     }
@@ -333,6 +338,12 @@ class SwiftDataStorageManager: ObservableObject {
             logger.error("Failed to fetch encounter \(id): \(error.localizedDescription)")
             return nil
         }
+    }
+    
+    /// Fetch full encounter with all data (use for detail views)
+    func fetchFullEncounter(id: String) -> DroneEncounter? {
+        guard let stored = fetchEncounter(id: id) else { return nil }
+        return stored.toLegacy()
     }
     
     func deleteEncounter(id: String) {
@@ -473,6 +484,63 @@ class SwiftDataStorageManager: ObservableObject {
             }
         } else {
             logger.info("No encounters had do not track set")
+        }
+    }
+    
+    // MARK: - Export Operations
+    
+    /// Repair cached stats for all encounters that have missing or zero cached values
+    /// This should be called on app startup or as a maintenance operation
+    func repairCachedStats() {
+        guard let context = modelContext else { return }
+        
+        // Fetch ALL encounters with relationships prefetched
+        var descriptor = FetchDescriptor<StoredDroneEncounter>(
+            sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
+        )
+        // Prefetch relationships to avoid faulting
+        descriptor.relationshipKeyPathsForPrefetching = [
+            \.flightPoints,
+            \.signatures
+        ]
+        
+        let allEncounters: [StoredDroneEncounter]
+        do {
+            allEncounters = try context.fetch(descriptor)
+        } catch {
+            logger.error("❌ Failed to fetch encounters for repair: \(error.localizedDescription)")
+            return
+        }
+        
+        var repairedCount = 0
+        
+        logger.info("🔧 Checking \(allEncounters.count) encounters for missing cached stats...")
+        
+        for encounter in allEncounters {
+            // Safe check - just look at cached counts first
+            let needsRepair = encounter.cachedFlightPointCount == 0 || 
+                             encounter.cachedSignatureCount == 0
+            
+            if needsRepair {
+                // Now that relationships are prefetched, this is safe
+                encounter.updateCachedStats()
+                repairedCount += 1
+                
+                if repairedCount % 10 == 0 {
+                    logger.info("Repaired \(repairedCount) encounters so far...")
+                }
+            }
+        }
+        
+        if repairedCount > 0 {
+            do {
+                try context.save()
+                logger.info("✅ Repaired cached stats for \(repairedCount) encounters")
+            } catch {
+                logger.error("❌ Failed to save repaired stats: \(error.localizedDescription)")
+            }
+        } else {
+            logger.info("✅ All encounters have valid cached stats")
         }
     }
     
@@ -648,22 +716,20 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     private func updateInMemoryCache() {
-        // Update the in-memory encounters dictionary for backward compatibility
         let stored = fetchAllEncounters()
-        encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacy()) })
+        encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacyLightweight()) })
     }
     
     private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
-        encounters[encounter.id] = encounter.toLegacy()
+        encounters[encounter.id] = encounter.toLegacyLightweight()
     }
     
     private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter) {
-        // Ultra-fast path: only update if it's a new encounter or every 10th update
-        // This reduces toLegacy() calls significantly
         if encounters[encounter.id] == nil {
-            // New encounter - must update
-            encounters[encounter.id] = encounter.toLegacy()
+            // New encounter - must update with lightweight conversion
+            encounters[encounter.id] = encounter.toLegacyLightweight()
         } else {
+            // Existing encounter - just update the timestamp without full conversion
             if var existing = encounters[encounter.id] {
                 existing.lastSeen = encounter.lastSeen
                 encounters[encounter.id] = existing

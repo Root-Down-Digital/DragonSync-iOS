@@ -21,6 +21,7 @@ class StatusViewModel: ObservableObject {
     @Published var showESP32LocationAlert = false
     @Published var adsbEncounterHistory: [ADSBEncounter] = []
     private var locationManager = LocationManager.shared
+    private var locationStopTimer: Timer?
     
     // Reference to model context for SwiftData
     var modelContext: ModelContext?
@@ -154,6 +155,15 @@ class StatusViewModel: ObservableObject {
         }
     }
     
+    /// Stop location updates when no longer receiving data
+    func stopLocationUpdatesIfNeeded() {
+        // Stop location updates if we haven't received a message recently
+        if !isSystemOnline {
+            locationManager.stopLocationUpdates()
+            print("📍 StatusViewModel: Stopped location updates (system offline)")
+        }
+    }
+    
     /// Load ADS-B encounters from SwiftData
     func loadADSBEncounters() {
         guard let context = modelContext else { return }
@@ -272,6 +282,12 @@ class StatusViewModel: ObservableObject {
         
         lastStatusMessageReceived = Date()
         
+        // Start location updates if needed (we're actually receiving messages)
+        if Settings.shared.useUserLocationForStatus {
+            locationManager.startLocationUpdates()
+            resetLocationStopTimer()
+        }
+        
         // Debug log to verify antStats values
         print("DEBUG StatusViewModel: Received status message with antStats - Pluto: \(processedMessage.antStats.plutoTemp)°C, Zynq: \(processedMessage.antStats.zynqTemp)°C")
         
@@ -282,6 +298,16 @@ class StatusViewModel: ObservableObject {
         
         // Check thresholds after adding new message
         checkSystemThresholds()
+    }
+    
+    /// Reset the timer that stops location updates when idle
+    private func resetLocationStopTimer() {
+        locationStopTimer?.invalidate()
+        locationStopTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopLocationUpdatesIfNeeded()
+            }
+        }
     }
     
     func updateExistingStatusMessage(_ message: StatusMessage) {

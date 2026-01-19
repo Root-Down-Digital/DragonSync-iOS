@@ -258,322 +258,28 @@ class DroneStorageManager: ObservableObject {
     static let shared = DroneStorageManager()
     var cotViewModel: CoTViewModel?
     
-    // Reference to SwiftData manager
+    // Reference to SwiftData manager (single source of truth)
     private let swiftDataManager = SwiftDataStorageManager.shared
     
-    // Published encounters dictionary for backward compatibility
+    // Lightweight cache for quick lookups (DO NOT use for writes)
     @Published private(set) var encounters: [String: DroneEncounter] = [:]
-    
-    // Performance optimization: batch saves
-    private var pendingSaves: Set<String> = []
-    private var saveTimer: Timer?
-    private let saveInterval: TimeInterval = 30.0  // Save every 30 seconds instead of constantly
-    private var lastUpdateTimes: [String: Date] = [:]  // Track when each encounter was last updated
     
     init() {
         // Migration will happen automatically in WarDragonApp
         // Don't load here - wait for ModelContext to be set in ContentView.onAppear()
         // loadFromStorage() will be called after ModelContext is injected
-        
-        // Start the batch save timer
-        setupBatchSaveTimer()
-    }
-    
-    private func setupBatchSaveTimer() {
-        saveTimer?.invalidate()
-        saveTimer = Timer.scheduledTimer(withTimeInterval: saveInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.flushPendingSaves()
-            }
-        }
-    }
-    
-    private func flushPendingSaves() {
-        guard !pendingSaves.isEmpty else { return }
-        
-        // Only save encounters that haven't been updated recently (5 seconds)
-        let now = Date()
-        let staleThreshold: TimeInterval = 5.0
-        
-        var idsToSave: [String] = []
-        var idsToKeep: Set<String> = []
-        
-        for id in pendingSaves {
-            if let lastUpdate = lastUpdateTimes[id],
-               now.timeIntervalSince(lastUpdate) < staleThreshold {
-                // Still actively updating, don't save yet
-                idsToKeep.insert(id)
-            } else {
-                // Hasn't been updated recently, safe to save
-                idsToSave.append(id)
-            }
-        }
-        
-        pendingSaves = idsToKeep
-        
-        guard !idsToSave.isEmpty else { return }
-        
-        print("💾 Saving \(idsToSave.count) stale encounters to SwiftData (keeping \(idsToKeep.count) active)")
-        
-        // Save in background to avoid blocking UI
-        Task.detached(priority: .background) { [weak self] in
-            guard let self = self else { return }
-            
-            for id in idsToSave {
-                await MainActor.run {
-                    if let encounter = self.encounters[id] {
-                        // Save directly without re-fetching everything
-                        self.swiftDataManager.saveEncounterDirect(encounter)
-                    }
-                }
-            }
-        }
-    }
-    
-    deinit {
-        saveTimer?.invalidate()
-        // Can't call main actor methods from deinit
-        // Pending saves will be handled by the timer or explicit forceSave() calls
     }
     
     // Force save (call when app goes to background)
     func forceSave() {
-        flushPendingSaves()
+        swiftDataManager.forceSave()
     }
     
     nonisolated func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
         Task { @MainActor in
-            await saveEncounterAsync(message, monitorStatus: monitorStatus)
+            // OPTIMIZED: Directly delegate to SwiftData - no in-memory processing
+            await swiftDataManager.saveEncounter(message, monitorStatus: monitorStatus)
         }
-    }
-    
-    private func saveEncounterAsync(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) async {
-        let lat = Double(message.lat) ?? 0
-        let lon = Double(message.lon) ?? 0
-        let droneId = message.uid
-        
-        var targetEncounter: DroneEncounter
-        var targetId: String = droneId
-        
-        if let mac = message.mac, !mac.isEmpty {
-            if let existingPair = encounters.first(where: { $0.value.metadata["mac"] == mac }) {
-                targetId = existingPair.key
-                targetEncounter = existingPair.value
-            } else {
-                targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
-            }
-        } else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
-            if let existingPair = encounters.first(where: { $0.value.metadata["caaRegistration"] == caaReg }) {
-                targetId = existingPair.key
-                targetEncounter = existingPair.value
-            } else {
-                targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
-            }
-        } else {
-            targetEncounter = encounters[droneId] ?? createNewEncounter(droneId, message)
-        }
-        
-        var didAddPoint = false
-        
-        if lat != 0 || lon != 0 {
-            let newPoint = FlightPathPoint(
-                latitude: lat,
-                longitude: lon,
-                altitude: Double(message.alt) ?? 0.0,
-                timestamp: Date().timeIntervalSince1970,
-                homeLatitude: Double(message.homeLat),
-                homeLongitude: Double(message.homeLon),
-                isProximityPoint: false,
-                proximityRssi: nil,
-                proximityRadius: nil
-            )
-            
-            if let lastPoint = targetEncounter.flightPath.last {
-                let distance = calculateDistance(
-                    from: CLLocationCoordinate2D(latitude: lastPoint.latitude, longitude: lastPoint.longitude),
-                    to: CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                )
-                let timeGap = newPoint.timestamp - lastPoint.timestamp
-                
-                if distance > 0.1 || timeGap > 2 {
-                    targetEncounter.flightPath.append(newPoint)
-                    didAddPoint = true
-                }
-            } else {
-                targetEncounter.flightPath.append(newPoint)
-                didAddPoint = true
-            }
-        }
-        
-        if !didAddPoint && message.rssi != nil && message.rssi != 0 {
-            if let monitorStatus = monitorStatus {
-                let currentCount = Int(targetEncounter.metadata["totalDetections"] ?? "0") ?? 0
-                targetEncounter.metadata["totalDetections"] = "\(currentCount + 1)"
-                
-                let proximityPoint = FlightPathPoint(
-                    latitude: monitorStatus.gpsData.latitude,
-                    longitude: monitorStatus.gpsData.longitude,
-                    altitude: 0,
-                    timestamp: Date().timeIntervalSince1970,
-                    homeLatitude: Double(message.homeLat),
-                    homeLongitude: Double(message.homeLon),
-                    isProximityPoint: true,
-                    proximityRssi: Double(message.rssi!),
-                    proximityRadius: nil
-                )
-                
-                let existingProximityPoints = targetEncounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
-                
-                if existingProximityPoints.count < 3 {
-                    targetEncounter.flightPath.append(proximityPoint)
-                    targetEncounter.metadata["hasProximityPoints"] = "true"
-                } else {
-                    let currentRssi = Double(message.rssi!)
-                    let rssiValues = existingProximityPoints.compactMap { $0.proximityRssi }
-                    let minRssi = rssiValues.min() ?? currentRssi
-                    let maxRssi = rssiValues.max() ?? currentRssi
-                    
-                    if let replaceIndex = targetEncounter.flightPath.firstIndex(where: { point in
-                        point.isProximityPoint && point.proximityRssi != nil &&
-                        point.proximityRssi != minRssi && point.proximityRssi != maxRssi
-                    }) {
-                        targetEncounter.flightPath[replaceIndex] = proximityPoint
-                    }
-                }
-            }
-        }
-        
-        for source in message.signalSources {
-            if !source.mac.isEmpty {
-                targetEncounter.macHistory.insert(source.mac)
-            }
-        }
-        if let mac = message.mac, !mac.isEmpty {
-            targetEncounter.macHistory.insert(mac)
-        }
-        
-        if let sig = SignatureData(
-            timestamp: Date().timeIntervalSince1970,
-            rssi: Double(message.rssi ?? 0),
-            speed: Double(message.speed) ?? 0.0,
-            height: Double(message.height ?? "0.0") ?? 0.0,
-            mac: String(message.mac ?? "")
-        ) {
-            targetEncounter.signatures.append(sig)
-            if targetEncounter.signatures.count > 500 {
-                targetEncounter.signatures.removeFirst(100)
-            }
-        }
-        
-        var updatedMetadata = targetEncounter.metadata
-        
-        if let mac = message.mac {
-            updatedMetadata["mac"] = mac
-        }
-        if let caaReg = message.caaRegistration {
-            updatedMetadata["caaRegistration"] = caaReg
-        }
-        if let manufacturer = message.manufacturer {
-            updatedMetadata["manufacturer"] = manufacturer
-        }
-        updatedMetadata["idType"] = message.idType
-        
-        if let pilotLat = Double(message.pilotLat), let pilotLon = Double(message.pilotLon),
-           pilotLat != 0 && pilotLon != 0 {
-            
-            let newCoordKey = "\(pilotLat),\(pilotLon)"
-            let currentCoordKey = updatedMetadata["pilotLat"].flatMap { lat in
-                updatedMetadata["pilotLon"].map { lon in "\(lat),\(lon)" }
-            }
-            
-            if currentCoordKey != newCoordKey {
-                updatedMetadata["pilotLat"] = message.pilotLat
-                updatedMetadata["pilotLon"] = message.pilotLon
-                
-                let timestamp = Date().timeIntervalSince1970
-                let pilotEntry = "\(timestamp):\(pilotLat),\(pilotLon)"
-                
-                if let existingHistory = updatedMetadata["pilotHistory"] {
-                    let existingEntries = Set(existingHistory.components(separatedBy: ";"))
-                    if !existingEntries.contains(where: { $0.hasSuffix(":\(pilotLat),\(pilotLon)") }) {
-                        updatedMetadata["pilotHistory"] = existingHistory + ";" + pilotEntry
-                    }
-                } else {
-                    updatedMetadata["pilotHistory"] = pilotEntry
-                }
-            }
-        }
-        
-        if let homeLat = Double(message.homeLat), let homeLon = Double(message.homeLon),
-           homeLat != 0 && homeLon != 0 {
-            
-            let newCoordKey = "\(homeLat),\(homeLon)"
-            let currentCoordKey = updatedMetadata["homeLat"].flatMap { lat in
-                updatedMetadata["homeLon"].map { lon in "\(lat),\(lon)" }
-            }
-            
-            if currentCoordKey != newCoordKey {
-                updatedMetadata["homeLat"] = message.homeLat
-                updatedMetadata["homeLon"] = message.homeLon
-                updatedMetadata["takeoffLat"] = message.homeLat
-                updatedMetadata["takeoffLon"] = message.homeLon
-                
-                let timestamp = Date().timeIntervalSince1970
-                let homeEntry = "\(timestamp):\(homeLat),\(homeLon)"
-                
-                if let existingHistory = updatedMetadata["homeHistory"] {
-                    let existingEntries = Set(existingHistory.components(separatedBy: ";"))
-                    if !existingEntries.contains(where: { $0.hasSuffix(":\(homeLat),\(homeLon)") }) {
-                        updatedMetadata["homeHistory"] = existingHistory + ";" + homeEntry
-                    }
-                } else {
-                    updatedMetadata["homeHistory"] = homeEntry
-                }
-            }
-        }
-        
-        targetEncounter.metadata = updatedMetadata
-        
-        if encounters[targetId] != nil {
-            let existingName = encounters[targetId]?.customName ?? ""
-            let existingTrust = encounters[targetId]?.trustStatus ?? .unknown
-            
-            if !existingName.isEmpty {
-                targetEncounter.customName = existingName
-            }
-            if existingTrust != .unknown {
-                targetEncounter.trustStatus = existingTrust
-            }
-        }
-        
-        targetEncounter.lastSeen = Date()
-        
-        encounters[targetId] = targetEncounter
-        
-        // Track last update time
-        lastUpdateTimes[targetId] = Date()
-        
-        // Queue this encounter for batched save instead of saving immediately
-        pendingSaves.insert(targetId)
-        
-        // Only log significant events, not every update
-        #if DEBUG
-        if didAddPoint {
-            print("✈️ \(targetId): Added point - \(targetEncounter.flightPath.count) total")
-        }
-        #endif
-    }
-    
-    private func createNewEncounter(_ id: String, _ message: CoTViewModel.CoTMessage) -> DroneEncounter {
-        return DroneEncounter(
-            id: id,
-            firstSeen: Date(),
-            lastSeen: Date(),
-            flightPath: [],
-            signatures: [],
-            metadata: [:],
-            macHistory: []
-        )
     }
 
     func markAsDoNotTrack(id: String) {
@@ -622,15 +328,25 @@ class DroneStorageManager: ObservableObject {
         // Delete from in-memory cache
         encounters.removeValue(forKey: id)
         objectWillChange.send()
+        
+        // Note: We don't delete from UserDefaults here since it's a pre-migration backup
+        // and individual deletions shouldn't affect it
     }
     
     func deleteAllEncounters() {
         // Delete from SwiftData
         swiftDataManager.deleteAllEncounters()
         
+        // IMPORTANT: Also clear the old UserDefaults backup to prevent it from being reloaded
+        UserDefaults.standard.removeObject(forKey: "DroneEncounters")
+        UserDefaults.standard.synchronize()
+        print("🗑️ Cleared UserDefaults backup")
+        
         // Clear in-memory cache
         encounters.removeAll()
         objectWillChange.send()
+        
+        print("✅ Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
     }
     
     func saveToStorage() {
@@ -645,6 +361,9 @@ class DroneStorageManager: ObservableObject {
             print("⚠️ SwiftDataStorageManager.modelContext is nil - will fallback to UserDefaults")
         }
         
+        // Check if migration has been completed
+        let migrationCompleted = UserDefaults.standard.bool(forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
+        
         // Try to load from SwiftData first
         updateInMemoryCache()
         
@@ -652,8 +371,9 @@ class DroneStorageManager: ObservableObject {
         let swiftDataCount = encounters.count
         print("Loaded \(swiftDataCount) encounters from SwiftData")
         
-        // Fallback to UserDefaults if SwiftData is empty (pre-migration)
-        if encounters.isEmpty {
+        // Only fallback to UserDefaults if migration hasn't been completed yet
+        // This prevents loading old data after it's been deleted from SwiftData
+        if encounters.isEmpty && !migrationCompleted {
             if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
                let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
                 encounters = loaded
@@ -662,8 +382,10 @@ class DroneStorageManager: ObservableObject {
             } else {
                 print("No encounters found in either SwiftData or UserDefaults (fresh install)")
             }
+        } else if encounters.isEmpty && migrationCompleted {
+            print("✅ Migration completed - SwiftData is intentionally empty (all data deleted or no encounters yet)")
         } else {
-            print("Using \(encounters.count) encounters from SwiftData")
+            print("✅ Using \(encounters.count) encounters from SwiftData")
         }
     }
     

@@ -3,8 +3,7 @@
 //  WarDragon
 //
 //  Created by Luke on 11/18/24.
-//
-
+//                                                                                                                                                                                                                                                    
 import SwiftUI
 import SwiftData
 import Network
@@ -110,6 +109,11 @@ struct ContentView: View {
             
             // Configure OpenSkyService with ModelContext
             OpenSkyService.shared.configure(with: modelContext)
+            
+            // CRITICAL FIX: Repair cached stats for all encounters
+            // This ensures encounters loaded from database have valid cached values
+            // to prevent crashes when accessing computed properties
+            SwiftDataStorageManager.shared.repairCachedStats()
             
             // Reload encounters from SwiftData now that ModelContext is set
             // This is important because DroneStorageManager.init() runs before
@@ -523,11 +527,8 @@ struct ContentView: View {
                 }
             }
             .listStyle(.inset)
-            .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in
-                if !cotViewModel.parsedMessages.isEmpty {
-                    cotViewModel.objectWillChange.send()
-                }
-            }
+            // REMOVED: Constant timer that was causing performance issues
+            // SwiftUI will automatically update when cotViewModel.parsedMessages changes
             .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
                 if oldMessages.count < newMessages.count {
                     if let latest = newMessages.last {
@@ -569,16 +570,26 @@ struct ContentView: View {
     }
     
     private func updateDetectionMode() {
-        // Auto-switch mode based on what's being tracked
+        // OPTIMIZED: Only update if mode actually needs to change
+        let newMode: DetectionMode
+        
         if hasAircraft && !hasDrones {
-            detectionMode = .aircraft
+            newMode = .aircraft
         } else if hasDrones && !hasAircraft {
-            detectionMode = .drones
+            newMode = .drones
         } else if hasAircraft && hasDrones {
-            // Keep current mode, but default to both if not set
-            if detectionMode != .both && detectionMode != .drones && detectionMode != .aircraft {
-                detectionMode = .both
+            // Keep current mode if already set to a valid option
+            if detectionMode == .both || detectionMode == .drones || detectionMode == .aircraft {
+                return  // No change needed
             }
+            newMode = .both
+        } else {
+            return  // Nothing to track, no change needed
+        }
+        
+        // Only update if different
+        if detectionMode != newMode {
+            detectionMode = newMode
         }
     }
     

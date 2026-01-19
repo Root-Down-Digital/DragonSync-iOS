@@ -10,8 +10,9 @@ import MapKit
 
 struct MessageRow: View {
     let message: CoTViewModel.CoTMessage
-    @ObservedObject var cotViewModel: CoTViewModel
-    @ObservedObject private var droneStorage = DroneStorageManager.shared
+    let cotViewModel: CoTViewModel  // Changed from @ObservedObject - we don't need to observe
+    @State private var droneEncounter: DroneEncounter?  // Cache locally instead of observing whole storage
+    @State private var droneSignature: DroneSignature?   // Cache locally
     @State private var activeSheet: SheetType?
     @State private var showingSaveConfirmation = false
     @State private var showingInfoEditor = false
@@ -69,11 +70,11 @@ struct MessageRow: View {
     // MARK: - Helper Properties
     
     private var currentEncounter: DroneEncounter? {
-        droneStorage.encounters[message.uid]
+        droneEncounter  // Use cached value
     }
     
     private var signature: DroneSignature? {
-        cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        droneSignature  // Use cached value
     }
     
     private func removeDroneFromTracking() {
@@ -129,19 +130,11 @@ struct MessageRow: View {
             "drone-\(baseId)"
         ]
         for id in possibleIds {
-            droneStorage.deleteEncounter(id: id)
+            DroneStorageManager.shared.deleteEncounter(id: id)
         }
     }
 
-    private func findEncounterForID(_ id: String) -> DroneEncounter? {
-        // Direct lookup first
-        if let encounter = droneStorage.encounters[id] {
-            return encounter
-        }
-
-        
-        return nil
-    }
+    // No longer needed - removed findEncounterForID
     // MARK: - Helper Methods
     
     private func rssiColor(_ rssi: Double) -> Color {
@@ -687,6 +680,11 @@ struct MessageRow: View {
                         .strokeBorder(Color.primary, lineWidth: 3)
                         .padding(-8)
                 )
+            }
+            .task(id: message.id) {
+                // PERFORMANCE: Load data once when row appears, not on every update
+                droneEncounter = DroneStorageManager.shared.encounters[message.uid]
+                droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
             }
             .contextMenu {
                 Button(action: {

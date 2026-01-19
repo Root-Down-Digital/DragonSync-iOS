@@ -167,6 +167,22 @@ struct WarDragonApp: App {
                 // Force DroneStorageManager to reload from SwiftData
                 DroneStorageManager.shared.loadFromStorage()
                 
+                // CRITICAL: Update cached stats for all existing encounters
+                print("🔄 Updating cached stats for all encounters...")
+                let allEncounters = try context.fetch(FetchDescriptor<StoredDroneEncounter>())
+                var updatedCount = 0
+                for encounter in allEncounters {
+                    // Only update if caches are empty (old data)
+                    if encounter.cachedFlightPointCount == 0 || encounter.cachedMaxAltitude == 0 {
+                        encounter.updateCachedStats()
+                        updatedCount += 1
+                    }
+                }
+                if updatedCount > 0 {
+                    try context.save()
+                    print("✅ Updated cached stats for \(updatedCount) encounters")
+                }
+                
                 print("🎉 Migration complete - app is now using the new storage system")
             } else {
                 throw lastError ?? NSError(domain: "Migration", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown migration error"])

@@ -8,40 +8,127 @@
 import Foundation
 import UIKit
 import SwiftUI
+import SwiftData
 import MapKit
 
 struct StoredEncountersView: View {
-    @ObservedObject var storage = DroneStorageManager.shared
+    @Query(
+        sort: \StoredDroneEncounter.lastSeen, 
+        order: .reverse
+    ) private var encounters: [StoredDroneEncounter]
+    
     @State private var showingDeleteConfirmation = false
     @State private var searchText = ""
-    @State private var sortOrder: SortOrder = .firstSeen
-    @ObservedObject var cotViewModel: CoTViewModel
+    @State private var sortOrder: SortOrder = .lastSeen
+    let cotViewModel: CoTViewModel
+    @Environment(\.modelContext) private var modelContext
+    @StateObject private var storage = SwiftDataStorageManager.shared
+    
+    // Cache for expensive computed values
+    @State private var cachedEncounterStats: [String: EncounterStats] = [:]
     
     enum SortOrder {
         case lastSeen, firstSeen, maxAltitude, maxSpeed
     }
     
-    var sortedEncounters: [DroneEncounter] {
-        let uniqueEncounters = Dictionary(grouping: storage.encounters.values) { encounter in
-            encounter.metadata["mac"] ?? encounter.id
-        }.values.map { encounters in
-            encounters.max { $0.lastSeen < $1.lastSeen }!
+    struct EncounterStats {
+        let maxAltitude: Double
+        let maxSpeed: Double
+        let averageRSSI: Double
+        let flightPointCount: Int
+        let signatureCount: Int
+    }
+    
+    var sortedEncounters: [StoredDroneEncounter] {
+        // Group by MAC address to deduplicate (only if needed)
+        let uniqueEncounters: [StoredDroneEncounter]
+        
+        // Skip expensive deduplication if not needed
+        let hasDuplicates = Set(encounters.map { $0.metadata["mac"] ?? $0.id }).count != encounters.count
+        
+        if hasDuplicates {
+            uniqueEncounters = Dictionary(grouping: encounters) { encounter in
+                encounter.metadata["mac"] ?? encounter.id
+            }.values.map { encounters in
+                encounters.max { $0.lastSeen < $1.lastSeen }!
+            }
+        } else {
+            uniqueEncounters = encounters
         }
         
-        let filtered = uniqueEncounters.filter { encounter in
-            searchText.isEmpty ||
-            encounter.id.localizedCaseInsensitiveContains(searchText) ||
-            encounter.metadata["caaRegistration"]?.localizedCaseInsensitiveContains(searchText) ?? false
-        }
-        
-        return filtered.sorted { first, second in
-            switch sortOrder {
-            case .lastSeen: return first.lastSeen > second.lastSeen
-            case .firstSeen: return first.firstSeen < second.firstSeen
-            case .maxAltitude: return first.maxAltitude > second.maxAltitude
-            case .maxSpeed: return first.maxSpeed > second.maxSpeed
+        // Fast filter
+        let filtered: [StoredDroneEncounter]
+        if searchText.isEmpty {
+            filtered = uniqueEncounters
+        } else {
+            let lowercasedSearch = searchText.lowercased()
+            filtered = uniqueEncounters.filter { encounter in
+                encounter.id.lowercased().contains(lowercasedSearch) ||
+                (encounter.metadata["caaRegistration"]?.lowercased().contains(lowercasedSearch) ?? false)
             }
         }
+        
+        // Sort efficiently
+        return filtered.sorted { first, second in
+            switch sortOrder {
+            case .lastSeen: 
+                return first.lastSeen > second.lastSeen
+            case .firstSeen: 
+                return first.firstSeen < second.firstSeen
+            case .maxAltitude:
+                // Use cached values if available
+                let firstAlt = cachedEncounterStats[first.id]?.maxAltitude ?? computeMaxAltitude(first)
+                let secondAlt = cachedEncounterStats[second.id]?.maxAltitude ?? computeMaxAltitude(second)
+                return firstAlt > secondAlt
+            case .maxSpeed:
+                // Use cached values if available
+                let firstSpeed = cachedEncounterStats[first.id]?.maxSpeed ?? computeMaxSpeed(first)
+                let secondSpeed = cachedEncounterStats[second.id]?.maxSpeed ?? computeMaxSpeed(second)
+                return firstSpeed > secondSpeed
+            }
+        }
+    }
+    
+    private func computeMaxAltitude(_ encounter: StoredDroneEncounter) -> Double {
+        // Use cached value from model - NEVER access relationships
+        return encounter.cachedMaxAltitude
+    }
+    
+    private func computeMaxSpeed(_ encounter: StoredDroneEncounter) -> Double {
+        // Use cached value from model - NEVER access relationships
+        return encounter.cachedMaxSpeed
+    }
+    
+    private func updateCache(for encounter: StoredDroneEncounter, maxAltitude: Double? = nil, maxSpeed: Double? = nil) {
+        var stats = cachedEncounterStats[encounter.id] ?? EncounterStats(
+            maxAltitude: 0,
+            maxSpeed: 0,
+            averageRSSI: 0,
+            flightPointCount: 0,
+            signatureCount: 0
+        )
+        
+        if let maxAlt = maxAltitude {
+            stats = EncounterStats(
+                maxAltitude: maxAlt,
+                maxSpeed: stats.maxSpeed,
+                averageRSSI: stats.averageRSSI,
+                flightPointCount: stats.flightPointCount,
+                signatureCount: stats.signatureCount
+            )
+        }
+        
+        if let maxSpd = maxSpeed {
+            stats = EncounterStats(
+                maxAltitude: stats.maxAltitude,
+                maxSpeed: maxSpd,
+                averageRSSI: stats.averageRSSI,
+                flightPointCount: stats.flightPointCount,
+                signatureCount: stats.signatureCount
+            )
+        }
+        
+        cachedEncounterStats[encounter.id] = stats
     }
     
     var body: some View {
@@ -78,14 +165,19 @@ struct StoredEncountersView: View {
                         .environmentObject(cotViewModel)) {
                             EncounterRow(encounter: encounter)
                         }
+                        .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                 }
                 .onDelete { indexSet in
                     for index in indexSet {
-                        storage.deleteEncounter(id: sortedEncounters[index].id)
+                        let encounterToDelete = sortedEncounters[index]
+                        modelContext.delete(encounterToDelete)
+                        // Clean up cache
+                        cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
                     }
                 }
             }
         }
+        .listStyle(.insetGrouped) // Better performance than plain list
         .searchable(text: $searchText, prompt: "Search by ID or CAA Registration")
         .navigationTitle("Encounter History")
         .navigationBarTitleDisplayMode(.large)
@@ -130,7 +222,25 @@ struct StoredEncountersView: View {
     }
     
     struct EncounterRow: View {
-        let encounter: DroneEncounter
+        let encounter: StoredDroneEncounter
+        
+        // Use cached values from the model - NO direct relationship access
+        private var cachedMaxAltitude: Double {
+            encounter.maxAltitude  // Uses cached value or computes safely
+        }
+        
+        private var cachedMaxSpeed: Double {
+            encounter.maxSpeed  // Uses cached value or computes safely
+        }
+        
+        private var cachedAverageRSSI: Double {
+            encounter.averageRSSI  // Uses cached value or computes safely
+        }
+        
+        private var flightPointCount: Int {
+            // ALWAYS use cached count - NEVER access relationships
+            encounter.cachedFlightPointCount
+        }
         
         var body: some View {
             VStack(alignment: .leading, spacing: 4) {
@@ -159,8 +269,6 @@ struct StoredEncountersView: View {
                     Image(systemName: "airplane")
                         .foregroundStyle(.blue)
                         .rotationEffect(.degrees(encounter.headingDeg - 90))
-                        .animation(.easeInOut(duration: 0.15),
-                                   value: encounter.headingDeg)
                 }
                 
                 if let mac = encounter.metadata["mac"] {
@@ -173,7 +281,7 @@ struct StoredEncountersView: View {
                         Image(systemName: "map")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
-                        Text("\(encounter.flightPath.count)")
+                        Text("\(flightPointCount)")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
                         Text("points")
@@ -186,7 +294,7 @@ struct StoredEncountersView: View {
                         Image(systemName: "arrow.up")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
-                        Text(String(format: "%.0f", encounter.maxAltitude))
+                        Text(String(format: "%.0f", cachedMaxAltitude))
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
                         Text("m")
@@ -199,7 +307,7 @@ struct StoredEncountersView: View {
                         Image(systemName: "speedometer")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
-                        Text(String(format: "%.0f", encounter.maxSpeed))
+                        Text(String(format: "%.0f", cachedMaxSpeed))
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
                         Text("m/s")
@@ -208,12 +316,12 @@ struct StoredEncountersView: View {
                     }
                     .frame(maxWidth: .infinity)
                     
-                    if encounter.averageRSSI != 0 {
+                    if cachedAverageRSSI != 0 {
                         VStack(spacing: 2) {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                                 .font(.appCaption)
                                 .foregroundStyle(.secondary)
-                            Text(String(format: "%.0f", encounter.averageRSSI))
+                            Text(String(format: "%.0f", cachedAverageRSSI))
                                 .font(.appCaption)
                                 .foregroundStyle(.secondary)
                             Text("dB")
@@ -244,14 +352,19 @@ struct StoredEncountersView: View {
     }
     
     struct EncounterDetailView: View {
-        let encounter: DroneEncounter
+        let encounter: StoredDroneEncounter
         @Environment(\.dismiss) private var dismiss
-        @StateObject private var storage = DroneStorageManager.shared
+        @Environment(\.modelContext) private var modelContext
         @State private var showingDeleteConfirmation = false
         @State private var showingInfoEditor = false
         @State private var selectedMapType: MapStyle = .standard
         @State private var mapCameraPosition: MapCameraPosition = .automatic
         @EnvironmentObject var cotViewModel: CoTViewModel
+        
+        // CRITICAL: Load relationship data into @State to avoid SwiftData faulting crashes
+        @State private var flightPoints: [StoredFlightPoint] = []
+        @State private var signatures: [StoredSignature] = []
+        @State private var isDataLoaded = false
         
         enum MapStyle {
             case standard, satellite, hybrid
@@ -304,20 +417,24 @@ struct StoredEncountersView: View {
                     
                     //MARK - View Sections
                     
-                    // Map
-                    mapSection
+                    // Map - only show if we have flight data and data is loaded
+                    if isDataLoaded && encounter.cachedFlightPointCount > 0 {
+                        mapSection
+                    }
                     
                     // Encounters section
                     encounterStats
                     
                     //                  metadataSection // TODO metadata section
                     
-                    if !encounter.macHistory.isEmpty && encounter.macHistory.count > 1 {
+                    if !encounter.macAddresses.isEmpty && encounter.macAddresses.count > 1 {
                         macSection
                     }
                     
-                    // Flight data stats
-                    flightDataSection
+                    // Flight data stats - only show if data is loaded
+                    if isDataLoaded {
+                        flightDataSection
+                    }
                     
                     // Raw message
                     rawMessagesSection
@@ -326,6 +443,7 @@ struct StoredEncountersView: View {
             }
             .navigationTitle("Encounter Details")
             .onAppear {
+                loadRelationshipData()
                 setupInitialMapPosition()
             }
             .sheet(isPresented: $showingInfoEditor) {
@@ -368,7 +486,7 @@ struct StoredEncountersView: View {
             }
             .alert("Delete Encounter", isPresented: $showingDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
-                    storage.deleteEncounter(id: encounter.id)
+                    modelContext.delete(encounter)
                     dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
@@ -378,9 +496,9 @@ struct StoredEncountersView: View {
         }
         
         private var mapSection: some View {
-            // Filter out ALL proximity points from the polyline
-            let droneFlightPoints = encounter.flightPath.filter { !$0.isProximityPoint }
-            let proximityPointsWithRssi = encounter.flightPath.filter { $0.isProximityPoint && $0.proximityRssi != nil }
+            // Use @State loaded data instead of direct relationship access
+            let droneFlightPoints = flightPoints.filter { !$0.isProximityPoint }
+            let proximityPointsWithRssi = flightPoints.filter { $0.isProximityPoint && $0.proximityRssi != nil }
             
             let pilotItems = buildPilotItems()
             let homeItems = buildHomeItems()
@@ -682,11 +800,20 @@ struct StoredEncountersView: View {
             .cornerRadius(12)
         }
         
+        // CRITICAL: Load relationship data safely in the view lifecycle
+        private func loadRelationshipData() {
+            // Access relationships here where SwiftData context is available
+            // This prevents faulting crashes in computed properties
+            flightPoints = encounter.flightPoints
+            signatures = encounter.signatures
+            isDataLoaded = true
+        }
+        
         private func setupInitialMapPosition() {
             var allCoordinates: [CLLocationCoordinate2D] = []
             
-            // ONLY add regular flight points, NOT proximity points
-            let regularFlightPoints = encounter.flightPath.filter { point in
+            // Use loaded state data instead of direct relationship access
+            let regularFlightPoints = flightPoints.filter { point in
                 (point.latitude != 0 || point.longitude != 0) && !point.isProximityPoint
             }
             allCoordinates.append(contentsOf: regularFlightPoints.map { $0.coordinate })
@@ -764,17 +891,20 @@ struct StoredEncountersView: View {
                 
                 StatsGrid {
                     StatItem(title: "Duration", value: formatDuration(encounter.totalFlightTime))
-                    StatItem(title: "Max Alt", value: String(format: "%.1fm", encounter.maxAltitude))
-                    StatItem(title: "Max Speed", value: String(format: "%.1fm/s", encounter.maxSpeed))
-                    StatItem(title: "Avg RSSI", value: String(format: "%.1fdBm", encounter.averageRSSI))
-                    StatItem(title: "Signatures", value: "\(encounter.signatures.count)")
+                    StatItem(title: "Max Alt", value: String(format: "%.1fm", encounter.cachedMaxAltitude))
+                    StatItem(title: "Max Speed", value: String(format: "%.1fm/s", encounter.cachedMaxSpeed))
+                    StatItem(title: "Avg RSSI", value: String(format: "%.1fdBm", encounter.cachedAverageRSSI))
+                    // Always use cached count to avoid faulting
+                    StatItem(title: "Signatures", value: "\(encounter.cachedSignatureCount)")
+                    
                     // MARK: - FIX: Show actual detection count for FPV
                     if encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true" {
-                        let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ??
-                        encounter.flightPath.filter { $0.isProximityPoint }.count
-                        StatItem(title: "Points", value: "\(totalDetections)")
+                        let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ?? 0
+                        let proximityCount = totalDetections > 0 ? totalDetections : encounter.cachedFlightPointCount
+                        StatItem(title: "Points", value: "\(proximityCount)")
                     } else {
-                        StatItem(title: "Points", value: "\(encounter.flightPath.count)")
+                        // Use cached count - NEVER access flightPoints.count directly
+                        StatItem(title: "Points", value: "\(encounter.cachedFlightPointCount)")
                     }
                     
                 }
@@ -849,7 +979,7 @@ struct StoredEncountersView: View {
                 Text("Device using MAC randomization")
                     .font(.appSubheadline)
                 Spacer()
-                Text("\(encounter.macHistory.count) addresses")
+                Text("\(encounter.macAddresses.count) addresses")
                     .font(.appCaption)
                     .foregroundColor(.secondary)
             }
@@ -858,7 +988,7 @@ struct StoredEncountersView: View {
         private var macAddressScrollView: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(encounter.macHistory).sorted(), id: \.self) { mac in
+                    ForEach(Array(encounter.macAddresses).sorted(), id: \.self) { mac in
                         macAddressRow(mac)
                     }
                 }
@@ -874,12 +1004,9 @@ struct StoredEncountersView: View {
                 Text(mac)
                     .font(.appCaption)
                 
-                if let firstSig = encounter.signatures.first(where: { $0.mac == mac }) {
-                    Spacer()
-                    Text(Date(timeIntervalSince1970: firstSig.timestamp), format: .dateTime.year().month().day().hour().minute())
-                        .font(.appCaption)
-                        .foregroundColor(.secondary)
-                }
+                // Don't access signatures relationship here - too slow
+                // Just show the MAC without timestamp
+                Spacer()
             }
         }
         
@@ -891,14 +1018,41 @@ struct StoredEncountersView: View {
                     .font(.appHeadline)
                     .frame(maxWidth: .infinity, alignment: .center)
                 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 20) {
-                        Spacer()
-                        FlightDataChart(title: "Altitude", data: encounter.flightPath.map { $0.altitude }.filter { $0 != 0 })
-                        FlightDataChart(title: "Speed", data: encounter.signatures.map { $0.speed }.filter { $0 != 0 })
-                        FlightDataChart(title: "RSSI", data: encounter.signatures.map { $0.rssi }.filter { $0 != 0 })
-                        Spacer()
+                // Only show charts if we have data cached
+                if encounter.cachedFlightPointCount > 0 || encounter.cachedSignatureCount > 0 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 20) {
+                            Spacer()
+                            
+                            // Only show altitude chart if we have flight points
+                            if encounter.cachedFlightPointCount > 0 {
+                                FlightDataChart(
+                                    title: "Altitude", 
+                                    data: flightPoints.lazy.map { $0.altitude }.filter { $0 != 0 }
+                                )
+                            }
+                            
+                            // Only show speed/RSSI if we have signatures
+                            if encounter.cachedSignatureCount > 0 {
+                                FlightDataChart(
+                                    title: "Speed", 
+                                    data: signatures.lazy.map { $0.speed }.filter { $0 != 0 }
+                                )
+                                FlightDataChart(
+                                    title: "RSSI", 
+                                    data: signatures.lazy.map { $0.rssi }.filter { $0 != 0 }
+                                )
+                            }
+                            
+                            Spacer()
+                        }
                     }
+                } else {
+                    Text("No flight data available for charts")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding()
                 }
             }
             .padding()
@@ -944,6 +1098,12 @@ struct StoredEncountersView: View {
     struct FlightDataChart: View {
         let title: String
         let data: [Double]
+        
+        // Accept lazy sequences
+        init<S: Sequence>(title: String, data: S) where S.Element == Double {
+            self.title = title
+            self.data = Array(data)
+        }
         
         var body: some View {
             VStack {
@@ -1006,9 +1166,9 @@ private func formatDuration(_ time: TimeInterval) -> String {
 }
 
 extension StoredEncountersView.EncounterDetailView {
-    private func generateKML(for encounter: DroneEncounter) -> String {
-        // Filter out proximity points from KML export
-        let regularPoints = encounter.flightPath.filter { !$0.isProximityPoint }
+    private func generateKML(for encounter: StoredDroneEncounter) -> String {
+        // Use loaded state data instead of direct relationship access
+        let regularPoints = flightPoints.filter { !$0.isProximityPoint }
         
         var kmlContent = """
         <?xml version="1.0" encoding="UTF-8"?>
