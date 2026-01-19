@@ -29,6 +29,13 @@ struct ContentView: View {
     @State private var lastViewedDroneCount = 0
     @State private var lastViewedAircraftCount = 0
     
+    // Navigation paths for each tab
+    @State private var dashboardPath = NavigationPath()
+    @State private var detectionsPath = NavigationPath()
+    @State private var statusPath = NavigationPath()
+    @State private var settingsPath = NavigationPath()
+    @State private var historyPath = NavigationPath()
+    
     enum DetectionMode {
         case drones
         case aircraft
@@ -65,6 +72,11 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { oldValue, newValue in
             handleTabChange(from: oldValue, to: newValue)
+            
+            // Pop to root when tapping the same tab again
+            if oldValue == newValue {
+                popToRoot(for: newValue)
+            }
             
             // Clear unread count when detections tab is selected
             if newValue == 1 {
@@ -154,7 +166,7 @@ struct ContentView: View {
     // MARK: - Tab Views
     
     private var dashboardTab: some View {
-        NavigationStack {
+        NavigationStack(path: $dashboardPath) {
             DashboardView(
                 statusViewModel: statusViewModel,
                 cotViewModel: cotViewModel,
@@ -169,7 +181,7 @@ struct ContentView: View {
     }
     
     private var detectionsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $detectionsPath) {
             VStack {
                 detectionModePicker
                 detectionContent
@@ -208,7 +220,7 @@ struct ContentView: View {
     }
     
     private var statusTab: some View {
-        NavigationStack {
+        NavigationStack(path: $statusPath) {
             StatusListView(statusViewModel: statusViewModel)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -225,7 +237,7 @@ struct ContentView: View {
     }
     
     private var settingsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $settingsPath) {
             SettingsView(cotHandler: cotViewModel)
         }
         .tabItem {
@@ -235,7 +247,7 @@ struct ContentView: View {
     }
     
     private var historyTab: some View {
-        NavigationStack {
+        NavigationStack(path: $historyPath) {
             StoredEncountersView(cotViewModel: cotViewModel)
         }
         .tabItem {
@@ -547,6 +559,24 @@ struct ContentView: View {
     
     // MARK: - Helper Methods
     
+    /// Pop navigation stack to root when tab is tapped while already selected
+    private func popToRoot(for tab: Int) {
+        switch tab {
+        case 0:
+            dashboardPath = NavigationPath()
+        case 1:
+            detectionsPath = NavigationPath()
+        case 2:
+            statusPath = NavigationPath()
+        case 3:
+            settingsPath = NavigationPath()
+        case 4:
+            historyPath = NavigationPath()
+        default:
+            break
+        }
+    }
+    
     private func handleListeningChange() {
         if settings.isListening {
             cotViewModel.startListening()
@@ -570,7 +600,7 @@ struct ContentView: View {
     }
     
     private func updateDetectionMode() {
-        // OPTIMIZED: Only update if mode actually needs to change
+        // Only update if mode actually needs to change
         let newMode: DetectionMode
         
         if hasAircraft && !hasDrones {

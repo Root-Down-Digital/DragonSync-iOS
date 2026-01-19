@@ -77,20 +77,14 @@ final class StoredDroneEncounter {
     }
     
     var maxAltitude: Double {
-        // ALWAYS use cached value - NEVER access relationships in computed properties
-        // Relationships can fault in SwiftData and cause crashes
         return cachedMaxAltitude
     }
     
     var maxSpeed: Double {
-        // ALWAYS use cached value - NEVER access relationships in computed properties
-        // Relationships can fault in SwiftData and cause crashes
         return cachedMaxSpeed
     }
     
     var averageRSSI: Double {
-        // ALWAYS use cached value - NEVER access relationships in computed properties
-        // Relationships can fault in SwiftData and cause crashes
         return cachedAverageRSSI
     }
     
