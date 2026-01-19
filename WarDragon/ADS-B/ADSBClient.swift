@@ -2,8 +2,6 @@
 //  ADSBClient.swift
 //  WarDragon
 //
-//  ADS-B client for fetching aircraft data from readsb and other HTTP APIs
-//
 
 import Foundation
 import Combine
@@ -76,20 +74,31 @@ struct ADSBConfiguration: Codable, Equatable {
             urlString = "http://" + urlString
         }
         
-        // First, ensure the base URL is valid
-        guard let baseURL = URL(string: urlString) else {
-            print("DEBUG: Failed to create URL from readsbURL: '\(urlString)'")
-            return nil
-        }
-        
         // Ensure data path ends with .json
         guard dataPath.hasSuffix(".json") else {
             print("DEBUG: Data path must end with .json: '\(dataPath)'")
             return nil
         }
         
-        // Combine base URL with the data path
-        let finalURL = baseURL.appendingPathComponent(dataPath)
+        // Clean up the data path
+        let cleanPath = dataPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Remove trailing slash from base URL if present
+        if urlString.hasSuffix("/") {
+            urlString.removeLast()
+        }
+        
+        // Ensure path starts with / if it doesn't already
+        let finalPath = cleanPath.hasPrefix("/") ? cleanPath : "/" + cleanPath
+        
+        // Combine base URL and path directly as strings
+        let fullURLString = urlString + finalPath
+        
+        guard let finalURL = URL(string: fullURLString) else {
+            print("DEBUG: Failed to create URL from: '\(fullURLString)'")
+            return nil
+        }
+        
         return finalURL
     }
 }
@@ -282,10 +291,18 @@ class ADSBClient: ObservableObject {
             consecutiveErrors += 1
             lastError = error
             
-            // Check if it's a connection error (server not running)
-            let isConnectionError = (error as NSError).code == -1004 || (error as NSError).code == -1003 || (error as NSError).code == -1001
+            let nsError = error as NSError
             
-            if isConnectionError {
+            // Check if it's an App Transport Security error
+            if nsError.code == -1022 {
+                logger.error("App Transport Security blocking connection to \(url.absoluteString)")
+                logger.error("Add NSAllowsLocalNetworking to Info.plist under NSAppTransportSecurity")
+                state = .failed(ADSBError.appTransportSecurity)
+                stop()  // Stop immediately on ATS error
+                return
+            }
+            // Check if it's a connection error (server not running)
+            else if nsError.code == -1004 || nsError.code == -1003 || nsError.code == -1001 {
                 // During initial connection (first N attempts), be less noisy with warnings
                 if isInitialConnection && consecutiveErrors <= initialConnectionGracePeriod {
                     logger.debug("Initial connection attempt \(self.consecutiveErrors): server not ready yet")
@@ -293,7 +310,7 @@ class ADSBClient: ObservableObject {
                     logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
                 }
             } else {
-                logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription)")
+                logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription) (code: \(nsError.code))")
             }
             
             // Only stop after max consecutive errors
@@ -354,6 +371,7 @@ enum ADSBError: LocalizedError {
     case httpError(Int)
     case connectionFailed
     case decodingFailed
+    case appTransportSecurity
     
     var errorDescription: String? {
         switch self {
@@ -369,6 +387,8 @@ enum ADSBError: LocalizedError {
             return "Connection to readsb failed"
         case .decodingFailed:
             return "Failed to decode readsb data"
+        case .appTransportSecurity:
+            return "App Transport Security blocked the connection. Add NSAllowsLocalNetworking to Info.plist"
         }
     }
 }
