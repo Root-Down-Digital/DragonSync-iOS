@@ -265,9 +265,7 @@ class DroneStorageManager: ObservableObject {
     @Published private(set) var encounters: [String: DroneEncounter] = [:]
     
     init() {
-        // Migration will happen automatically in WarDragonApp
-        // Don't load here - wait for ModelContext to be set in ContentView.onAppear()
-        // loadFromStorage() will be called after ModelContext is injected
+        // Migration will happen automatically in app delegate
     }
     
     // Force save (call when app goes to background)
@@ -277,8 +275,7 @@ class DroneStorageManager: ObservableObject {
     
     nonisolated func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
         Task { @MainActor in
-            // OPTIMIZED: Directly delegate to SwiftData - no in-memory processing
-            await swiftDataManager.saveEncounter(message, monitorStatus: monitorStatus)
+            swiftDataManager.saveEncounter(message, monitorStatus: monitorStatus)
         }
     }
 
@@ -328,16 +325,12 @@ class DroneStorageManager: ObservableObject {
         // Delete from in-memory cache
         encounters.removeValue(forKey: id)
         objectWillChange.send()
-        
-        // Note: We don't delete from UserDefaults here since it's a pre-migration backup
-        // and individual deletions shouldn't affect it
     }
     
     func deleteAllEncounters() {
         // Delete from SwiftData
         swiftDataManager.deleteAllEncounters()
         
-        // IMPORTANT: Also clear the old UserDefaults backup to prevent it from being reloaded
         UserDefaults.standard.removeObject(forKey: "DroneEncounters")
         UserDefaults.standard.synchronize()
         print("🗑️ Cleared UserDefaults backup")
@@ -350,9 +343,11 @@ class DroneStorageManager: ObservableObject {
     }
     
     func saveToStorage() {
-        // This now delegates to SwiftData manager
-        // The SwiftData manager handles all persistence
-        // Kept for backward compatibility but does nothing
+        // Save all in-memory changes to SwiftData
+        for (_, encounter) in encounters {
+            swiftDataManager.saveEncounterDirect(encounter)
+        }
+        swiftDataManager.forceSave()
     }
     
     func loadFromStorage() {
@@ -396,48 +391,76 @@ class DroneStorageManager: ObservableObject {
     }
     
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
-        if var encounter = encounters[droneId] {
-            // Update current location
-            encounter.metadata["pilotLat"] = String(latitude)
-            encounter.metadata["pilotLon"] = String(longitude)
-            
-            // Preserve in history
-            let timestamp = Date().timeIntervalSince1970
-            let pilotEntry = "\(timestamp):\(latitude),\(longitude)"
-            
-            if let existingHistory = encounter.metadata["pilotHistory"] {
-                encounter.metadata["pilotHistory"] = existingHistory + ";" + pilotEntry
-            } else {
-                encounter.metadata["pilotHistory"] = pilotEntry
-            }
-            
-            encounters[droneId] = encounter
-            saveToStorage()
-            print("Updated pilot location history for \(droneId)")
+        // Fetch encounter from SwiftData
+        guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
+            print("⚠️ Encounter not found: \(droneId)")
+            return
         }
+        
+        // Update metadata
+        var metadata = storedEncounter.metadata
+        metadata["pilotLat"] = String(latitude)
+        metadata["pilotLon"] = String(longitude)
+        
+        // Preserve in history
+        let timestamp = Date().timeIntervalSince1970
+        let pilotEntry = "\(timestamp):\(latitude),\(longitude)"
+        
+        if let existingHistory = metadata["pilotHistory"] {
+            metadata["pilotHistory"] = existingHistory + ";" + pilotEntry
+        } else {
+            metadata["pilotHistory"] = pilotEntry
+        }
+        
+        storedEncounter.metadata = metadata
+        
+        // Save to SwiftData
+        swiftDataManager.forceSave()
+        
+        // Update in-memory cache
+        if var encounter = encounters[droneId] {
+            encounter.metadata = metadata
+            encounters[droneId] = encounter
+        }
+        
+        print("Updated pilot location history for \(droneId)")
     }
 
     // Update home location function to preserve history
     func updateHomeLocation(droneId: String, latitude: Double, longitude: Double) {
-        if var encounter = encounters[droneId] {
-            // Update current location
-            encounter.metadata["homeLat"] = String(latitude)
-            encounter.metadata["homeLon"] = String(longitude)
-            
-            // Preserve in history
-            let timestamp = Date().timeIntervalSince1970
-            let homeEntry = "\(timestamp):\(latitude),\(longitude)"
-            
-            if let existingHistory = encounter.metadata["homeHistory"] {
-                encounter.metadata["homeHistory"] = existingHistory + ";" + homeEntry
-            } else {
-                encounter.metadata["homeHistory"] = homeEntry
-            }
-            
-            encounters[droneId] = encounter
-            saveToStorage()
-            print("Updated home location history for \(droneId)")
+        // Fetch encounter from SwiftData
+        guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
+            print("⚠️ Encounter not found: \(droneId)")
+            return
         }
+        
+        // Update metadata
+        var metadata = storedEncounter.metadata
+        metadata["homeLat"] = String(latitude)
+        metadata["homeLon"] = String(longitude)
+        
+        // Preserve in history
+        let timestamp = Date().timeIntervalSince1970
+        let homeEntry = "\(timestamp):\(latitude),\(longitude)"
+        
+        if let existingHistory = metadata["homeHistory"] {
+            metadata["homeHistory"] = existingHistory + ";" + homeEntry
+        } else {
+            metadata["homeHistory"] = homeEntry
+        }
+        
+        storedEncounter.metadata = metadata
+        
+        // Save to SwiftData
+        swiftDataManager.forceSave()
+        
+        // Update in-memory cache
+        if var encounter = encounters[droneId] {
+            encounter.metadata = metadata
+            encounters[droneId] = encounter
+        }
+        
+        print("Updated home location history for \(droneId)")
     }
 
     // Helper function for distance calculation
@@ -449,52 +472,59 @@ class DroneStorageManager: ObservableObject {
 
     
     func updateProximityPointsWithCorrectRadius() {
-        for (id, encounter) in encounters {
-            if encounter.metadata["hasProximityPoints"] == "true" {
-                var updatedEncounter = encounter
-                var updatedFlightPath: [FlightPathPoint] = []
-                
-                for point in encounter.flightPath {
-                    if point.isProximityPoint {
-                        var radius: Double
+        // Fetch all encounters from SwiftData
+        let allEncounters = swiftDataManager.fetchAllEncounters()
+        
+        for storedEncounter in allEncounters {
+            guard storedEncounter.metadata["hasProximityPoints"] == "true" else { continue }
+            
+            var updatedFlightPoints: [StoredFlightPoint] = []
+            var needsUpdate = false
+            
+            for point in storedEncounter.flightPoints {
+                if point.isProximityPoint {
+                    // Calculate from RSSI if needed
+                    if let rssi = point.proximityRssi, (point.proximityRadius == nil || point.proximityRadius == 0) {
+                        let generator = DroneSignatureGenerator()
+                        var radius = generator.calculateDistance(rssi)
                         
-                        // Calculate from RSSI if needed
-                        if let rssi = point.proximityRssi, (point.proximityRadius == nil || point.proximityRadius == 0) {
-                            let generator = DroneSignatureGenerator()
-                            radius = generator.calculateDistance(rssi)
-                            
-                            // Ensure minimum radius - TODO decide if needede
-                            
-                            radius = max(radius, 50.0)
-                            
-                            // Create new point with calculated radius
-                            let updatedPoint = FlightPathPoint(
-                                latitude: point.latitude,
-                                longitude: point.longitude,
-                                altitude: point.altitude,
-                                timestamp: point.timestamp,
-                                homeLatitude: point.homeLatitude,
-                                homeLongitude: point.homeLongitude,
-                                isProximityPoint: true,
-                                proximityRssi: point.proximityRssi,
-                                proximityRadius: radius
-                            )
-                            updatedFlightPath.append(updatedPoint)
-                        } else {
-                            updatedFlightPath.append(point)
-                        }
+                        // Ensure minimum radius
+                        radius = max(radius, 50.0)
+                        
+                        // Create new point with calculated radius
+                        let updatedPoint = StoredFlightPoint(
+                            latitude: point.latitude,
+                            longitude: point.longitude,
+                            altitude: point.altitude,
+                            timestamp: point.timestamp,
+                            homeLatitude: point.homeLatitude,
+                            homeLongitude: point.homeLongitude,
+                            isProximityPoint: true,
+                            proximityRssi: point.proximityRssi,
+                            proximityRadius: radius
+                        )
+                        updatedFlightPoints.append(updatedPoint)
+                        needsUpdate = true
                     } else {
-                        updatedFlightPath.append(point)
+                        updatedFlightPoints.append(point)
                     }
-                }
-                
-                if updatedFlightPath.count > 0 {
-                    updatedEncounter.flightPath = updatedFlightPath
-                    encounters[id] = updatedEncounter
+                } else {
+                    updatedFlightPoints.append(point)
                 }
             }
+            
+            if needsUpdate {
+                // Remove old points and add updated ones
+                storedEncounter.flightPoints.removeAll()
+                storedEncounter.flightPoints.append(contentsOf: updatedFlightPoints)
+            }
         }
-        saveToStorage()
+        
+        // Save all changes to SwiftData
+        swiftDataManager.forceSave()
+        
+        // Refresh in-memory cache
+        updateInMemoryCache()
     }
     
     func exportToCSV() -> String {
