@@ -184,18 +184,17 @@ struct ContentView: View {
     private var detectionsTab: some View {
         NavigationStack(path: $detectionsPath) {
             VStack(spacing: 0) {
-                // Detection mode picker - pinned at top
-                if hasDrones && hasAircraft {
-                    detectionModePicker
-                        .background(Color(UIColor.systemBackground))
-                        .zIndex(1)
-                }
-                
                 // Main content area
                 detectionContent
             }
             .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(hasDrones && hasAircraft ? .inline : .large)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // Detection mode picker - floating at top when both types present
+                if hasDrones && hasAircraft {
+                    detectionModePicker
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     mapButton
@@ -288,15 +287,13 @@ struct ContentView: View {
         switch detectionMode {
         case .drones:
             VStack(spacing: 0) {
-                // Stats overview - collapsible header
+                // Stats overview - NO SCROLLING NEEDED!
                 if !cotViewModel.parsedMessages.isEmpty {
-                    ScrollView {
-                        DetectionsStatsView(
-                            cotViewModel: cotViewModel,
-                            detectionMode: detectionMode
-                        )
-                    }
-                    .frame(maxHeight: 350)
+                    DetectionsStatsView(
+                        cotViewModel: cotViewModel,
+                        detectionMode: detectionMode
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
                     
                     Divider()
                 }
@@ -305,15 +302,13 @@ struct ContentView: View {
             }
         case .aircraft:
             VStack(spacing: 0) {
-                // Stats overview - collapsible header
+                // Stats overview - NO SCROLLING NEEDED!
                 if !cotViewModel.aircraftTracks.isEmpty {
-                    ScrollView {
-                        DetectionsStatsView(
-                            cotViewModel: cotViewModel,
-                            detectionMode: detectionMode
-                        )
-                    }
-                    .frame(maxHeight: 350)
+                    DetectionsStatsView(
+                        cotViewModel: cotViewModel,
+                        detectionMode: detectionMode
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
                     
                     Divider()
                 }
@@ -322,15 +317,13 @@ struct ContentView: View {
             }
         case .both:
             VStack(spacing: 0) {
-                // Stats overview - collapsible header
+                // Stats overview - NO SCROLLING NEEDED!
                 if hasDrones || hasAircraft {
-                    ScrollView {
-                        DetectionsStatsView(
-                            cotViewModel: cotViewModel,
-                            detectionMode: detectionMode
-                        )
-                    }
-                    .frame(maxHeight: 350)
+                    DetectionsStatsView(
+                        cotViewModel: cotViewModel,
+                        detectionMode: detectionMode
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
                     
                     Divider()
                 }

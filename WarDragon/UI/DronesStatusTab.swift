@@ -65,32 +65,11 @@ struct DronesStatusTab: View {
                 emptyStateView
             } else {
                 List {
-                    // Stats header at the top of list
-                    Section {
-                        droneStatsHeader
-                    }
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    
-                    // Detection timeline chart
-                    if let timelineData = detectionTimelineData, !timelineData.isEmpty {
-                        Section {
-                            detectionTimelineChart(data: timelineData)
-                        }
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                    }
-                    
-                    // Active drones list
-                    Section(header: Text("ACTIVE DETECTIONS (\(filteredAndSortedDrones.count))")) {
+                    // Active drones list - no redundant header, just the list
+                    Section(header: sectionHeader) {
                         ForEach(filteredAndSortedDrones) { drone in
                             DroneStatusRow(drone: drone, cotViewModel: cotViewModel)
                         }
-                    }
-                    
-                    // Additional stats section
-                    Section(header: Text("STATISTICS")) {
-                        droneStatisticsList
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -99,8 +78,8 @@ struct DronesStatusTab: View {
                 }
             }
         }
-        .navigationTitle("Drone Tracking")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Drones")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 // Filter button
@@ -152,73 +131,22 @@ struct DronesStatusTab: View {
     
     // MARK: - Subviews
     
-    private var droneStatsHeader: some View {
-        VStack(spacing: 8) {
-            // Primary stats row
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                StatBadge(
-                    icon: "airplane.circle",
-                    value: "\(cotViewModel.parsedMessages.count)",
-                    label: "Drones"
-                )
-                
-                StatBadge(
-                    icon: "number.circle",
-                    value: "\(uniqueMACCount)",
-                    label: "Unique"
-                )
-                
-                StatBadge(
-                    icon: "exclamationmark.triangle",
-                    value: "\(spoofedCount)",
-                    label: "Spoofed"
-                )
-                
-                StatBadge(
-                    icon: "antenna.radiowaves.left.and.right",
-                    value: "\(fpvCount)",
-                    label: "FPV"
-                )
+    private var sectionHeader: some View {
+        HStack {
+            Text("\(filteredAndSortedDrones.count) DRONES")
+            Spacer()
+            if spoofedCount > 0 {
+                Label("\(spoofedCount)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.yellow)
             }
-            
-            // Secondary stats row
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                if let avgRSSI = averageRSSI {
-                    StatBadge(
-                        icon: "waveform",
-                        value: "\(avgRSSI) dBm",
-                        label: "Avg Signal"
-                    )
-                }
-                
-                StatBadge(
-                    icon: "clock",
-                    value: timeActive,
-                    label: "Tracking"
-                )
-                
-                if let strongestSignal = strongestSignal {
-                    StatBadge(
-                        icon: "dot.radiowaves.left.and.right",
-                        value: "\(strongestSignal) dBm",
-                        label: "Strongest"
-                    )
-                }
+            if fpvCount > 0 {
+                Label("\(fpvCount)", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
         }
-        .padding()
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(12)
-        .padding(.horizontal)
+        .textCase(nil)
     }
     
     private var emptyStateView: some View {
@@ -616,25 +544,32 @@ private struct StatBadge: View {
     let label: String
     
     var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundColor(.blue)
+        VStack(spacing: 6) {
+            // Icon in circular background
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.2))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.blue)
+            }
             
             Text(value)
-                .font(.system(.subheadline, design: .monospaced))
-                .fontWeight(.semibold)
-                .minimumScaleFactor(0.8)
+                .font(.system(.title3, design: .monospaced))
+                .fontWeight(.bold)
+                .minimumScaleFactor(0.7)
                 .lineLimit(1)
             
             Text(label)
-                .font(.system(.caption2, design: .monospaced))
+                .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
     }
 }
 

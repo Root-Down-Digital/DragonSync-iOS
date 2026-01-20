@@ -47,14 +47,6 @@ struct AircraftListView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Stats header
-            if !cotViewModel.aircraftTracks.isEmpty {
-                aircraftStatsHeader
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground))
-            }
-            
             // Main list
             if cotViewModel.aircraftTracks.isEmpty {
                 emptyStateView
@@ -111,30 +103,6 @@ struct AircraftListView: View {
     
     // MARK: - Subviews
     
-    private var aircraftStatsHeader: some View {
-        HStack(spacing: 16) {
-            StatBadge(
-                icon: "airplane",
-                value: "\(cotViewModel.aircraftTracks.count)",
-                label: "Aircraft"
-            )
-            
-            StatBadge(
-                icon: "antenna.radiowaves.left.and.right",
-                value: "\(activeAircraftCount)",
-                label: "Active"
-            )
-            
-            if let highest = highestAircraft {
-                StatBadge(
-                    icon: "arrow.up.circle.fill",
-                    value: "\(highest)",
-                    label: "Max Alt (ft)"
-                )
-            }
-        }
-    }
-    
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "airplane.circle")
@@ -189,29 +157,6 @@ struct AircraftListView: View {
         case .callsign:
             return "textformat.abc.dottedunderline"
         }
-    }
-}
-
-// MARK: - Stat Badge Component
-
-private struct StatBadge: View {
-    let icon: String
-    let value: String
-    let label: String
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption2)
-                Text(value)
-                    .font(.headline)
-            }
-            Text(label)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 

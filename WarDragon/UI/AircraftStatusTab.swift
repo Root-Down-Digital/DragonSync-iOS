@@ -629,25 +629,32 @@ private struct StatBadge: View {
     let label: String
     
     var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundColor(.cyan)
+        VStack(spacing: 6) {
+            // Icon in circular background
+            ZStack {
+                Circle()
+                    .fill(Color.cyan.opacity(0.2))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.cyan)
+            }
             
             Text(value)
-                .font(.system(.subheadline, design: .monospaced))
-                .fontWeight(.semibold)
-                .minimumScaleFactor(0.8)
+                .font(.system(.title3, design: .monospaced))
+                .fontWeight(.bold)
+                .minimumScaleFactor(0.7)
                 .lineLimit(1)
             
             Text(label)
-                .font(.system(.caption2, design: .monospaced))
+                .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
     }
 }
 

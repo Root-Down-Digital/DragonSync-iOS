@@ -11,64 +11,170 @@ import Charts
 struct DetectionsStatsView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     let detectionMode: ContentView.DetectionMode
+    @State private var updateTimer: Timer?
+    
+    // Real-time timeline data - computed from current detections
+    private var timelineData: [TimelineDataPoint] {
+        // Generate simple 12-point timeline based on current counts
+        let now = Date()
+        return (0..<12).map { offset in
+            TimelineDataPoint(
+                timestamp: now.addingTimeInterval(Double(offset - 11) * 30), // 30 sec intervals, 6 min window
+                droneCount: cotViewModel.parsedMessages.count,
+                aircraftCount: cotViewModel.aircraftTracks.count
+            )
+        }
+    }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Header with summary stats
-                statsHeader
-                
-                // Charts section
+        VStack(spacing: 8) {
+            timelineChart
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(8)
+            
+            statsHeader
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .onAppear {
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+    }
+    
+    private func startTimer() {
+        // No longer needed - chart uses computed property
+    }
+    
+    private func stopTimer() {
+        updateTimer?.invalidate()
+        updateTimer = nil
+    }
+    
+    // MARK: - Compact Stats Header
+    
+    private var compactStatsHeader: some View {
+        HStack(spacing: 12) {
+            if detectionMode == .drones || detectionMode == .both {
+                StatPill(icon: "airplane.circle.fill", value: "\(activeDroneCount)", label: "Drones", color: .blue)
+                StatPill(icon: "number.circle.fill", value: "\(uniqueMacCount)", label: "MACs", color: .purple)
+            }
+            
+            if detectionMode == .aircraft || detectionMode == .both {
+                StatPill(icon: "airplane.departure", value: "\(cotViewModel.aircraftTracks.count)", label: "Aircraft", color: .cyan)
+                if let maxAlt = maxAircraftAltitude {
+                    StatPill(icon: "arrow.up.circle.fill", value: "\(maxAlt/1000)k", label: "Alt", color: .green)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Timeline Chart
+    
+    private var timelineChart: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("DETECTIONS TIMELINE")
+                .font(.system(.caption2, design: .monospaced))
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+            
+            Chart(timelineData) { point in
                 if detectionMode == .drones || detectionMode == .both {
-                    droneCharts
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Drones", point.droneCount)
+                    )
+                    .foregroundStyle(.blue)
+                    .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Drones", point.droneCount)
+                    )
+                    .foregroundStyle(.blue.opacity(0.1))
+                    .interpolationMethod(.catmullRom)
                 }
                 
                 if detectionMode == .aircraft || detectionMode == .both {
-                    aircraftCharts
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Aircraft", point.aircraftCount)
+                    )
+                    .foregroundStyle(.cyan)
+                    .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Aircraft", point.aircraftCount)
+                    )
+                    .foregroundStyle(.cyan.opacity(0.1))
+                    .interpolationMethod(.catmullRom)
                 }
             }
-            .padding()
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(12)
-            .padding(.horizontal)
+            .frame(height: 80)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                    AxisValueLabel(format: .dateTime.hour().minute())
+                        .font(.caption2)
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisValueLabel()
+                        .font(.caption2)
+                }
+            }
         }
     }
+    
+    // MARK: - Timeline Data Management
+    // No longer needed - using computed property for real-time data
     
     // MARK: - Stats Header
     
     private var statsHeader: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 6) {
             HStack {
                 Image(systemName: "chart.bar.fill")
+                    .font(.caption)
                     .foregroundColor(.blue)
-                Text("DETECTION OVERVIEW")
-                    .font(.appHeadline)
+                Text("OVERVIEW")
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.semibold)
                 Spacer()
             }
             
-            // Quick stats grid
+            // Quick stats grid - COMPACT VERSION
             LazyVGrid(columns: [
                 GridItem(.flexible()),
                 GridItem(.flexible()),
                 GridItem(.flexible())
-            ], spacing: 12) {
+            ], spacing: 8) {
                 if detectionMode == .drones || detectionMode == .both {
                     QuickStatCard(
-                        title: "Active Drones",
+                        title: "Active",
                         value: "\(activeDroneCount)",
                         icon: "airplane.circle.fill",
                         color: .blue
                     )
                     
                     QuickStatCard(
-                        title: "Unique MACs",
+                        title: "MACs",
                         value: "\(uniqueMacCount)",
                         icon: "number.circle.fill",
                         color: .purple
                     )
                     
                     QuickStatCard(
-                        title: "FPV Detected",
+                        title: "FPV",
                         value: "\(fpvCount)",
                         icon: "antenna.radiowaves.left.and.right",
                         color: .orange
@@ -86,14 +192,14 @@ struct DetectionsStatsView: View {
                     if let maxAlt = maxAircraftAltitude {
                         QuickStatCard(
                             title: "Max Alt",
-                            value: "\(maxAlt)ft",
+                            value: "\(maxAlt/1000)k",
                             icon: "arrow.up.circle.fill",
                             color: .green
                         )
                     }
                     
                     QuickStatCard(
-                        title: "Emergency",
+                        title: "Alert",
                         value: "\(emergencyAircraftCount)",
                         icon: "exclamationmark.triangle.fill",
                         color: emergencyAircraftCount > 0 ? .red : .gray
@@ -107,13 +213,12 @@ struct DetectionsStatsView: View {
     
     @ViewBuilder
     private var droneCharts: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Divider()
-            
+        VStack(alignment: .leading, spacing: 12) {
             // Drone Type Distribution
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("DRONE TYPES")
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(.caption2, design: .monospaced))
+                    .fontWeight(.semibold)
                     .foregroundColor(.secondary)
                 
                 Chart(droneTypeData) { item in
@@ -128,15 +233,16 @@ struct DetectionsStatsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                .frame(height: CGFloat(droneTypeData.count * 30 + 20))
+                .frame(height: CGFloat(droneTypeData.count * 28 + 20))
                 .chartLegend(.hidden)
             }
             
             // Signal Strength Distribution
             if !droneSignalData.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("SIGNAL STRENGTH")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.semibold)
                         .foregroundColor(.secondary)
                     
                     Chart(droneSignalData) { item in
@@ -151,15 +257,16 @@ struct DetectionsStatsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    .frame(height: 120)
+                    .frame(height: 100)
                 }
             }
             
             // ID Type Distribution (Pie/Donut Chart)
             if !idTypeData.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("ID PROTOCOLS")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.semibold)
                         .foregroundColor(.secondary)
                     
                     HStack {
@@ -172,15 +279,15 @@ struct DetectionsStatsView: View {
                             .foregroundStyle(by: .value("Type", item.type))
                             .opacity(0.8)
                         }
-                        .frame(height: 120)
+                        .frame(height: 100)
                         
                         // Legend
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 3) {
                             ForEach(idTypeData) { item in
                                 HStack(spacing: 4) {
                                     Circle()
                                         .fill(colorForIDType(item.type))
-                                        .frame(width: 8, height: 8)
+                                        .frame(width: 6, height: 6)
                                     Text(item.type)
                                         .font(.caption2)
                                     Spacer()
@@ -201,14 +308,13 @@ struct DetectionsStatsView: View {
     
     @ViewBuilder
     private var aircraftCharts: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Divider()
-            
+        VStack(alignment: .leading, spacing: 12) {
             // Altitude Distribution
             if !altitudeData.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("ALTITUDE DISTRIBUTION")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.semibold)
                         .foregroundColor(.secondary)
                     
                     Chart(altitudeData) { item in
@@ -223,15 +329,16 @@ struct DetectionsStatsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    .frame(height: 120)
+                    .frame(height: 100)
                 }
             }
             
             // Speed Distribution
             if !speedData.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("SPEED DISTRIBUTION")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.semibold)
                         .foregroundColor(.secondary)
                     
                     Chart(speedData) { item in
@@ -246,7 +353,7 @@ struct DetectionsStatsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                    .frame(height: 120)
+                    .frame(height: 100)
                 }
             }
         }
@@ -387,6 +494,36 @@ struct DetectionsStatsView: View {
 
 // MARK: - Supporting Views
 
+private struct StatPill: View {
+    let icon: String
+    let value: String
+    let label: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundColor(color)
+            
+            VStack(alignment: .leading, spacing: 0) {
+                Text(value)
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.bold)
+                Text(label)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(color.opacity(0.1))
+        )
+    }
+}
+
 private struct QuickStatCard: View {
     let title: String
     let value: String
@@ -395,33 +532,52 @@ private struct QuickStatCard: View {
     
     var body: some View {
         VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.body)
-                .foregroundColor(color)
+            // Icon in a circle badge
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.2))
+                    .frame(width: 28, height: 28)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(color)
+            }
             
+            // Value
             Text(value)
-                .font(.system(.callout, design: .monospaced))
-                .fontWeight(.semibold)
-                .foregroundColor(color)
-                .minimumScaleFactor(0.7)
+                .font(.system(.title3, design: .monospaced))
+                .fontWeight(.bold)
+                .foregroundColor(.primary)
+                .minimumScaleFactor(0.6)
                 .lineLimit(1)
             
+            // Label
             Text(title)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-        .padding(.horizontal, 2)
-        .background(color.opacity(0.1))
-        .cornerRadius(8)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(UIColor.tertiarySystemGroupedBackground))
+                .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+        )
     }
 }
 
 // MARK: - Data Models
+
+private struct TimelineDataPoint: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let droneCount: Int
+    let aircraftCount: Int
+}
 
 private struct ChartDataItem: Identifiable {
     let id: String

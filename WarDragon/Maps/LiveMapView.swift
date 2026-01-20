@@ -152,6 +152,22 @@ struct LiveMapView: View {
         return droneOrder.compactMap { latestDronePositions[$0] }
     }
     
+    private var uniqueAircraft: [Aircraft] {
+        var latestAircraftPositions: [String: Aircraft] = [:]
+        var aircraftOrder: [String] = []
+        
+        for aircraft in cotViewModel.aircraftTracks {
+            let identifier = aircraft.hex // Use hex as unique identifier
+            
+            if latestAircraftPositions[identifier] == nil {
+                aircraftOrder.append(identifier)
+            }
+            latestAircraftPositions[identifier] = aircraft
+        }
+        
+        return aircraftOrder.compactMap { latestAircraftPositions[$0] }
+    }
+    
     func updateFlightPathsIfNewData() {
         let newMessages = cotViewModel.parsedMessages.filter { message in
             guard let lastMessage = lastProcessedDrones[message.uid] else {
@@ -238,7 +254,7 @@ struct LiveMapView: View {
         
         // Add aircraft coordinates (only if not filtering to drones only)
         if filterMode != .drones {
-            validCoords += cotViewModel.aircraftTracks.compactMap { aircraft -> CLLocationCoordinate2D? in
+            validCoords += uniqueAircraft.compactMap { aircraft -> CLLocationCoordinate2D? in
                 aircraft.coordinate
             }
         }
@@ -309,7 +325,7 @@ struct LiveMapView: View {
                 // MARK: - Aircraft Annotations (ADS-B)
                 // Show aircraft only if showing aircraft
                 if filterMode != .drones {
-                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                    ForEach(uniqueAircraft, id: \.hex) { aircraft in
                         if let coordinate = aircraft.coordinate {
                             Annotation(aircraft.displayName, coordinate: coordinate) {
                                 VStack(spacing: 2) {
