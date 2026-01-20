@@ -324,21 +324,6 @@ class Settings: ObservableObject {
         }
     }
     
-    // PEM key password stored securely in Keychain
-    var takPEMKeyPassword: String {
-        get {
-            (try? KeychainManager.shared.loadString(forKey: "takPEMKeyPassword")) ?? ""
-        }
-        set {
-            if newValue.isEmpty {
-                try? KeychainManager.shared.delete(key: "takPEMKeyPassword")
-            } else {
-                try? KeychainManager.shared.save(newValue, forKey: "takPEMKeyPassword")
-            }
-            objectWillChange.send()
-        }
-    }
-    
     var takConfiguration: TAKConfiguration {
         get {
             TAKConfiguration(
@@ -349,9 +334,6 @@ class Settings: ObservableObject {
                 tlsEnabled: takTLSEnabled,
                 p12CertificateData: TAKConfiguration.loadP12FromKeychain(),
                 p12Password: takP12Password.isEmpty ? nil : takP12Password,
-                pemCertificateData: TAKConfiguration.loadPEMCertFromKeychain(),
-                pemKeyData: TAKConfiguration.loadPEMKeyFromKeychain(),
-                pemKeyPassword: takPEMKeyPassword.isEmpty ? nil : takPEMKeyPassword,
                 skipVerification: takSkipVerification
             )
         }
@@ -363,17 +345,10 @@ class Settings: ObservableObject {
             takTLSEnabled = newValue.tlsEnabled
             takSkipVerification = newValue.skipVerification
             takP12Password = newValue.p12Password ?? ""
-            takPEMKeyPassword = newValue.pemKeyPassword ?? ""
             
-            // Save certificates to keychain if provided
+            // Save certificate to keychain if provided
             if newValue.p12CertificateData != nil {
                 try? newValue.saveP12ToKeychain()
-            }
-            if newValue.pemCertificateData != nil {
-                try? newValue.savePEMCertToKeychain()
-            }
-            if newValue.pemKeyData != nil {
-                try? newValue.savePEMKeyToKeychain()
             }
         }
     }

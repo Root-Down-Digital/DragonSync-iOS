@@ -64,8 +64,7 @@ class TAKClient: ObservableObject {
     }
     
     deinit {
-        Task { @MainActor [connection, reconnectTask] in
-            reconnectTask?.cancel()
+        Task { @MainActor [connection] in
             connection?.cancel()
         }
     }
@@ -239,47 +238,17 @@ class TAKClient: ObservableObject {
     private func createTLSOptions() throws -> NWProtocolTLS.Options {
         let options = NWProtocolTLS.Options()
         
-        // Configure minimum/maximum TLS versions
-        sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv12)
-        
-        // Load client certificate - try PEM first, then P12
-        if let pemCert = configuration.pemCertificateData,
-           let pemKey = configuration.pemKeyData {
-            // PEM certificate provided
-            do {
-                let identity = try loadPEMIdentity(
-                    certificate: pemCert,
-                    privateKey: pemKey,
-                    password: configuration.pemKeyPassword
-                )
-                sec_protocol_options_set_local_identity(options.securityProtocolOptions, identity)
-                logger.info("✓ PEM client certificate loaded successfully")
-            } catch {
-                logger.error("Failed to load PEM client certificate: \(error.localizedDescription)")
-                throw error
+        // Load P12 certificate if provided
+        if let p12Data = configuration.p12CertificateData {
+            let identity = try loadP12Identity(data: p12Data, password: configuration.p12Password)
+            if let unwrappedIdentity = identity {
+                sec_protocol_options_set_local_identity(options.securityProtocolOptions, unwrappedIdentity)
             }
-        } else if let p12Data = configuration.p12CertificateData {
-            // P12 certificate provided
-            do {
-                let identity = try loadP12Identity(data: p12Data, password: configuration.p12Password)
-                sec_protocol_options_set_local_identity(options.securityProtocolOptions, identity)
-                logger.info("✓ P12 client certificate loaded successfully")
-            } catch {
-                logger.error("Failed to load P12 client certificate: \(error.localizedDescription)")
-                throw error
-            }
-        } else {
-            logger.warning("No client certificate provided - connection may fail if server requires mutual TLS")
         }
         
         // Skip verification (UNSAFE - for testing only)
         if configuration.skipVerification {
             logger.warning("⚠️ TLS verification disabled - UNSAFE for production!")
-            
-            // Disable peer verification completely
-            sec_protocol_options_set_peer_authentication_required(options.securityProtocolOptions, false)
-            
-            // Also set a verify block that always succeeds
             sec_protocol_options_set_verify_block(
                 options.securityProtocolOptions,
                 { _, _, completion in
@@ -293,7 +262,7 @@ class TAKClient: ObservableObject {
     }
     
     /// Load P12 identity from data
-    private func loadP12Identity(data: Data, password: String?) throws -> sec_identity_t {
+    private func loadP12Identity(data: Data, password: String?) throws -> sec_identity_t? {
         let options: [String: Any] = [
             kSecImportExportPassphrase as String: password ?? ""
         ]
@@ -301,189 +270,14 @@ class TAKClient: ObservableObject {
         var items: CFArray?
         let status = SecPKCS12Import(data as CFData, options as CFDictionary, &items)
         
-        // Provide detailed error messages
-        guard status == errSecSuccess else {
-            let errorMessage: String
-            switch status {
-            case errSecAuthFailed:
-                errorMessage = "Incorrect certificate password"
-            case errSecDecode:
-                errorMessage = "Invalid P12 file format"
-            case errSecPkcs12VerifyFailure:
-                errorMessage = "P12 verification failed - check password"
-            default:
-                errorMessage = "P12 import failed with status: \(status)"
-            }
-            logger.error("Certificate import error: \(errorMessage)")
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
-                NSLocalizedDescriptionKey: errorMessage
-            ])
-        }
-        
-        guard let itemsArray = items as? [[String: Any]],
-              let firstItem = itemsArray.first else {
+        guard status == errSecSuccess,
+              let itemsArray = items as? [[String: Any]],
+              let firstItem = itemsArray.first,
+              let identity = firstItem[kSecImportItemIdentity as String] else {
             throw TAKError.certificateLoadFailed
         }
         
-        guard let secIdentity = firstItem[kSecImportItemIdentity as String] else {
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Log certificate details for debugging
-        var certRef: SecCertificate?
-        SecIdentityCopyCertificate(secIdentity as! SecIdentity, &certRef)
-        if let cert = certRef {
-            if let summary = SecCertificateCopySubjectSummary(cert) as String? {
-                logger.info("P12 Certificate subject: \(summary)")
-            }
-        }
-        
-        guard let identity = sec_identity_create(secIdentity as! SecIdentity) else {
-            throw TAKError.certificateLoadFailed
-        }
-        
-        return identity
-    }
-    
-    /// Load PEM identity from certificate and private key data
-    private func loadPEMIdentity(certificate: Data, privateKey: Data, password: String?) throws -> sec_identity_t {
-        // Parse PEM certificate
-        guard let certString = String(data: certificate, encoding: .utf8) else {
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Extract certificate data between BEGIN/END markers
-        let certPattern = "-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----"
-        guard let certRegex = try? NSRegularExpression(pattern: certPattern, options: .dotMatchesLineSeparators),
-              let certMatch = certRegex.firstMatch(in: certString, range: NSRange(certString.startIndex..., in: certString)),
-              let certRange = Range(certMatch.range(at: 1), in: certString) else {
-            logger.error("Failed to parse PEM certificate - no valid certificate found")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        let certBase64 = certString[certRange]
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
-            .replacingOccurrences(of: " ", with: "")
-        
-        guard let certData = Data(base64Encoded: certBase64) else {
-            logger.error("Failed to decode PEM certificate base64")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        guard let secCert = SecCertificateCreateWithData(nil, certData as CFData) else {
-            logger.error("Failed to create SecCertificate from PEM data")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Parse PEM private key
-        guard let keyString = String(data: privateKey, encoding: .utf8) else {
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Support different key formats
-        var keyPattern = "-----BEGIN PRIVATE KEY-----(.+?)-----END PRIVATE KEY-----"
-        var keyRegex = try? NSRegularExpression(pattern: keyPattern, options: .dotMatchesLineSeparators)
-        var keyMatch = keyRegex?.firstMatch(in: keyString, range: NSRange(keyString.startIndex..., in: keyString))
-        
-        // Try RSA PRIVATE KEY format
-        if keyMatch == nil {
-            keyPattern = "-----BEGIN RSA PRIVATE KEY-----(.+?)-----END RSA PRIVATE KEY-----"
-            keyRegex = try? NSRegularExpression(pattern: keyPattern, options: .dotMatchesLineSeparators)
-            keyMatch = keyRegex?.firstMatch(in: keyString, range: NSRange(keyString.startIndex..., in: keyString))
-        }
-        
-        // Try EC PRIVATE KEY format
-        if keyMatch == nil {
-            keyPattern = "-----BEGIN EC PRIVATE KEY-----(.+?)-----END EC PRIVATE KEY-----"
-            keyRegex = try? NSRegularExpression(pattern: keyPattern, options: .dotMatchesLineSeparators)
-            keyMatch = keyRegex?.firstMatch(in: keyString, range: NSRange(keyString.startIndex..., in: keyString))
-        }
-        
-        guard let match = keyMatch,
-              let keyRange = Range(match.range(at: 1), in: keyString) else {
-            logger.error("Failed to parse PEM private key - no valid key found")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        let keyBase64 = keyString[keyRange]
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
-            .replacingOccurrences(of: " ", with: "")
-        
-        guard let keyData = Data(base64Encoded: keyBase64) else {
-            logger.error("Failed to decode PEM private key base64")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Import private key into keychain temporarily
-        let keyAttributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
-            kSecAttrKeySizeInBits as String: 2048
-        ]
-        
-        var error: Unmanaged<CFError>?
-        guard let secKey = SecKeyCreateWithData(keyData as CFData, keyAttributes as CFDictionary, &error) else {
-            if let err = error?.takeRetainedValue() {
-                logger.error("Failed to create SecKey: \(err)")
-            }
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Create identity from certificate and private key
-        let tempTag = "com.wardragon.tak.temp.\(UUID().uuidString)"
-        
-        // Add certificate to keychain
-        let certAddQuery: [String: Any] = [
-            kSecClass as String: kSecClassCertificate,
-            kSecValueRef as String: secCert,
-            kSecAttrLabel as String: tempTag
-        ]
-        
-        _ = SecItemAdd(certAddQuery as CFDictionary, nil)
-        
-        // Add key to keychain
-        let keyAddQuery: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecValueRef as String: secKey,
-            kSecAttrApplicationTag as String: tempTag.data(using: .utf8)!
-        ]
-        
-        _ = SecItemAdd(keyAddQuery as CFDictionary, nil)
-        
-        // Create identity
-        let identityQuery: [String: Any] = [
-            kSecClass as String: kSecClassIdentity,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnRef as String: true,
-            kSecAttrLabel as String: tempTag
-        ]
-        
-        var identityRef: AnyObject?
-        let identityStatus = SecItemCopyMatching(identityQuery as CFDictionary, &identityRef)
-        
-        // Clean up temporary items
-        SecItemDelete(certAddQuery as CFDictionary)
-        SecItemDelete(keyAddQuery as CFDictionary)
-        
-        guard identityStatus == errSecSuccess,
-              let identityItem = identityRef else {
-            logger.error("Failed to create identity from PEM cert and key (status: \(identityStatus))")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        // Log certificate details
-        if let summary = SecCertificateCopySubjectSummary(secCert) as String? {
-            logger.info("PEM Certificate subject: \(summary)")
-        }
-        
-        guard let identity = sec_identity_create(identityItem as! SecIdentity) else {
-            logger.error("Failed to create sec_identity_t from SecIdentity")
-            throw TAKError.certificateLoadFailed
-        }
-        
-        return identity
+        return sec_identity_create(identity as! SecIdentity)
     }
     
     /// Wait for connection to establish
