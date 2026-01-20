@@ -273,7 +273,7 @@ class StatusViewModel: ObservableObject {
         if let index = statusMessages.firstIndex(where: { $0.serialNumber == processedMessage.serialNumber }) {
             // Update existing message
             statusMessages[index] = processedMessage
-            print("📝 Updated existing status message for \(processedMessage.serialNumber)")
+            print("Updated existing status message for \(processedMessage.serialNumber)")
         } else {
             // Add new message
             statusMessages.append(processedMessage)

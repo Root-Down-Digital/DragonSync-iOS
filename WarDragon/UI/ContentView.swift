@@ -9,6 +9,7 @@ import SwiftData
 import Network
 import UserNotifications
 import CoreLocation
+import Charts
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -182,11 +183,19 @@ struct ContentView: View {
     
     private var detectionsTab: some View {
         NavigationStack(path: $detectionsPath) {
-            VStack {
-                detectionModePicker
+            VStack(spacing: 0) {
+                // Detection mode picker - pinned at top
+                if hasDrones && hasAircraft {
+                    detectionModePicker
+                        .background(Color(UIColor.systemBackground))
+                        .zIndex(1)
+                }
+                
+                // Main content area
                 detectionContent
             }
             .navigationTitle(navigationTitle)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     mapButton
@@ -221,14 +230,17 @@ struct ContentView: View {
     
     private var statusTab: some View {
         NavigationStack(path: $statusPath) {
-            StatusListView(statusViewModel: statusViewModel)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: { statusViewModel.statusMessages.removeAll() }) {
-                            Image(systemName: "trash")
-                        }
+            StatusListView(
+                statusViewModel: statusViewModel,
+                cotViewModel: cotViewModel
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { statusViewModel.statusMessages.removeAll() }) {
+                        Image(systemName: "trash")
                     }
                 }
+            }
         }
         .tabItem {
             Label("Status", systemImage: "server.rack")
@@ -260,27 +272,71 @@ struct ContentView: View {
     
     @ViewBuilder
     private var detectionModePicker: some View {
-        if hasDrones && hasAircraft {
-            Picker("Detection Type", selection: $detectionMode) {
-                Text("Drones").tag(DetectionMode.drones)
-                Text("Aircraft").tag(DetectionMode.aircraft)
-                Text("Both").tag(DetectionMode.both)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.top, 8)
+        Picker("Detection Type", selection: $detectionMode) {
+            Text("Drones").tag(DetectionMode.drones)
+            Text("Aircraft").tag(DetectionMode.aircraft)
+            Text("Both").tag(DetectionMode.both)
         }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(UIColor.systemBackground))
     }
     
     @ViewBuilder
     private var detectionContent: some View {
         switch detectionMode {
         case .drones:
-            droneListContent
+            VStack(spacing: 0) {
+                // Stats overview - collapsible header
+                if !cotViewModel.parsedMessages.isEmpty {
+                    ScrollView {
+                        DetectionsStatsView(
+                            cotViewModel: cotViewModel,
+                            detectionMode: detectionMode
+                        )
+                    }
+                    .frame(maxHeight: 350)
+                    
+                    Divider()
+                }
+                
+                droneListContent
+            }
         case .aircraft:
-            AircraftListView(cotViewModel: cotViewModel)
+            VStack(spacing: 0) {
+                // Stats overview - collapsible header
+                if !cotViewModel.aircraftTracks.isEmpty {
+                    ScrollView {
+                        DetectionsStatsView(
+                            cotViewModel: cotViewModel,
+                            detectionMode: detectionMode
+                        )
+                    }
+                    .frame(maxHeight: 350)
+                    
+                    Divider()
+                }
+                
+                AircraftListView(cotViewModel: cotViewModel)
+            }
         case .both:
-            bothDetectionsList
+            VStack(spacing: 0) {
+                // Stats overview - collapsible header
+                if hasDrones || hasAircraft {
+                    ScrollView {
+                        DetectionsStatsView(
+                            cotViewModel: cotViewModel,
+                            detectionMode: detectionMode
+                        )
+                    }
+                    .frame(maxHeight: 350)
+                    
+                    Divider()
+                }
+                
+                bothDetectionsList
+            }
         }
     }
     
@@ -706,5 +762,130 @@ struct ContentView: View {
         )
     }
     
+    // MARK: - Stats Headers
+    
+    private var droneStatsHeader: some View {
+        HStack(spacing: 16) {
+            StatBadge(
+                icon: "airplane.circle",
+                value: "\(cotViewModel.parsedMessages.count)",
+                label: "Drones"
+            )
+            
+            StatBadge(
+                icon: "antenna.radiowaves.left.and.right",
+                value: "\(activeDroneCount)",
+                label: "Active"
+            )
+            
+            if let maxAlt = highestDrone {
+                StatBadge(
+                    icon: "arrow.up.circle.fill",
+                    value: "\(maxAlt)",
+                    label: "Max Alt (m)"
+                )
+            }
+            
+            if let maxSpeed = fastestDrone {
+                StatBadge(
+                    icon: "speedometer",
+                    value: String(format: "%.1f", maxSpeed),
+                    label: "Max Speed (m/s)"
+                )
+            }
+        }
+    }
+    
+    private var combinedStatsHeader: some View {
+        HStack(spacing: 12) {
+            if hasDrones {
+                StatBadge(
+                    icon: "airplane.circle",
+                    value: "\(cotViewModel.parsedMessages.count)",
+                    label: "Drones"
+                )
+            }
+            
+            if hasAircraft {
+                StatBadge(
+                    icon: "airplane",
+                    value: "\(cotViewModel.aircraftTracks.count)",
+                    label: "Aircraft"
+                )
+            }
+            
+            if hasDrones {
+                StatBadge(
+                    icon: "antenna.radiowaves.left.and.right",
+                    value: "\(activeDroneCount)",
+                    label: "Active"
+                )
+            }
+            
+            if hasAircraft {
+                StatBadge(
+                    icon: "antenna.radiowaves.left.and.right",
+                    value: "\(activeAircraftCount)",
+                    label: "Active"
+                )
+            }
+        }
+    }
+    
+    // MARK: - Stats Computed Properties
+    
+    private var activeDroneCount: Int {
+        // Count drones that have recent updates (not stale)
+        // You can adjust this logic based on your DroneEncounter structure
+        cotViewModel.parsedMessages.filter { message in
+            guard let encounter = DroneStorageManager.shared.encounters[message.uid] else {
+                return true // If no encounter, assume active (just detected)
+            }
+            // Consider active if last seen within 30 seconds
+            return Date().timeIntervalSince(encounter.lastSeen) < 30
+        }.count
+    }
+    
+    private var activeAircraftCount: Int {
+        cotViewModel.aircraftTracks.filter { !$0.isStale }.count
+    }
+    
+    private var highestDrone: Int? {
+        cotViewModel.parsedMessages.compactMap { message in
+            if let alt = Double(message.alt) {
+                return Int(alt)
+            }
+            return nil
+        }.max()
+    }
+    
+    private var fastestDrone: Double? {
+        cotViewModel.parsedMessages.compactMap { message in
+            Double(message.speed)
+        }.max()
+    }
     
 }
+// MARK: - Stat Badge Component
+
+private struct StatBadge: View {
+    let icon: String
+    let value: String
+    let label: String
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                Text(value)
+                    .font(.headline)
+            }
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+

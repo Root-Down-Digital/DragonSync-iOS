@@ -7,10 +7,26 @@
 
 import SwiftUI
 
+enum StatusTab: String, CaseIterable {
+    case system = "System"
+    case drones = "Drones"
+    case aircraft = "Aircraft"
+    
+    var icon: String {
+        switch self {
+        case .system: return "cpu"
+        case .drones: return "airplane.circle"
+        case .aircraft: return "airplane.departure"
+        }
+    }
+}
+
 struct StatusListView: View {
     @ObservedObject var statusViewModel: StatusViewModel
+    @ObservedObject var cotViewModel: CoTViewModel
     @State private var showingDeleteConfirmation = false
     @State private var messageToDelete: StatusViewModel.StatusMessage?
+    @State private var selectedTab: StatusTab = .system
     
     private func deleteMessage(_ message: StatusViewModel.StatusMessage) {
         messageToDelete = message
@@ -18,6 +34,51 @@ struct StatusListView: View {
     }
     
     var body: some View {
+        VStack(spacing: 0) {
+            // Tab picker - pinned at top
+            Picker("Status Type", selection: $selectedTab) {
+                ForEach(StatusTab.allCases, id: \.self) { tab in
+                    Label(tab.rawValue, systemImage: tab.icon)
+                        .tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(UIColor.systemBackground))
+            .zIndex(1)
+            
+            // Content based on selected tab
+            Group {
+                switch selectedTab {
+                case .system:
+                    systemStatusView
+                case .drones:
+                    DronesStatusTab(cotViewModel: cotViewModel)
+                case .aircraft:
+                    AircraftStatusTab(cotViewModel: cotViewModel)
+                }
+            }
+        }
+        .navigationTitle("Status")
+        .navigationBarTitleDisplayMode(.large)
+        .alert("Delete Message", isPresented: $showingDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                if let message = messageToDelete,
+                   let index = statusViewModel.statusMessages.firstIndex(where: { $0.id == message.id }) {
+                    statusViewModel.statusMessages.remove(at: index)
+                }
+                messageToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                messageToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this status message?")
+        }
+    }
+    
+    private var systemStatusView: some View {
         GeometryReader { geometry in
             ScrollViewReader { proxy in
                 List {
