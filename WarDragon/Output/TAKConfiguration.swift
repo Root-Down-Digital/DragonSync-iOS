@@ -40,8 +40,19 @@ struct TAKConfiguration: Codable, Equatable {
     
     // TLS-specific settings
     var tlsEnabled: Bool
+    
+    // Client certificate (for mutual TLS) - P12 format
     var p12CertificateData: Data?
     var p12Password: String?
+    
+    // Client certificate (for mutual TLS) - PEM format
+    var pemCertificateData: Data?  // PEM certificate
+    var pemKeyData: Data?          // PEM private key
+    var pemKeyPassword: String?    // Optional password for encrypted private key
+    
+    // Server CA certificate (to verify server)
+    var caCertificateData: Data?  // PEM format
+    
     var skipVerification: Bool  // UNSAFE: for testing only
     
     init(
@@ -52,6 +63,10 @@ struct TAKConfiguration: Codable, Equatable {
         tlsEnabled: Bool = true,
         p12CertificateData: Data? = nil,
         p12Password: String? = nil,
+        pemCertificateData: Data? = nil,
+        pemKeyData: Data? = nil,
+        pemKeyPassword: String? = nil,
+        caCertificateData: Data? = nil,
         skipVerification: Bool = false
     ) {
         self.enabled = enabled
@@ -61,6 +76,10 @@ struct TAKConfiguration: Codable, Equatable {
         self.tlsEnabled = tlsEnabled
         self.p12CertificateData = p12CertificateData
         self.p12Password = p12Password
+        self.pemCertificateData = pemCertificateData
+        self.pemKeyData = pemKeyData
+        self.pemKeyPassword = pemKeyPassword
+        self.caCertificateData = caCertificateData
         self.skipVerification = skipVerification
     }
     
@@ -76,6 +95,10 @@ struct TAKConfiguration: Codable, Equatable {
         lhs.tlsEnabled == rhs.tlsEnabled &&
         lhs.p12CertificateData == rhs.p12CertificateData &&
         lhs.p12Password == rhs.p12Password &&
+        lhs.pemCertificateData == rhs.pemCertificateData &&
+        lhs.pemKeyData == rhs.pemKeyData &&
+        lhs.pemKeyPassword == rhs.pemKeyPassword &&
+        lhs.caCertificateData == rhs.caCertificateData &&
         lhs.skipVerification == rhs.skipVerification
     }
 }
@@ -83,7 +106,7 @@ struct TAKConfiguration: Codable, Equatable {
 // MARK: - Keychain Storage for Sensitive Data
 
 extension TAKConfiguration {
-    /// Save P12 certificate to keychain
+    /// Save P12 client certificate to keychain
     func saveP12ToKeychain(identifier: String = "com.wardragon.tak.p12") throws {
         guard let certData = p12CertificateData else { return }
         
@@ -105,7 +128,7 @@ extension TAKConfiguration {
         }
     }
     
-    /// Load P12 certificate from keychain
+    /// Load P12 client certificate from keychain
     static func loadP12FromKeychain(identifier: String = "com.wardragon.tak.p12") -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -125,7 +148,7 @@ extension TAKConfiguration {
         return data
     }
     
-    /// Delete P12 certificate from keychain
+    /// Delete P12 client certificate from keychain
     static func deleteP12FromKeychain(identifier: String = "com.wardragon.tak.p12") {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -133,5 +156,169 @@ extension TAKConfiguration {
         ]
         
         SecItemDelete(query as CFDictionary)
+    }
+    
+    /// Save CA certificate to keychain
+    func saveCACertToKeychain(identifier: String = "com.wardragon.tak.ca") throws {
+        guard let certData = caCertificateData else { return }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecValueData as String: certData
+        ]
+        
+        // Delete any existing item
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
+                NSLocalizedDescriptionKey: "Failed to save CA certificate to keychain"
+            ])
+        }
+    }
+    
+    /// Load CA certificate from keychain
+    static func loadCACertFromKeychain(identifier: String = "com.wardragon.tak.ca") -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data else {
+            return nil
+        }
+        
+        return data
+    }
+    
+    /// Delete CA certificate from keychain
+    static func deleteCACertFromKeychain(identifier: String = "com.wardragon.tak.ca") {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+    }
+    
+    // MARK: - PEM Certificate Storage
+    
+    /// Save PEM client certificate to keychain
+    func savePEMCertToKeychain(identifier: String = "com.wardragon.tak.pemcert") throws {
+        guard let certData = pemCertificateData else { return }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecValueData as String: certData
+        ]
+        
+        // Delete any existing item
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
+                NSLocalizedDescriptionKey: "Failed to save PEM certificate to keychain"
+            ])
+        }
+    }
+    
+    /// Load PEM client certificate from keychain
+    static func loadPEMCertFromKeychain(identifier: String = "com.wardragon.tak.pemcert") -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data else {
+            return nil
+        }
+        
+        return data
+    }
+    
+    /// Delete PEM certificate from keychain
+    static func deletePEMCertFromKeychain(identifier: String = "com.wardragon.tak.pemcert") {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+    }
+    
+    /// Save PEM private key to keychain
+    func savePEMKeyToKeychain(identifier: String = "com.wardragon.tak.pemkey") throws {
+        guard let keyData = pemKeyData else { return }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecValueData as String: keyData
+        ]
+        
+        // Delete any existing item
+        SecItemDelete(query as CFDictionary)
+        
+        // Add new item
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
+                NSLocalizedDescriptionKey: "Failed to save PEM private key to keychain"
+            ])
+        }
+    }
+    
+    /// Load PEM private key from keychain
+    static func loadPEMKeyFromKeychain(identifier: String = "com.wardragon.tak.pemkey") -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data else {
+            return nil
+        }
+        
+        return data
+    }
+    
+    /// Delete PEM private key from keychain
+    static func deletePEMKeyFromKeychain(identifier: String = "com.wardragon.tak.pemkey") {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+    }
+    
+    /// Delete all PEM certificates and keys
+    static func deletePEMFromKeychain() {
+        deletePEMCertFromKeychain()
+        deletePEMKeyFromKeychain()
     }
 }
