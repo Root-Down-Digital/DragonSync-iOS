@@ -195,25 +195,40 @@ class DroneMessageGenerator:
 </event>"""
 
     def generate_fpv_detection_message(self):
-        """Generate an FPV detection message compatible with fpv_mdn_receiver.py output"""
+        """Generate an FPV detection message compatible with fpv_mdn_receiver.py output
+        
+        Format matches actual hardware output:
+        - Frequency: 5.6-5.9 GHz range (FPV video frequencies)
+        - RSSI: 1200-1400 range (actual observed values from hardware)
+        - Source: inst-node format (e.g., "01-97e8")
+        """
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         
-        frequency = random.choice([5547, 5645, 5740, 5880])
-        bandwidth = f"{random.choice([20, 40])}MHz"
-        rssi = random.randint(1290, 3500)
+        # Realistic FPV frequencies (5.6-5.9 GHz band used by FPV drones)
+        # Common channels: 5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885
+        frequency = random.choice([5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885])
         
+        # FPV video bandwidth (typically 20-40 MHz)
+        bandwidth = f"{random.choice([20, 40])}MHz"
+        
+        # Realistic RSSI values from actual hardware (around 1200-1400)
+        rssi = random.randint(1200, 1400)
+        
+        # Source node in inst-node format (matches hardware output)
         source_inst = f"{random.randint(1, 5):02d}"
-        source_node = f"{random.randint(1000, 9999)}"
+        source_node = f"{random.randint(1000, 9999):04x}"  # Use hex like hardware does
         detection_source = f"{source_inst}-{source_node}"
         
+        # Initialize or reuse existing detection
         if not hasattr(self, 'current_fpv_detection'):
             self.current_fpv_detection = {
                 'frequency': frequency,
                 'source_inst': source_inst,
                 'source_node': source_node,
                 'detection_source': detection_source,
-                'rssi': rssi
+                'rssi': rssi,
+                'time': 0
             }
         else:
             frequency = self.current_fpv_detection['frequency']
@@ -222,16 +237,19 @@ class DroneMessageGenerator:
             detection_source = self.current_fpv_detection['detection_source']
             rssi = self.current_fpv_detection['rssi']
             
+        # Format matches fpv_mdn_receiver.py output
         detection_message = [
             {
                 "FPV Detection": {
                     "timestamp": timestamp,
                     "manufacturer": source_inst,
-                    "device_type": f"FPV{frequency:.1f}MHz",
+                    "device_type": f"FPV{frequency/1000:.1f}GHz",  # Show as GHz like "FPV5.6GHz"
                     "frequency": frequency,
                     "bandwidth": bandwidth,
                     "signal_strength": rssi,
-                    "detection_source": detection_source
+                    "detection_source": detection_source,
+                    "status": "NEW CONTACT LOCK",
+                    "estimated_distance": random.uniform(2.0e-44, 3.0e-44)  # Match observed values
                 }
             }
         ]
@@ -239,27 +257,45 @@ class DroneMessageGenerator:
         return json.dumps(detection_message)
     
     def generate_fpv_update_message(self):
-        """Generate an FPV update message in the format of LOCK UPDATE messages"""
+        """Generate an FPV update message in the format of LOCK UPDATE messages
+        
+        This matches the actual AUX_ADV_IND format from fpv_mdn_receiver.py
+        """
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         
         if not hasattr(self, 'current_fpv_detection'):
             return None
         
+        # Get cached detection info
         detection_source = self.current_fpv_detection['detection_source']
-        rssi = self.current_fpv_detection['rssi'] + random.uniform(-5, 5)
+        frequency = self.current_fpv_detection['frequency']
+        
+        # Simulate RSSI fluctuation (±2-3 dBm is realistic)
+        rssi_variation = random.uniform(-2.5, 2.5)
+        rssi = self.current_fpv_detection['rssi'] + rssi_variation
         self.current_fpv_detection['rssi'] = rssi
         
+        # Increment time counter (matches hardware behavior)
+        self.current_fpv_detection['time'] += 10  # Hardware updates every ~10 seconds
+        
+        # Format matches actual fpv_mdn_receiver.py output
         update_message = {
             "AUX_ADV_IND": {
                 "rssi": rssi, 
-                "aa": 2391391958,
+                "aa": 2391391958,  # Fixed advertising address (matches hardware)
                 "time": timestamp
             }, 
             "aext": {
-                "AdvA": f"{detection_source} random"
+                "AdvA": f"{detection_source} random"  # Source node identifier
             },
-            "frequency": 5475
+            "AdvData": "020116faff0d01",  # OpenDroneID header (matches hardware)
+            "location": {
+                "lat": 0.0,  # FPV detector doesn't have location data
+                "lon": 0.0
+            },
+            "distance": random.uniform(2.0e-44, 3.0e-44),  # Estimated distance (matches observed values)
+            "frequency": frequency  # Keep original frequency
         }
         
         return json.dumps(update_message)
