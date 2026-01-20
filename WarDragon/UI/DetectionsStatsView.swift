@@ -14,14 +14,50 @@ struct DetectionsStatsView: View {
     @State private var updateTimer: Timer?
     
     // Real-time timeline data - computed from current detections
+    // This shows detection activity over the past 6 minutes in 30-second buckets
     private var timelineData: [TimelineDataPoint] {
-        // Generate simple 12-point timeline based on current counts
         let now = Date()
-        return (0..<12).map { offset in
-            TimelineDataPoint(
-                timestamp: now.addingTimeInterval(Double(offset - 11) * 30), // 30 sec intervals, 6 min window
-                droneCount: cotViewModel.parsedMessages.count,
-                aircraftCount: cotViewModel.aircraftTracks.count
+        let timeWindow: TimeInterval = 360 // 6 minutes
+        let bucketCount = 12 // 30-second buckets
+        let bucketDuration = timeWindow / Double(bucketCount)
+        
+        // Create time buckets going back 6 minutes
+        let buckets: [(start: Date, end: Date)] = (0..<bucketCount).map { i in
+            let start = now.addingTimeInterval(-timeWindow + Double(i) * bucketDuration)
+            let end = now.addingTimeInterval(-timeWindow + Double(i + 1) * bucketDuration)
+            return (start, end)
+        }
+        
+        // Count detections in each bucket based on when they were observed
+        return buckets.map { bucket in
+            // For drones: Count how many were observed in this time bucket
+            var droneCount = 0
+            if detectionMode == .drones || detectionMode == .both {
+                droneCount = cotViewModel.parsedMessages.filter { message in
+                    // Use observedAt timestamp (when the detection was actually captured by hardware)
+                    if let observedAt = message.observedAt {
+                        let timestamp = Date(timeIntervalSince1970: observedAt)
+                        return timestamp >= bucket.start && timestamp < bucket.end
+                    }
+                    // Fallback: use lastUpdated if no observedAt
+                    let timestamp = message.lastUpdated
+                    return timestamp >= bucket.start && timestamp < bucket.end
+                }.count
+            }
+            
+            // For aircraft: Count how many were last seen in this time bucket
+            var aircraftCount = 0
+            if detectionMode == .aircraft || detectionMode == .both {
+                aircraftCount = cotViewModel.aircraftTracks.filter { track in
+                    let timestamp = track.lastSeen
+                    return timestamp >= bucket.start && timestamp < bucket.end
+                }.count
+            }
+            
+            return TimelineDataPoint(
+                timestamp: bucket.end, // Use bucket end time for x-axis
+                droneCount: droneCount,
+                aircraftCount: aircraftCount
             )
         }
     }
