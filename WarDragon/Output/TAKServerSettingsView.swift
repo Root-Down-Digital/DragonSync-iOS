@@ -191,8 +191,65 @@ struct TAKServerSettingsView: View {
         guard let url = selectedCertificateURL else { return }
         
         do {
+            // Start accessing security-scoped resource
+            guard url.startAccessingSecurityScopedResource() else {
+                throw NSError(domain: "com.wardragon", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Permission denied: Unable to access the selected file"
+                ])
+            }
+            
+            defer {
+                url.stopAccessingSecurityScopedResource()
+            }
+            
+
             let data = try Data(contentsOf: url)
             
+            // Validate the P12 file and password before saving
+            let password = certificatePassword.isEmpty ? nil : certificatePassword
+            let validationOptions: [String: Any] = [
+                kSecImportExportPassphrase as String: password ?? ""
+            ]
+            
+            var items: CFArray?
+            let status = SecPKCS12Import(data as CFData, validationOptions as CFDictionary, &items)
+            
+            guard status == errSecSuccess else {
+                let errorMessage: String
+                switch status {
+                case errSecAuthFailed:
+                    errorMessage = "Incorrect certificate password"
+                case errSecDecode:
+                    errorMessage = "Invalid P12 file format"
+                case errSecPkcs12VerifyFailure:
+                    errorMessage = "P12 verification failed - check password"
+                default:
+                    errorMessage = "P12 import failed (status: \(status))"
+                }
+                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
+                    NSLocalizedDescriptionKey: errorMessage
+                ])
+            }
+            
+            // Verify we got identity from the P12
+            guard let itemsArray = items as? [[String: Any]],
+                  let firstItem = itemsArray.first,
+                  firstItem[kSecImportItemIdentity as String] != nil else {
+                throw NSError(domain: "com.wardragon", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "No valid identity found in P12 file"
+                ])
+            }
+            
+            // Get certificate info for confirmation
+            var certSummary = "Unknown"
+            if let cert = firstItem[kSecImportItemCertChain as String] as? [SecCertificate],
+               let firstCert = cert.first,
+               let summary = SecCertificateCopySubjectSummary(firstCert) as String? {
+                certSummary = summary
+            }
+            
+            // Update configuration
+
             // Test that we can load the certificate with the provided password
             var config = settings.takConfiguration
             config.p12CertificateData = data
