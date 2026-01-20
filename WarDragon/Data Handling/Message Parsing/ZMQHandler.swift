@@ -440,6 +440,12 @@ class ZMQHandler: ObservableObject {
             return nil
         }
         
+        // Check for raw FPV serial messages (from fpv_mdn_receiver.py)
+        if let result = processRawFPVMessage(jsonObject) {
+            print("→ Processed raw FPV serial message successfully")
+            return result
+        }
+        
         if let result = processJsonObject(jsonObject) {
             print("→ Processed WiFi/SDR message successfully")
             return result
@@ -703,6 +709,62 @@ class ZMQHandler: ObservableObject {
                 </detail>
             </event>
             """
+    }
+    
+    /// Process raw FPV serial messages from fpv_mdn_receiver.py
+    /// Format: {"from":{"inst":"01","node":"97e8"},"to":{"inst":"00","node":"mcn"},"msg":{"type":"nodeAlert","time":146,"freq":5621,"rssi":1278,"stat":"NEW CONTACT LOCK"}}
+    private func processRawFPVMessage(_ json: [String: Any]) -> String? {
+        // Check if this is a raw FPV serial message
+        guard let from = json["from"] as? [String: Any],
+              let _ = json["to"] as? [String: Any],  // Validate structure but don't use
+              let msg = json["msg"] as? [String: Any],
+              let msgType = msg["type"] as? String,
+              msgType == "nodeAlert" else {
+            return nil
+        }
+        
+        // Extract message fields
+        let inst = from["inst"] as? String ?? "00"
+        let node = from["node"] as? String ?? "0000"
+        let source = "\(inst)-\(node)"
+        
+        let frequency = msg["freq"] as? Double ?? (msg["freq"] as? Int).map(Double.init) ?? 0.0
+        let rssi = msg["rssi"] as? Double ?? (msg["rssi"] as? Int).map(Double.init) ?? 0.0
+        let status = msg["stat"] as? String ?? "UNKNOWN"
+        let time = msg["time"] as? Int ?? 0
+        
+        // Don't process boot or calibration messages
+        if status.contains("NODE_START") || status.contains("CALIBRATION") {
+            print("→ Skipping FPV system message: \(status)")
+            return nil
+        }
+        
+        // Create unique ID based on source and frequency
+        let fpvId = "fpv-\(source)-\(Int(frequency))"
+        
+        let now = ISO8601DateFormatter().string(from: Date())
+        let stale = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
+        
+        // Determine if this is initial detection or update
+        let isNewContact = status.contains("NEW CONTACT")
+        let eventType = isNewContact ? "a-u-A-M-H-R-F" : "a-u-A-M-H-R-F"  // Same type for now
+        
+        // Format CoT XML
+        let xml = """
+        <event version="2.0" uid="\(fpvId)" type="\(eventType)" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
+            <point lat="0.0" lon="0.0" hae="0" ce="9999999" le="999999"/>
+            <detail>
+                <remarks>FPV \(status), RSSI: \(Int(rssi))dBm, Frequency: \(Int(frequency)) MHz, Source: \(source), Time: \(time)s</remarks>
+                <contact endpoint="" phone="" callsign="FPV \(Int(frequency))MHz"/>
+                <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
+                <color argb="-1"/>
+                <usericon iconsetpath="34ae1613-9645-4222-a9d2-e5f243dea2865/Military/UAV_quad.png"/>
+            </detail>
+        </event>
+        """
+        
+        print("→ Converted raw FPV message: \(status) @ \(Int(frequency))MHz, RSSI: \(Int(rssi))dBm")
+        return xml
     }
     
     // ZMQ BG socket check
