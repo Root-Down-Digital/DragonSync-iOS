@@ -39,6 +39,7 @@ struct ADSBConfiguration: Codable, Equatable {
     var minAltitude: Double?  // Minimum altitude in feet (optional filter)
     var maxAltitude: Double?  // Maximum altitude in feet (optional filter)
     var maxAircraftCount: Int  // Maximum number of aircraft to display (sorted by distance)
+    var flightPathRetentionMinutes: Double  // How long to keep flight path history
     
     init(
         enabled: Bool = false,
@@ -48,7 +49,8 @@ struct ADSBConfiguration: Codable, Equatable {
         maxDistance: Double? = nil,
         minAltitude: Double? = nil,
         maxAltitude: Double? = nil,
-        maxAircraftCount: Int = 25
+        maxAircraftCount: Int = 25,
+        flightPathRetentionMinutes: Double = 30.0
     ) {
         self.enabled = enabled
         self.readsbURL = readsbURL
@@ -58,6 +60,7 @@ struct ADSBConfiguration: Codable, Equatable {
         self.minAltitude = minAltitude
         self.maxAltitude = maxAltitude
         self.maxAircraftCount = maxAircraftCount
+        self.flightPathRetentionMinutes = flightPathRetentionMinutes
     }
     
     var isValid: Bool {
@@ -113,6 +116,9 @@ class ADSBClient: ObservableObject {
     @Published private(set) var totalMessages: Int = 0
     @Published private(set) var lastUpdate: Date?
     @Published private(set) var lastError: Error?
+    
+    // Aircraft history tracking (persists beyond current visibility)
+    private var aircraftHistory: [String: Aircraft] = [:]  // Keyed by hex
     
     // MARK: - Callbacks
     
@@ -237,6 +243,47 @@ class ADSBClient: ObservableObject {
             let decoder = JSONDecoder()
             let readsbResponse = try decoder.decode(ReadsbResponse.self, from: data)
             
+            // Update aircraft history with new positions
+            for var aircraft in readsbResponse.aircraft {
+                // Get existing aircraft from history or create new entry
+                if var existingAircraft = aircraftHistory[aircraft.hex] {
+                    // Update position history
+                    existingAircraft.lat = aircraft.lat
+                    existingAircraft.lon = aircraft.lon
+                    existingAircraft.altitude = aircraft.altitude
+                    existingAircraft.track = aircraft.track
+                    existingAircraft.groundSpeed = aircraft.groundSpeed
+                    existingAircraft.verticalRate = aircraft.verticalRate
+                    existingAircraft.flight = aircraft.flight
+                    existingAircraft.squawk = aircraft.squawk
+                    existingAircraft.rssi = aircraft.rssi
+                    existingAircraft.lastSeen = Date()
+                    
+                    // Record position in history
+                    existingAircraft.recordPosition()
+                    
+                    // Cleanup old history based on retention time
+                    existingAircraft.cleanupOldHistory(retentionMinutes: configuration.flightPathRetentionMinutes)
+                    
+                    // Copy history to current aircraft
+                    aircraft.positionHistory = existingAircraft.positionHistory
+                    
+                    // Update in history
+                    aircraftHistory[aircraft.hex] = existingAircraft
+                } else {
+                    // New aircraft - initialize with current position
+                    aircraft.recordPosition()
+                    aircraftHistory[aircraft.hex] = aircraft
+                }
+            }
+            
+            // Cleanup aircraft history that are beyond retention time
+            let retentionSeconds = configuration.flightPathRetentionMinutes * 60
+            let cutoffDate = Date().addingTimeInterval(-retentionSeconds)
+            aircraftHistory = aircraftHistory.filter { _, aircraft in
+                aircraft.lastSeen > cutoffDate
+            }
+            
             // Filter aircraft based on configuration
             var filteredAircraft = readsbResponse.aircraft.filter { $0.coordinate != nil }
             
@@ -275,6 +322,15 @@ class ADSBClient: ObservableObject {
                     .sorted { $0.distance < $1.distance }
                     .prefix(configuration.maxAircraftCount)
                     .map { $0.aircraft }
+            }
+            
+            // Attach position history from aircraftHistory to filtered aircraft
+            filteredAircraft = filteredAircraft.map { aircraft in
+                var updatedAircraft = aircraft
+                if let historicalAircraft = aircraftHistory[aircraft.hex] {
+                    updatedAircraft.positionHistory = historicalAircraft.positionHistory
+                }
+                return updatedAircraft
             }
             
             // Update state

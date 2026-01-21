@@ -50,6 +50,23 @@ struct Aircraft: Identifiable, Codable, Equatable {
     var tisb: [String]?  // TIS-B flags
     var lastSeen: Date  // Local timestamp when received
     
+    // Flight path history (not from readsb, tracked locally)
+    var positionHistory: [PositionHistoryPoint] = []
+    
+    // MARK: - Position History
+    
+    /// A single point in the aircraft's position history
+    struct PositionHistoryPoint: Codable, Equatable {
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double?  // in feet
+        let timestamp: Date
+        
+        var coordinate: CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        }
+    }
+    
     // MARK: - Computed Properties
     
     var id: String { hex }
@@ -245,6 +262,39 @@ struct Aircraft: Identifiable, Codable, Equatable {
         tisb = try container.decodeIfPresent([String].self, forKey: .tisb)
         
         lastSeen = Date()
+        positionHistory = []  // Initialize empty history
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(hex, forKey: .hex)
+        try container.encodeIfPresent(lat, forKey: .lat)
+        try container.encodeIfPresent(lon, forKey: .lon)
+        try container.encodeIfPresent(altitude, forKey: .altitude)
+        try container.encodeIfPresent(altitudeGeom, forKey: .altitudeGeom)
+        try container.encodeIfPresent(track, forKey: .track)
+        try container.encodeIfPresent(groundSpeed, forKey: .groundSpeed)
+        try container.encodeIfPresent(verticalRate, forKey: .verticalRate)
+        try container.encodeIfPresent(ias, forKey: .ias)
+        try container.encodeIfPresent(tas, forKey: .tas)
+        try container.encodeIfPresent(flight, forKey: .flight)
+        try container.encodeIfPresent(squawk, forKey: .squawk)
+        try container.encodeIfPresent(category, forKey: .category)
+        try container.encodeIfPresent(rssi, forKey: .rssi)
+        try container.encodeIfPresent(messages, forKey: .messages)
+        try container.encodeIfPresent(seen, forKey: .seen)
+        try container.encodeIfPresent(seenPos, forKey: .seenPos)
+        try container.encodeIfPresent(navQnh, forKey: .navQnh)
+        try container.encodeIfPresent(navAltitudeMcp, forKey: .navAltitudeMcp)
+        try container.encodeIfPresent(navHeading, forKey: .navHeading)
+        try container.encodeIfPresent(nacp, forKey: .nacp)
+        try container.encodeIfPresent(nacv, forKey: .nacv)
+        try container.encodeIfPresent(sil, forKey: .sil)
+        try container.encodeIfPresent(silType, forKey: .silType)
+        try container.encodeIfPresent(emergency, forKey: .emergency)
+        try container.encodeIfPresent(tisb, forKey: .tisb)
+        // Note: positionHistory is not encoded (local tracking only)
     }
     
     init(hex: String, lat: Double? = nil, lon: Double? = nil, altitude: Double? = nil,
@@ -260,6 +310,40 @@ struct Aircraft: Identifiable, Codable, Equatable {
         self.squawk = squawk
         self.rssi = rssi
         self.lastSeen = Date()
+        self.positionHistory = []
+    }
+    
+    // MARK: - History Management
+    
+    /// Add current position to history (called when aircraft updates)
+    mutating func recordPosition() {
+        guard let lat = lat, let lon = lon else { return }
+        
+        // Only record if position has changed significantly (avoid duplicate points)
+        if let lastPoint = positionHistory.last {
+            let latDiff = abs(lastPoint.latitude - lat)
+            let lonDiff = abs(lastPoint.longitude - lon)
+            
+            // Skip if position hasn't changed by at least 0.0001 degrees (~11 meters)
+            if latDiff < 0.0001 && lonDiff < 0.0001 {
+                return
+            }
+        }
+        
+        let point = PositionHistoryPoint(
+            latitude: lat,
+            longitude: lon,
+            altitude: altitude,
+            timestamp: Date()
+        )
+        
+        positionHistory.append(point)
+    }
+    
+    /// Remove position history older than the specified retention time
+    mutating func cleanupOldHistory(retentionMinutes: Double) {
+        let cutoffDate = Date().addingTimeInterval(-retentionMinutes * 60)
+        positionHistory.removeAll { $0.timestamp < cutoffDate }
     }
 }
 

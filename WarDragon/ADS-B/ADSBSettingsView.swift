@@ -182,6 +182,26 @@ struct ADSBSettingsView: View {
                     }
                 }
                 
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Flight Path Retention")
+                            Spacer()
+                            Text(formatRetentionTime(settings.adsbFlightPathRetentionMinutes))
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $settings.adsbFlightPathRetentionMinutes, in: 5...120, step: 5)
+                        
+                        Text("How long to keep aircraft position history for trail visualization")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("Flight Path History")
+                } footer: {
+                    Text("Older position data will be automatically cleaned up after this time period. Longer retention uses more memory.")
+                }
+                
                 Section("Connection Test") {
                     Button {
                         testConnection()
@@ -376,6 +396,19 @@ struct ADSBSettingsView: View {
     }
     
     // MARK: - Location Helpers
+    
+    private func formatRetentionTime(_ minutes: Double) -> String {
+        if minutes < 60 {
+            return "\(Int(minutes)) min"
+        } else {
+            let hours = minutes / 60.0
+            if hours.truncatingRemainder(dividingBy: 1) == 0 {
+                return "\(Int(hours)) hr"
+            } else {
+                return String(format: "%.1f hr", hours)
+            }
+        }
+    }
     
     private func requestLocationIfNeeded() {
         switch locationManager.locationPermissionStatus {
