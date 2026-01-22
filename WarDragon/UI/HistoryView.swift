@@ -168,11 +168,16 @@ struct StoredEncountersView: View {
                         .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                 }
                 .onDelete { indexSet in
-                    for index in indexSet {
-                        let encounterToDelete = sortedEncounters[index]
-                        modelContext.delete(encounterToDelete)
-                        // Clean up cache
-                        cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                    // Disable animations during delete to prevent accessing deleted objects
+                    withAnimation(nil) {
+                        for index in indexSet {
+                            let encounterToDelete = sortedEncounters[index]
+                            modelContext.delete(encounterToDelete)
+                            // Clean up cache
+                            cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                        }
+                        // Force immediate save to prevent faulting issues
+                        try? modelContext.save()
                     }
                 }
             }
@@ -357,6 +362,7 @@ struct StoredEncountersView: View {
         @Environment(\.modelContext) private var modelContext
         @State private var showingDeleteConfirmation = false
         @State private var showingInfoEditor = false
+        @State private var showFlightPath = true
         @State private var selectedMapType: MapStyle = .standard
         @State private var mapCameraPosition: MapCameraPosition = .automatic
         @EnvironmentObject var cotViewModel: CoTViewModel
@@ -464,11 +470,18 @@ struct StoredEncountersView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
+                        Toggle("Show Flight Path", isOn: $showFlightPath)
+                        
+                        Divider()
+                        
                         Picker("Map Style", selection: $selectedMapType) {
                             Text("Standard").tag(MapStyle.standard)
                             Text("Satellite").tag(MapStyle.satellite)
                             Text("Hybrid").tag(MapStyle.hybrid)
                         }
+                        
+                        Divider()
+                        
                         Button {
                             exportKML()
                         } label: {
@@ -509,7 +522,7 @@ struct StoredEncountersView: View {
             
             return Map(position: $mapCameraPosition) {
                 Group {
-                    if droneFlightPoints.count > 1 {
+                    if showFlightPath && droneFlightPoints.count > 1 {
                         MapPolyline(coordinates: droneFlightPoints.map { $0.coordinate })
                             .stroke(.blue, lineWidth: 3)
                     }
@@ -894,16 +907,13 @@ struct StoredEncountersView: View {
                     StatItem(title: "Max Alt", value: String(format: "%.1fm", encounter.cachedMaxAltitude))
                     StatItem(title: "Max Speed", value: String(format: "%.1fm/s", encounter.cachedMaxSpeed))
                     StatItem(title: "Avg RSSI", value: String(format: "%.1fdBm", encounter.cachedAverageRSSI))
-                    // Always use cached count to avoid faulting
                     StatItem(title: "Signatures", value: "\(encounter.cachedSignatureCount)")
                     
-                    // MARK: - FIX: Show actual detection count for FPV
                     if encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true" {
                         let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ?? 0
                         let proximityCount = totalDetections > 0 ? totalDetections : encounter.cachedFlightPointCount
                         StatItem(title: "Points", value: "\(proximityCount)")
                     } else {
-                        // Use cached count - NEVER access flightPoints.count directly
                         StatItem(title: "Points", value: "\(encounter.cachedFlightPointCount)")
                     }
                     

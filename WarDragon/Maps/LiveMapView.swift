@@ -19,6 +19,7 @@ struct LiveMapView: View {
     @State private var lastProcessedDrones: [String: CoTViewModel.CoTMessage] = [:]
     @State private var shouldUpdateMapView: Bool = false
     @State private var userHasMovedMap = false
+    @State private var showFlightPaths = true
     @State private var selectedMapStyle: MapStyleOption = .standard
     let filterMode: FilterMode
     let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
@@ -184,9 +185,10 @@ struct LiveMapView: View {
         for message in newMessages {
             guard let coordinate = message.coordinate else { continue }
             
+            // Both lat and lon must be non-zero (use AND not OR)
             let hasValidLat = coordinate.latitude != 0
             let hasValidLon = coordinate.longitude != 0
-            guard hasValidLat || hasValidLon else { continue }
+            guard hasValidLat && hasValidLon else { continue }
             
             var path = flightPaths[message.uid] ?? []
             
@@ -225,7 +227,8 @@ struct LiveMapView: View {
             let coord = pathPoint.coordinate
             let hasValidLat = coord.latitude != 0
             let hasValidLon = coord.longitude != 0
-            guard hasValidLat || hasValidLon else { return nil }
+            // Both coordinates must be non-zero (use AND not OR)
+            guard hasValidLat && hasValidLon else { return nil }
             return coord
         }
     }
@@ -285,19 +288,31 @@ struct LiveMapView: View {
     var body: some View {
         ZStack {
             Map(position: $mapCameraPosition, interactionModes: .all) {
-                // Show flight paths only if showing drones
-                if filterMode != .aircraft {
+                // Show drone flight paths only if showing drones and toggle is on
+                if filterMode != .aircraft && showFlightPaths {
                     ForEach(flightPaths.keys.sorted(), id: \.self) { droneId in
                         if let path = flightPaths[droneId], path.count > 1 {
+                            // Both lat and lon must be non-zero (use AND not OR)
                             let validPath = path.filter { pathPoint in
                                 let coord = pathPoint.coordinate
-                                return coord.latitude != 0 || coord.longitude != 0
+                                return coord.latitude != 0 && coord.longitude != 0
                             }
                             if validPath.count > 1 {
                                 let coordinates = validPath.map { $0.coordinate }
                                 MapPolyline(coordinates: coordinates)
                                     .stroke(Color.blue, lineWidth: 2)
                             }
+                        }
+                    }
+                }
+                
+                // Show aircraft flight paths only if showing aircraft and toggle is on
+                if filterMode != .drones && showFlightPaths {
+                    ForEach(uniqueAircraft, id: \.hex) { aircraft in
+                        if aircraft.positionHistory.count > 1 {
+                            let coordinates = aircraft.positionHistory.map { $0.coordinate }
+                            MapPolyline(coordinates: coordinates)
+                                .stroke(Color.green, lineWidth: 2)
                         }
                     }
                 }
@@ -421,9 +436,22 @@ struct LiveMapView: View {
             )
             
             VStack {
-                // Top buttons - Fit to View and Map Style
+                // Top buttons - Fit to View, Flight Path Toggle, and Map Style
                 HStack {
                     Spacer()
+                    
+                    // Flight Path Toggle
+                    Button {
+                        showFlightPaths.toggle()
+                    } label: {
+                        Label(showFlightPaths ? "Paths" : "Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
                     
                     // Map Style Picker
                     Menu {

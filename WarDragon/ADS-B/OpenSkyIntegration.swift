@@ -71,6 +71,9 @@ final class OpenSkySettings {
     /// Whether to show notifications for new aircraft
     var notificationsEnabled: Bool = false
     
+    /// How long to keep flight path history (in minutes)
+    var flightPathRetentionMinutes: Double = 30.0
+    
     init() {}
     
     /// Current bounding box if enabled
@@ -779,6 +782,15 @@ final class OpenSkyService: ObservableObject {
                                 print("OpenSky: Showing \(convertedAircraft.count) aircraft (filtered from \(originalCount), under limit of \(maxCount), radius: \(radiusKm)km)")
                             }
                             
+                            // Record position history and cleanup old history for each aircraft
+                            let retentionMinutes = settings?.flightPathRetentionMinutes ?? 30.0
+                            convertedAircraft = convertedAircraft.map { aircraft in
+                                var updatedAircraft = aircraft
+                                updatedAircraft.recordPosition()
+                                updatedAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
+                                return updatedAircraft
+                            }
+                            
                             // Update displayed count
                             if let settings = settings {
                                 settings.lastDisplayedCount = convertedAircraft.count
@@ -850,6 +862,15 @@ final class OpenSkyService: ObservableObject {
                 print("OpenSky manual fetch: Filtered to \(convertedAircraft.count) aircraft (from \(originalCount), max: \(maxCount), radius: \(radiusKm)km)")
             } else {
                 print("OpenSky manual fetch: Showing \(convertedAircraft.count) aircraft (filtered from \(originalCount), under limit of \(maxCount), radius: \(radiusKm)km)")
+            }
+            
+            // Record position history and cleanup old history for each aircraft
+            let retentionMinutes = settings?.flightPathRetentionMinutes ?? 30.0
+            convertedAircraft = convertedAircraft.map { aircraft in
+                var updatedAircraft = aircraft
+                updatedAircraft.recordPosition()
+                updatedAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
+                return updatedAircraft
             }
             
             // Update displayed count
@@ -1145,6 +1166,27 @@ struct OpenSkySettingsView: View {
                             service.updateSettings { $0.showOnlyAirborne = newValue }
                         }
                     ))
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Flight Path Retention")
+                            Spacer()
+                            Text("\(Int(settings?.flightPathRetentionMinutes ?? 30)) min")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { settings?.flightPathRetentionMinutes ?? 30.0 },
+                                set: { newValue in
+                                    service.updateSettings { settings in
+                                        settings.flightPathRetentionMinutes = newValue
+                                    }
+                                }
+                            ),
+                            in: 5...120,
+                            step: 5
+                        )
+                    }
                     
                     Toggle("Minimum Altitude Filter", isOn: Binding(
                         get: { settings?.minimumAltitude != nil },

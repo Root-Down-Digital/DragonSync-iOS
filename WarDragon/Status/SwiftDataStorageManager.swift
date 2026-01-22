@@ -736,4 +736,78 @@ class SwiftDataStorageManager: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Aircraft Storage Cleanup
+    
+    /// Cleanup old aircraft encounters to prevent database bloat
+    func cleanupOldAircraftEncounters(maxAircraftCount: Int = 200) {
+        guard let context = modelContext else { return }
+        
+        do {
+            // Fetch all encounters
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            let allEncounters = try context.fetch(descriptor)
+            
+            // Filter to aircraft only (IDs starting with "aircraft-")
+            let aircraftEncounters = allEncounters.filter { $0.id.hasPrefix("aircraft-") }
+            
+            guard aircraftEncounters.count > maxAircraftCount else {
+                logger.info("Aircraft cleanup not needed: \(aircraftEncounters.count)/\(maxAircraftCount) stored")
+                return
+            }
+            
+            // Sort by last seen (oldest first)
+            let sortedAircraft = aircraftEncounters.sorted { $0.lastSeen < $1.lastSeen }
+            
+            // Calculate how many to delete
+            let deleteCount = aircraftEncounters.count - maxAircraftCount
+            let toDelete = sortedAircraft.prefix(deleteCount)
+            
+            logger.info("🗑️ Cleaning up \(deleteCount) old aircraft encounters (keeping \(maxAircraftCount) newest)...")
+            
+            // Delete old aircraft
+            for aircraft in toDelete {
+                context.delete(aircraft)
+            }
+            
+            // Save deletions
+            try context.save()
+            
+            // Update cache
+            updateInMemoryCache()
+            
+            logger.info("✅ Deleted \(deleteCount) old aircraft encounters")
+            
+        } catch {
+            logger.error("❌ Aircraft cleanup failed: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Delete all aircraft encounters (keeps drone encounters)
+    /// Use this to clear aircraft history without affecting drone data
+    func deleteAllAircraftEncounters() {
+        guard let context = modelContext else { return }
+        
+        do {
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            let allEncounters = try context.fetch(descriptor)
+            
+            // Filter to aircraft only
+            let aircraftEncounters = allEncounters.filter { $0.id.hasPrefix("aircraft-") }
+            
+            logger.info("🗑️ Deleting \(aircraftEncounters.count) aircraft encounters...")
+            
+            for aircraft in aircraftEncounters {
+                context.delete(aircraft)
+            }
+            
+            try context.save()
+            updateInMemoryCache()
+            
+            logger.info("✅ Deleted all aircraft encounters (drones preserved)")
+            
+        } catch {
+            logger.error("❌ Failed to delete aircraft encounters: \(error.localizedDescription)")
+        }
+    }
 }

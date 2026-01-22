@@ -33,6 +33,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var statusListener: NWListener?
     private var multicastConnection: NWConnection?
     
+    // ADS-B update counters (moved from extension)
+    private var openSkyUpdateCount: Int = 0
+    private var aircraftUpdateCounter: Int = 0
+    
     // MARK: - Detection Limits (matching Python DragonSync)
     // Python has max_drones = 30 (default), configurable via config.ini
     private let maxDrones = 30
@@ -626,6 +630,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.setupMQTTClient()
             self.setupTAKClient()
             self.setupLatticeClient()
+            
+            Task.detached {
+                await MainActor.run {
+                    SwiftDataStorageManager.shared.cleanupOldAircraftEncounters(maxAircraftCount: 200)
+                    print("✅ Aircraft storage cleanup completed on launch")
+                }
+            }
             
             // Delay ADS-B setup to give the server time to be ready
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
@@ -3250,13 +3261,20 @@ extension CoTViewModel {
     /// Setup TAK client and start connection
     func setupTAKClient() {
         Task { @MainActor in
-            let config = Settings.shared.takConfiguration
+            var config = Settings.shared.takConfiguration
             guard config.enabled && config.isValid else {
                 self.takClient = nil
                 return
             }
             
-            self.takClient = TAKClient(configuration: config)
+            // FORCE UDP ONLY - ignore whatever settings say
+            config.protocol = .udp
+            if config.port != 8054 {
+                print("⚠️ WARNING: TAK port is \(config.port), should be 8054 for your server")
+            }
+            
+            // Create TAK client WITHOUT enrollment manager (UDP doesn't need it)
+            self.takClient = TAKClient(configuration: config, enrollmentManager: nil)
             self.takClient?.connect()
             
             self.takClient?.$state
@@ -3657,14 +3675,11 @@ extension CoTViewModel {
     @MainActor
     func updateOpenSkyAircraft(_ aircraft: [Aircraft]) {
         let openSkyAircraft = aircraft.filter { $0.hex.count == 6 }
-        
         var existingAircraft = aircraftTracks.filter { $0.hex.count != 6 }
-        
         existingAircraft.append(contentsOf: openSkyAircraft)
-        
         aircraftTracks = existingAircraft
-        
-        for ac in openSkyAircraft {
+        let limitedAircraft = Array(openSkyAircraft.prefix(50))
+        for ac in limitedAircraft {
             statusViewModel.trackAircraft(
                 hex: ac.hex,
                 callsign: ac.flight,
@@ -3672,20 +3687,24 @@ extension CoTViewModel {
             )
         }
         
-        print("Updated OpenSky aircraft: \(openSkyAircraft.count) aircraft")
+        print("Updated OpenSky aircraft: \(openSkyAircraft.count) aircraft (tracking \(limitedAircraft.count))")
         
         objectWillChange.send()
-        
-        if Settings.shared.notificationsEnabled {
-            checkNearbyAircraft(openSkyAircraft)
+
+        if openSkyUpdateCount % 5 == 0 {
+            if Settings.shared.notificationsEnabled {
+                checkNearbyAircraft(openSkyAircraft)
+            }
         }
-        
-        if Settings.shared.mqttEnabled {
-            publishAircraftToMQTT(openSkyAircraft)
-        }
-        
-        if Settings.shared.takEnabled {
-            publishAircraftToTAK(openSkyAircraft)
+        openSkyUpdateCount += 1
+        if openSkyUpdateCount % 3 == 0 {
+            if Settings.shared.mqttEnabled {
+                publishAircraftToMQTT(openSkyAircraft)
+            }
+            
+            if Settings.shared.takEnabled {
+                publishAircraftToTAK(openSkyAircraft)
+            }
         }
     }
     
@@ -3702,6 +3721,17 @@ extension CoTViewModel {
                 callsign: ac.flight,
                 altitude: ac.altitude
             )
+        }
+        
+        // Only run cleanup every 50 updates to avoid performance impact
+        aircraftUpdateCounter += 1
+        if aircraftUpdateCounter % 50 == 0 {
+            Task.detached {
+                await MainActor.run {
+                    // Limit to 200 aircraft in storage to prevent crashes
+                    SwiftDataStorageManager.shared.cleanupOldAircraftEncounters(maxAircraftCount: 200)
+                }
+            }
         }
         
         // Keep aircraft separate from drone messages
@@ -3937,6 +3967,11 @@ extension CoTViewModel {
         guard let takClient = takClient else { return }
         
         Task { @MainActor in
+            guard case .connected = takClient.state else {
+                // Silently skip if not connected - don't spam errors
+                return
+            }
+            
             for aircraft in aircraft {
                 // Rate limit per aircraft
                 guard RateLimiterManager.shared.shouldAllowDronePublish(for: aircraft.hex) else {
@@ -3945,14 +3980,16 @@ extension CoTViewModel {
                 
                 // Global TAK rate limit
                 guard RateLimiterManager.shared.shouldAllowTAKPublish() else {
-                    break // Stop publishing if global limit hit
+                    break
                 }
                 
                 do {
                     let cotXML = aircraft.toCoTXML()
                     try await takClient.send(cotXML)
                 } catch {
+                    // Only log error once per session to prevent spam
                     print("TAK aircraft publish failed: \(error)")
+                    return // Stop trying to send more on first error
                 }
             }
         }

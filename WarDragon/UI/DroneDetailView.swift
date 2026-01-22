@@ -15,6 +15,7 @@ struct DroneDetailView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     @State private var mapCameraPosition: MapCameraPosition
     @State private var showAllLocations = true
+    @State private var showFlightPath = true
     @State private var selectedMapStyle: MapStyleOption = .standard
     
     enum MapStyleOption {
@@ -148,6 +149,17 @@ struct DroneDetailView: View {
                             .background(.ultraThinMaterial)
                             .cornerRadius(8)
                     }
+                    
+                    Button {
+                        showFlightPath.toggle()
+                    } label: {
+                        Label(showFlightPath ? "Hide Path" : "Show Path", systemImage: showFlightPath ? "eye.slash" : "eye")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
                 }
             }
 
@@ -220,7 +232,7 @@ struct DroneDetailView: View {
                         .filter { !$0.isProximityPoint }
                         .map { $0.coordinate } ?? flightPath
                     
-                    if cleanFlightPath.count > 1 {
+                    if showFlightPath && cleanFlightPath.count > 1 {
                         MapPolyline(coordinates: cleanFlightPath)
                             .stroke(.purple, lineWidth: 3)
                     }

@@ -123,14 +123,8 @@ struct ContentView: View {
             // Configure OpenSkyService with ModelContext
             OpenSkyService.shared.configure(with: modelContext)
             
-            // CRITICAL FIX: Repair cached stats for all encounters
             // This ensures encounters loaded from database have valid cached values
-            // to prevent crashes when accessing computed properties
             SwiftDataStorageManager.shared.repairCachedStats()
-            
-            // Reload encounters from SwiftData now that ModelContext is set
-            // This is important because DroneStorageManager.init() runs before
-            // ModelContext is available, so we load here instead
             droneStorage.loadFromStorage()
             droneStorage.updateProximityPointsWithCorrectRadius()
             
