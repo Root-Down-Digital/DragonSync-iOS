@@ -540,57 +540,107 @@ final class OpenSkyService: ObservableObject {
     private var modelContext: ModelContext?
     private var settings: OpenSkySettings?
     
+    private var aircraftHistory: [String: Aircraft] = [:]
+    
+    // Throttle UI updates to avoid excessive re-renders
+    private var lastUIUpdateTime: Date?
+    private let minimumUIUpdateInterval: TimeInterval = 5.0 // Only update UI every 5 seconds max
+    
+    // Throttle settings saves to reduce disk I/O
+    private var lastSettingsSaveTime: Date?
+    private let minimumSettingsSaveInterval: TimeInterval = 60.0 // Only save settings every 60 seconds max
+    
     weak var cotViewModel: CoTViewModel?
     let locationManager = LocationManager.shared
     
     init(session: URLSession = .shared) {
         self.session = session
         
-        Task {
-            await checkAuthenticationStatus()
+        // Don't await - run in background!
+        Task.detached { @MainActor in
+            await self.checkAuthenticationStatus()
         }
     }
     
     func configure(with context: ModelContext) {
+        print("🟢 [PERF] configure: START (immediate return)")
+        
         self.modelContext = context
-        loadSettings()
+        
+        // Load settings asynchronously - COMPLETELY detached from MainActor
+        Task.detached { @MainActor in
+            let startTime = CFAbsoluteTimeGetCurrent()
+            self.loadSettings()
+            print("🟢 [PERF] configure: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
+        }
     }
     
     private func loadSettings() {
-        guard let context = modelContext else { return }
+        let startTime = CFAbsoluteTimeGetCurrent()
+        print("🟢 [PERF] loadSettings: START")
         
+        guard let context = modelContext else { 
+            print("🔴 [ERROR] loadSettings: No modelContext!")
+            return 
+        }
+        
+        // Fetch settings synchronously on MainActor - SwiftData requires this
         let descriptor = FetchDescriptor<OpenSkySettings>()
         
         do {
+            let fetchStart = CFAbsoluteTimeGetCurrent()
             let results = try context.fetch(descriptor)
+            print("🟢 [PERF] loadSettings: Fetch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - fetchStart) * 1000))ms, found \(results.count) settings")
             
             if let existingSettings = results.first {
                 self.settings = existingSettings
+                print("🟢 [PERF] loadSettings: Using existing settings")
             } else {
+                let createStart = CFAbsoluteTimeGetCurrent()
                 let newSettings = OpenSkySettings()
                 context.insert(newSettings)
-                try context.save()
-                self.settings = newSettings
+                do {
+                    try context.save()
+                    self.settings = newSettings
+                    print("🟢 [PERF] loadSettings: Created new settings, save took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - createStart) * 1000))ms")
+                } catch {
+                    print("🔴 [ERROR] loadSettings: Failed to save new settings: \(error)")
+                }
             }
             
-            applySettings()
+            // Apply settings (which starts polling if needed) - async now
+            Task.detached { @MainActor in
+                let applyStart = CFAbsoluteTimeGetCurrent()
+                self.applySettings()
+                print("🟢 [PERF] loadSettings: applySettings took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - applyStart) * 1000))ms")
+            }
+            
+            print("🟢 [PERF] loadSettings: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
         } catch {
-            print("Failed to load OpenSky settings: \(error)")
+            print("🔴 [ERROR] Failed to load OpenSky settings: \(error)")
         }
     }
     
     private func applySettings() {
         guard let settings = settings else { return }
         
-        isEnabled = settings.isEnabled
-        
-        if settings.isEnabled {
-            locationManager.requestLocationPermission()
+        // Only update if the value has actually changed to avoid unnecessary UI updates
+        let shouldBeEnabled = settings.isEnabled
+        if isEnabled != shouldBeEnabled {
+            isEnabled = shouldBeEnabled
         }
         
-        if settings.isEnabled && settings.autoPollingEnabled && !isPolling {
+        // Start/stop polling only if the state needs to change
+        let shouldBePolling = settings.isEnabled && settings.autoPollingEnabled
+        
+        if shouldBePolling && !isPolling {
+            // Request location permission ASYNCHRONOUSLY - don't block
+            Task {
+                locationManager.requestLocationPermission()
+            }
+            // Start polling immediately - don't wait for permission
             startPollingFromSettings()
-        } else if (!settings.isEnabled || !settings.autoPollingEnabled) && isPolling {
+        } else if !shouldBePolling && isPolling {
             stopPolling()
         }
     }
@@ -604,19 +654,37 @@ final class OpenSkyService: ObservableObject {
         )
     }
     
-    func updateSettings(_ update: (OpenSkySettings) -> Void) {
-        guard let settings = settings, let context = modelContext else { return }
+    private var settingsUpdateTask: Task<Void, Never>?
+    
+    func updateSettings(_ update: (OpenSkySettings) -> Void, shouldApply: Bool = true) {
+        guard let settings = settings else { return }
         
-        // Send will change notification BEFORE the update
-        objectWillChange.send()
-        
+        // Apply the update immediately (in-memory only)
         update(settings)
         
-        do {
-            try context.save()
-            applySettings()
-        } catch {
-            print("Failed to save OpenSky settings: \(error)")
+        // Cancel any pending save
+        settingsUpdateTask?.cancel()
+        
+        // Debounce the save to avoid excessive disk writes - use 2 seconds instead of 0.5
+        settingsUpdateTask = Task { @MainActor in
+            // Wait longer to batch multiple rapid updates
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            guard !Task.isCancelled else { return }
+            
+            // Save to disk in background task (fire and forget)
+            Task.detached { @MainActor in
+                guard let context = self.modelContext else { return }
+                do {
+                    try context.save()
+                } catch {
+                    print("Failed to save OpenSky settings: \(error)")
+                }
+            }
+            
+            // Only apply settings if requested (avoid unnecessary polling restarts)
+            if shouldApply {
+                self.applySettings()
+            }
         }
     }
     
@@ -627,29 +695,38 @@ final class OpenSkyService: ObservableObject {
     private func updateAircraftCache(_ aircraft: [OpenSkyAircraft]) {
         guard let context = modelContext else { return }
         
-        let descriptor = FetchDescriptor<CachedAircraft>()
-        guard let existing = try? context.fetch(descriptor) else { return }
-        
-        let existingDict = Dictionary(uniqueKeysWithValues: existing.map { ($0.icao24, $0) })
-        let currentICAOs = Set(aircraft.map { $0.icao24 })
-        
-        for plane in aircraft {
-            if let cached = existingDict[plane.icao24] {
-                cached.update(from: plane)
-            } else {
-                let newCached = CachedAircraft(from: plane)
-                context.insert(newCached)
-            }
+        // Only update cache every 60 seconds to avoid constant disk writes
+        let now = Date()
+        if let lastUpdate = lastSettingsSaveTime, now.timeIntervalSince(lastUpdate) < 60.0 {
+            return // Skip cache update
         }
         
-        let fiveMinutesAgo = Date().addingTimeInterval(-300)
-        for cached in existing where !currentICAOs.contains(cached.icao24) {
-            if cached.lastSeen < fiveMinutesAgo {
-                context.delete(cached)
+        // Fire and forget - don't block
+        Task.detached { @MainActor in
+            let descriptor = FetchDescriptor<CachedAircraft>()
+            guard let existing = try? context.fetch(descriptor) else { return }
+            
+            let existingDict = [String: CachedAircraft](uniqueKeysWithValues: existing.map { ($0.icao24, $0) })
+            let currentICAOs = Set(aircraft.map { $0.icao24 })
+            
+            for plane in aircraft {
+                if let cached = existingDict[plane.icao24] {
+                    cached.update(from: plane)
+                } else {
+                    let newCached = CachedAircraft(from: plane)
+                    context.insert(newCached)
+                }
             }
+            
+            let fiveMinutesAgo = Date().addingTimeInterval(-300)
+            for cached in existing where !currentICAOs.contains(cached.icao24) {
+                if cached.lastSeen < fiveMinutesAgo {
+                    context.delete(cached)
+                }
+            }
+            
+            try? context.save()
         }
-        
-        try? context.save()
     }
     
     func saveCredentials(username: String, password: String) async throws {
@@ -674,7 +751,10 @@ final class OpenSkyService: ObservableObject {
         try await KeychainHelper.shared.retrieveCredentials()
     }
     
-    func fetchAircraft(boundingBox: BoundingBox? = nil) async throws -> [OpenSkyAircraft] {
+    nonisolated func fetchAircraft(boundingBox: BoundingBox? = nil) async throws -> [OpenSkyAircraft] {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        print("🔵 [PERF] fetchAircraft: START")
+        
         guard var components = URLComponents(string: baseURL) else {
             throw OpenSkyError.invalidURL
         }
@@ -691,6 +771,7 @@ final class OpenSkyService: ObservableObject {
         request.httpMethod = "GET"
         request.timeoutInterval = 30
         
+        let credStart = CFAbsoluteTimeGetCurrent()
         if let credentials = try? await getCredentials() {
             let credentialString = "\(credentials.username):\(credentials.password)"
             if let credentialData = credentialString.data(using: .utf8) {
@@ -698,8 +779,12 @@ final class OpenSkyService: ObservableObject {
                 request.setValue("Basic \(base64Credentials)", forHTTPHeaderField: "Authorization")
             }
         }
+        print("🔵 [PERF] fetchAircraft: Credentials check took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - credStart) * 1000))ms")
         
+        // Network call on background - NOT MainActor
+        let networkStart = CFAbsoluteTimeGetCurrent()
         let (data, response) = try await session.data(for: request)
+        print("🔵 [PERF] fetchAircraft: Network request took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - networkStart) * 1000))ms")
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenSkyError.invalidResponse
@@ -716,26 +801,38 @@ final class OpenSkyService: ObservableObject {
             throw OpenSkyError.httpError(statusCode: httpResponse.statusCode)
         }
         
+        // Decode on background - NOT MainActor
+        let decodeStart = CFAbsoluteTimeGetCurrent()
+        let decoder = JSONDecoder()
+        let openSkyResponse: OpenSkyResponse
         do {
-            let decoder = JSONDecoder()
-            let openSkyResponse = try decoder.decode(OpenSkyResponse.self, from: data)
-            let aircraft = openSkyResponse.aircraft
-            
-            currentAircraft = aircraft
-            lastUpdateTime = Date(timeIntervalSince1970: TimeInterval(openSkyResponse.time))
-            
-            updateAircraftCache(aircraft)
-            
-            if let settings = settings {
-                settings.lastFetchDate = Date()
-                settings.lastAircraftCount = aircraft.count // Raw count from API
-                try? modelContext?.save()
-            }
-            
-            return aircraft
+            openSkyResponse = try decoder.decode(OpenSkyResponse.self, from: data)
         } catch {
             throw OpenSkyError.decodingError(error)
         }
+        print("🔵 [PERF] fetchAircraft: JSON decode took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - decodeStart) * 1000))ms")
+        
+        let aircraft = openSkyResponse.aircraft
+        let updateTime = Date(timeIntervalSince1970: TimeInterval(openSkyResponse.time))
+        
+        // DON'T WAIT FOR MAINACTOR - just fire and forget completely
+        let mainActorStart = CFAbsoluteTimeGetCurrent()
+        Task { @MainActor in
+            self.currentAircraft = aircraft
+            self.lastUpdateTime = updateTime
+            
+            if let settings = self.settings {
+                settings.lastFetchDate = Date()
+                settings.lastAircraftCount = aircraft.count
+            }
+            
+            // Don't even update cache - too slow!
+            // self.updateAircraftCache(aircraft)
+        }
+        print("🔵 [PERF] fetchAircraft: MainActor dispatch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - mainActorStart) * 1000))ms")
+        
+        print("🔵 [PERF] fetchAircraft: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
+        return aircraft
     }
     
     func startPolling(interval: TimeInterval? = nil, boundingBox: BoundingBox? = nil) {
@@ -744,70 +841,120 @@ final class OpenSkyService: ObservableObject {
         let pollingInterval = interval ?? recommendedPollingInterval
         isPolling = true
         
-        pollingTask = Task { @MainActor in
+        print("🟢 [PERF] startPolling: Polling started with interval \(pollingInterval)s")
+        
+        // Start location updates when polling begins
+        locationManager.startLocationUpdates()
+        
+        // Run polling on a BACKGROUND task, not MainActor to avoid blocking UI
+        pollingTask = Task.detached { [weak self] in
+            guard let self = self else { return }
+            
             while !Task.isCancelled {
+                let loopStart = CFAbsoluteTimeGetCurrent()
+                print("🟡 [PERF] Polling loop: START")
+                
                 do {
-                    if let userLocation = locationManager.userLocation {
-                        // Use radius from settings (default 50km)
-                        let radiusKm = settings?.maxDistanceKm ?? 10.0
+                    // Get values from MainActor - extract primitive values to avoid Sendable issues
+                    let settingsStart = CFAbsoluteTimeGetCurrent()
+                    let (userLocation, radiusKm, maxCount, retentionMinutes, showOnlyAirborne, minimumAltitude) = await MainActor.run {
+                        (
+                            self.locationManager.userLocation,
+                            self.settings?.maxDistanceKm ?? 10.0,
+                            self.settings?.maxAircraftCount ?? 50,
+                            self.settings?.flightPathRetentionMinutes ?? 30.0,
+                            self.settings?.showOnlyAirborne ?? false,
+                            self.settings?.minimumAltitude
+                        )
+                    }
+                    print("🟡 [PERF] Polling loop: Settings fetch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - settingsStart) * 1000))ms")
+                    
+                    if let userLocation = userLocation {
                         let locationBasedBox = BoundingBox.fromLocation(userLocation.coordinate, radiusKm: radiusKm)
-                        let aircraft = try await fetchAircraft(boundingBox: boundingBox ?? locationBasedBox)
                         
-                        if let cotViewModel = cotViewModel {
-                            var convertedAircraft = aircraft.compactMap { convertToAppAircraft($0) }
+                        // Network fetch on background
+                        let fetchStart = CFAbsoluteTimeGetCurrent()
+                        let aircraft = try await self.fetchAircraft(boundingBox: boundingBox ?? locationBasedBox)
+                        print("🟡 [PERF] Polling loop: Fetch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - fetchStart) * 1000))ms")
+                        
+                        // HEAVY PROCESSING ON BACKGROUND THREAD - ALL OF IT
+                        let processStart = CFAbsoluteTimeGetCurrent()
+                        
+                        // Get current history snapshot from MainActor
+                        let currentHistory = await MainActor.run { self.aircraftHistory }
+                        
+                        let processedResult = await Self.processAircraftInBackground(
+                            aircraft: aircraft,
+                            userLocation: userLocation,
+                            maxCount: maxCount,
+                            retentionMinutes: retentionMinutes,
+                            showOnlyAirborne: showOnlyAirborne,
+                            minimumAltitude: minimumAltitude,
+                            radiusKm: radiusKm,
+                            existingHistory: currentHistory // Pass actual history for flight paths
+                        )
+                        print("🟡 [PERF] Polling loop: Background processing took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - processStart) * 1000))ms")
+                        
+                        let mainActorStart = CFAbsoluteTimeGetCurrent()
+                        await MainActor.run {
+                            let innerStart = CFAbsoluteTimeGetCurrent()
                             
-                            let originalCount = convertedAircraft.count
+                            // Update aircraftHistory with new position data
+                            self.aircraftHistory = processedResult.updatedHistory
                             
-                            // Apply display filters
-                            convertedAircraft = applyDisplayFilters(to: convertedAircraft)
+                            // Throttle UI updates
+                            let now = Date()
+                            let shouldUpdateUI = self.lastUIUpdateTime == nil ||
+                                now.timeIntervalSince(self.lastUIUpdateTime!) >= self.minimumUIUpdateInterval
                             
-                            // Limit to closest N aircraft based on OpenSky settings
-                            let maxCount = settings?.maxAircraftCount ?? 50
-                            if convertedAircraft.count > maxCount {
-                                // Sort by distance and take closest N
-                                let aircraftWithDistance = convertedAircraft.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
-                                    guard let coord = aircraft.coordinate else { return nil }
-                                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-                                    let distance = userLocation.distance(from: aircraftLocation)
-                                    return (aircraft, distance)
-                                }
-                                
-                                convertedAircraft = aircraftWithDistance
-                                    .sorted { $0.distance < $1.distance }
-                                    .prefix(maxCount)
-                                    .map { $0.aircraft }
-                                
-                                print("OpenSky: Filtered to \(convertedAircraft.count) aircraft (from \(originalCount), max: \(maxCount), radius: \(radiusKm)km)")
+                            if shouldUpdateUI {
+                                let uiStart = CFAbsoluteTimeGetCurrent()
+                                print("🟡 [PERF] Polling loop: Calling updateOpenSkyAircraft with \(processedResult.aircraft.count) aircraft...")
+                                self.cotViewModel?.updateOpenSkyAircraft(processedResult.aircraft)
+                                print("🟡 [PERF] Polling loop: UI update took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - uiStart) * 1000))ms")
+                                self.lastUIUpdateTime = now
                             } else {
-                                print("OpenSky: Showing \(convertedAircraft.count) aircraft (filtered from \(originalCount), under limit of \(maxCount), radius: \(radiusKm)km)")
+                                print("🟡 [PERF] Polling loop: UI update throttled (skipped)")
                             }
                             
-                            // Record position history and cleanup old history for each aircraft
-                            let retentionMinutes = settings?.flightPathRetentionMinutes ?? 30.0
-                            convertedAircraft = convertedAircraft.map { aircraft in
-                                var updatedAircraft = aircraft
-                                updatedAircraft.recordPosition()
-                                updatedAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
-                                return updatedAircraft
+                            // Throttle settings updates even more aggressively
+                            if let settings = self.settings {
+                                settings.lastDisplayedCount = processedResult.displayedCount
+                                
+                                let shouldSaveSettings = self.lastSettingsSaveTime == nil ||
+                                    now.timeIntervalSince(self.lastSettingsSaveTime!) >= self.minimumSettingsSaveInterval
+                                
+                                if shouldSaveSettings {
+                                    // Fire and forget - don't wait for save
+                                    Task.detached { @MainActor in
+                                        let saveStart = CFAbsoluteTimeGetCurrent()
+                                        try? self.modelContext?.save()
+                                        print("🟡 [PERF] Polling loop: Settings save took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - saveStart) * 1000))ms")
+                                    }
+                                    self.lastSettingsSaveTime = now
+                                } else {
+                                    print("🟡 [PERF] Polling loop: Settings save throttled (skipped)")
+                                }
                             }
                             
-                            // Update displayed count
-                            if let settings = settings {
-                                settings.lastDisplayedCount = convertedAircraft.count
-                                try? modelContext?.save()
-                            }
-                            
-                            cotViewModel.updateOpenSkyAircraft(convertedAircraft)
+                            print("🟡 [PERF] Polling loop: MainActor work took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - innerStart) * 1000))ms")
                         }
+                        print("🟡 [PERF] Polling loop: MainActor dispatch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - mainActorStart) * 1000))ms")
                     } else {
-                        _ = try await fetchAircraft(boundingBox: boundingBox)
+                        print("🟡 [PERF] Polling loop: No user location, fetching without location")
+                        _ = try await self.fetchAircraft(boundingBox: boundingBox)
                     }
                 } catch {
-                    print("OpenSky polling error: \(error.localizedDescription)")
+                    print("🔴 [ERROR] OpenSky polling error: \(error.localizedDescription)")
                 }
+                
+                print("🟡 [PERF] Polling loop: TOTAL cycle took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - loopStart) * 1000))ms")
+                print("🟡 [PERF] Polling loop: Sleeping for \(pollingInterval)s...")
                 
                 try? await Task.sleep(nanoseconds: UInt64(pollingInterval * 1_000_000_000))
             }
+            
+            print("🔴 [PERF] Polling loop: CANCELLED")
         }
     }
     
@@ -818,6 +965,7 @@ final class OpenSkyService: ObservableObject {
     }
     
     func requestLocationAndFetch() async throws {
+        // Request permission but don't block
         locationManager.requestLocationPermission()
         
         guard locationManager.locationPermissionStatus == .authorizedWhenInUse || 
@@ -829,61 +977,115 @@ final class OpenSkyService: ObservableObject {
             throw OpenSkyError.networkError(NSError(domain: "OpenSky", code: -2, userInfo: [NSLocalizedDescriptionKey: "Location not available"]))
         }
         
-        // Use radius from settings (default 50km)
+        // Get settings values
         let radiusKm = settings?.maxDistanceKm ?? 10.0
+        let maxCount = settings?.maxAircraftCount ?? 50
+        let retentionMinutes = settings?.flightPathRetentionMinutes ?? 30.0
+        let showOnlyAirborne = settings?.showOnlyAirborne ?? false
+        let minimumAltitude = settings?.minimumAltitude
+        
+        // Build bounding box
         let boundingBox = BoundingBox.fromLocation(userLocation.coordinate, radiusKm: radiusKm)
         
+        // Fetch aircraft (now runs on background)
         let aircraft = try await fetchAircraft(boundingBox: boundingBox)
         
-        if let cotViewModel = cotViewModel {
-            var convertedAircraft = aircraft.compactMap { convertToAppAircraft($0) }
-            
-            let originalCount = convertedAircraft.count
-            
-            // Apply display filters
-            convertedAircraft = applyDisplayFilters(to: convertedAircraft)
-            
-            // Limit to closest N aircraft based on OpenSky settings
-            let maxCount = settings?.maxAircraftCount ?? 50
-            if convertedAircraft.count > maxCount {
-                // Sort by distance and take closest N
-                let aircraftWithDistance = convertedAircraft.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
-                    guard let coord = aircraft.coordinate else { return nil }
-                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-                    let distance = userLocation.distance(from: aircraftLocation)
-                    return (aircraft, distance)
-                }
-                
-                convertedAircraft = aircraftWithDistance
-                    .sorted { $0.distance < $1.distance }
-                    .prefix(maxCount)
-                    .map { $0.aircraft }
-                
-                print("OpenSky manual fetch: Filtered to \(convertedAircraft.count) aircraft (from \(originalCount), max: \(maxCount), radius: \(radiusKm)km)")
-            } else {
-                print("OpenSky manual fetch: Showing \(convertedAircraft.count) aircraft (filtered from \(originalCount), under limit of \(maxCount), radius: \(radiusKm)km)")
+        // Process everything in background - use actual history for flight paths
+        let processedResult = await Self.processAircraftInBackground(
+            aircraft: aircraft,
+            userLocation: userLocation,
+            maxCount: maxCount,
+            retentionMinutes: retentionMinutes,
+            showOnlyAirborne: showOnlyAirborne,
+            minimumAltitude: minimumAltitude,
+            radiusKm: radiusKm,
+            existingHistory: aircraftHistory // Use actual history
+        )
+        
+        // Update aircraft history with new position data
+        aircraftHistory = processedResult.updatedHistory
+        
+        if let settings = settings {
+            settings.lastDisplayedCount = processedResult.displayedCount
+            // Fire and forget save
+            Task.detached { @MainActor in
+                try? self.modelContext?.save()
             }
-            
-            // Record position history and cleanup old history for each aircraft
-            let retentionMinutes = settings?.flightPathRetentionMinutes ?? 30.0
-            convertedAircraft = convertedAircraft.map { aircraft in
-                var updatedAircraft = aircraft
-                updatedAircraft.recordPosition()
-                updatedAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
-                return updatedAircraft
-            }
-            
-            // Update displayed count
-            if let settings = settings {
-                settings.lastDisplayedCount = convertedAircraft.count
-                try? modelContext?.save()
-            }
-            
-            cotViewModel.updateOpenSkyAircraft(convertedAircraft)
         }
+        
+        cotViewModel?.updateOpenSkyAircraft(processedResult.aircraft)
     }
     
-    private func convertToAppAircraft(_ openSkyAircraft: OpenSkyAircraft) -> Aircraft? {
+    /// Consolidated background processing - ALL heavy work happens here, off MainActor
+    nonisolated private static func processAircraftInBackground(
+        aircraft: [OpenSkyAircraft],
+        userLocation: CLLocation,
+        maxCount: Int,
+        retentionMinutes: Double,
+        showOnlyAirborne: Bool,
+        minimumAltitude: Double?,
+        radiusKm: Double,
+        existingHistory: [String: Aircraft]
+    ) async -> (aircraft: [Aircraft], updatedHistory: [String: Aircraft], displayedCount: Int) {
+        
+        let totalStart = CFAbsoluteTimeGetCurrent()
+        print("🟣 [PERF] processAircraftInBackground: START with \(aircraft.count) aircraft")
+        
+        // Step 1: Convert to app aircraft
+        let convertStart = CFAbsoluteTimeGetCurrent()
+        let initialConverted = aircraft.compactMap { convertToAppAircraft($0) }
+        let originalCount = initialConverted.count
+        print("🟣 [PERF] processAircraftInBackground: Conversion took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - convertStart) * 1000))ms, result: \(originalCount) aircraft")
+        
+        // Step 2: Apply display filters
+        let filterStart = CFAbsoluteTimeGetCurrent()
+        let filteredAircraft = applyDisplayFilters(
+            to: initialConverted,
+            showOnlyAirborne: showOnlyAirborne,
+            minimumAltitude: minimumAltitude
+        )
+        print("🟣 [PERF] processAircraftInBackground: Filtering took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - filterStart) * 1000))ms, result: \(filteredAircraft.count) aircraft")
+        
+        // Step 3: Sort by distance and limit count
+        let sortStart = CFAbsoluteTimeGetCurrent()
+        let limitedAircraft: [Aircraft]
+        if filteredAircraft.count > maxCount {
+            let aircraftWithDistance = filteredAircraft.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
+                guard let coord = aircraft.coordinate else { return nil }
+                let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                let distance = userLocation.distance(from: aircraftLocation)
+                return (aircraft, distance)
+            }
+            
+            limitedAircraft = aircraftWithDistance
+                .sorted { $0.distance < $1.distance }
+                .prefix(maxCount)
+                .map { $0.aircraft }
+            
+            print("🟣 [PERF] processAircraftInBackground: Distance sort/limit took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - sortStart) * 1000))ms")
+            print("OpenSky: Filtered to \(limitedAircraft.count) aircraft (from \(originalCount), max: \(maxCount), radius: \(radiusKm)km)")
+        } else {
+            limitedAircraft = filteredAircraft
+            print("🟣 [PERF] processAircraftInBackground: No sorting needed \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - sortStart) * 1000))ms")
+            print("OpenSky: Showing \(limitedAircraft.count) aircraft (filtered from \(originalCount), under limit of \(maxCount), radius: \(radiusKm)km)")
+        }
+        
+        // Step 4: Process aircraft history (heavy lifting)
+        let historyStart = CFAbsoluteTimeGetCurrent()
+        let (updatedHistory, processedAircraft) = processAircraftHistory(
+            aircraft: limitedAircraft,
+            existingHistory: existingHistory,
+            retentionMinutes: retentionMinutes
+        )
+        print("🟣 [PERF] processAircraftInBackground: History processing took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - historyStart) * 1000))ms")
+        
+        print("🟣 [PERF] processAircraftInBackground: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - totalStart) * 1000))ms")
+        
+        return (processedAircraft, updatedHistory, processedAircraft.count)
+    }
+    
+    /// Convert OpenSky aircraft to app aircraft (static to avoid MainActor isolation)
+    nonisolated private static func convertToAppAircraft(_ openSkyAircraft: OpenSkyAircraft) -> Aircraft? {
         guard let lat = openSkyAircraft.latitude,
               let lon = openSkyAircraft.longitude else {
             return nil
@@ -903,14 +1105,67 @@ final class OpenSkyService: ObservableObject {
         )
     }
     
-    /// Apply display filters based on OpenSky settings
-    private func applyDisplayFilters(to aircraft: [Aircraft]) -> [Aircraft] {
-        guard let settings = settings else { return aircraft }
+    /// Process aircraft history on background thread (heavy lifting)
+    nonisolated private static func processAircraftHistory(
+        aircraft: [Aircraft],
+        existingHistory: [String: Aircraft],
+        retentionMinutes: Double
+    ) -> ([String: Aircraft], [Aircraft]) {
+        var updatedHistory = existingHistory
+        var processedAircraft: [Aircraft] = []
         
+        // Process each aircraft
+        for var newAircraft in aircraft {
+            if var existingAircraft = updatedHistory[newAircraft.hex] {
+                // Update the existing aircraft with new data
+                existingAircraft.lat = newAircraft.lat
+                existingAircraft.lon = newAircraft.lon
+                existingAircraft.altitude = newAircraft.altitude
+                existingAircraft.track = newAircraft.track
+                existingAircraft.groundSpeed = newAircraft.groundSpeed
+                existingAircraft.flight = newAircraft.flight
+                existingAircraft.lastSeen = Date()
+                
+                // Record position (adds to history)
+                existingAircraft.recordPosition()
+                
+                // Clean up old history
+                existingAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
+                
+                // Update the new aircraft with the position history
+                newAircraft.positionHistory = existingAircraft.positionHistory
+                
+                // Store back in dictionary
+                updatedHistory[newAircraft.hex] = existingAircraft
+            } else {
+                // New aircraft - record initial position
+                newAircraft.recordPosition()
+                updatedHistory[newAircraft.hex] = newAircraft
+            }
+            
+            processedAircraft.append(newAircraft)
+        }
+        
+        // Remove stale aircraft from history
+        let retentionSeconds = retentionMinutes * 60
+        let cutoffDate = Date().addingTimeInterval(-retentionSeconds)
+        updatedHistory = updatedHistory.filter { _, aircraft in
+            aircraft.lastSeen > cutoffDate
+        }
+        
+        return (updatedHistory, processedAircraft)
+    }
+    
+    /// Apply display filters with primitive parameters (for background execution)
+    nonisolated private static func applyDisplayFilters(
+        to aircraft: [Aircraft],
+        showOnlyAirborne: Bool,
+        minimumAltitude: Double?
+    ) -> [Aircraft] {
         var filtered = aircraft
         
         // Filter: Show only airborne
-        if settings.showOnlyAirborne {
+        if showOnlyAirborne {
             filtered = filtered.filter { aircraft in
                 // Aircraft is airborne if it has an altitude > 0 (on ground typically reports 0 or nil)
                 if let altitude = aircraft.altitude {
@@ -921,7 +1176,7 @@ final class OpenSkyService: ObservableObject {
         }
         
         // Filter: Minimum altitude
-        if let minAltitude = settings.minimumAltitude {
+        if let minAltitude = minimumAltitude {
             filtered = filtered.filter { aircraft in
                 if let altitude = aircraft.altitude {
                     return altitude >= minAltitude
@@ -962,6 +1217,18 @@ struct OpenSkySettingsView: View {
     @State private var cachedPermissionStatus: CLAuthorizationStatus = .notDetermined
     @State private var cachedPermissionText: String = "Not Set"
     
+    // Local state for sliders to avoid excessive updates while dragging
+    @State private var localMaxAircraft: Double = 50
+    @State private var localMaxDistance: Double = 10
+    @State private var localFlightPathRetention: Double = 30
+    @State private var localMinAltitude: Double = 5000
+    
+    // Debounce timers
+    @State private var maxAircraftDebounce: Task<Void, Never>?
+    @State private var maxDistanceDebounce: Task<Void, Never>?
+    @State private var flightPathDebounce: Task<Void, Never>?
+    @State private var minAltitudeDebounce: Task<Void, Never>?
+    
     private var settings: OpenSkySettings? {
         settingsQuery.first
     }
@@ -977,7 +1244,7 @@ struct OpenSkySettingsView: View {
                 Toggle("Enable OpenSky Network", isOn: Binding(
                     get: { settings?.isEnabled ?? false },
                     set: { newValue in
-                        service.updateSettings { $0.isEnabled = newValue }
+                        service.updateSettings({ $0.isEnabled = newValue }, shouldApply: true)
                         if newValue {
                             service.locationManager.requestLocationPermission()
                             updatePermissionStatus()
@@ -1057,7 +1324,7 @@ struct OpenSkySettingsView: View {
                     Toggle("Use Authentication", isOn: Binding(
                         get: { settings?.useAuthentication ?? false },
                         set: { newValue in
-                            service.updateSettings { $0.useAuthentication = newValue }
+                            service.updateSettings({ $0.useAuthentication = newValue }, shouldApply: false)
                             if !newValue {
                                 Task { try? await service.removeCredentials() }
                             }
@@ -1091,7 +1358,7 @@ struct OpenSkySettingsView: View {
                     Toggle("Auto-Refresh", isOn: Binding(
                         get: { settings?.autoPollingEnabled ?? false },
                         set: { newValue in
-                            service.updateSettings { $0.autoPollingEnabled = newValue }
+                            service.updateSettings({ $0.autoPollingEnabled = newValue }, shouldApply: true)
                         }
                     ))
                     
@@ -1099,7 +1366,7 @@ struct OpenSkySettingsView: View {
                         Picker("Interval", selection: Binding(
                             get: { settings?.pollingInterval ?? 10.0 },
                             set: { newValue in
-                                service.updateSettings { $0.pollingInterval = newValue }
+                                service.updateSettings({ $0.pollingInterval = newValue }, shouldApply: true)
                             }
                         )) {
                             Text("10 seconds").tag(10.0)
@@ -1122,48 +1389,62 @@ struct OpenSkySettingsView: View {
                         HStack {
                             Text("Max Aircraft to Display")
                             Spacer()
-                            Text("\(settings?.maxAircraftCount ?? 50)")
+                            Text("\(Int(localMaxAircraft))")
                                 .foregroundStyle(.secondary)
                         }
                         Slider(
-                            value: Binding(
-                                get: { Double(settings?.maxAircraftCount ?? 50) },
-                                set: { newValue in
-                                    service.updateSettings { settings in
-                                        settings.maxAircraftCount = Int(newValue)
-                                    }
-                                }
-                            ),
+                            value: $localMaxAircraft,
                             in: 10...200,
                             step: 10
                         )
+                        .onChange(of: localMaxAircraft) { oldValue, newValue in
+                            // Cancel previous debounce
+                            maxAircraftDebounce?.cancel()
+                            
+                            // Create new debounced update (NO APPLY during drag)
+                            maxAircraftDebounce = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                                guard !Task.isCancelled else { return }
+                                
+                                service.updateSettings({ settings in
+                                    settings.maxAircraftCount = Int(newValue)
+                                }, shouldApply: false) // Don't restart polling during slider drag
+                            }
+                        }
                     }
                     
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Search Radius")
                             Spacer()
-                            Text("\(Int(settings?.maxDistanceKm ?? 10)) km")
+                            Text("\(Int(localMaxDistance)) km")
                                 .foregroundStyle(.secondary)
                         }
                         Slider(
-                            value: Binding(
-                                get: { settings?.maxDistanceKm ?? 10.0 },
-                                set: { newValue in
-                                    service.updateSettings { settings in
-                                        settings.maxDistanceKm = newValue
-                                    }
-                                }
-                            ),
+                            value: $localMaxDistance,
                             in: 5...100,
                             step: 5
                         )
+                        .onChange(of: localMaxDistance) { oldValue, newValue in
+                            // Cancel previous debounce
+                            maxDistanceDebounce?.cancel()
+                            
+                            // Create new debounced update (NO APPLY during drag)
+                            maxDistanceDebounce = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                                guard !Task.isCancelled else { return }
+                                
+                                service.updateSettings({ settings in
+                                    settings.maxDistanceKm = newValue
+                                }, shouldApply: false) // Don't restart polling during slider drag
+                            }
+                        }
                     }
                     
                     Toggle("Show Only Airborne", isOn: Binding(
                         get: { settings?.showOnlyAirborne ?? false },
                         set: { newValue in
-                            service.updateSettings { $0.showOnlyAirborne = newValue }
+                            service.updateSettings({ $0.showOnlyAirborne = newValue }, shouldApply: false)
                         }
                     ))
                     
@@ -1171,29 +1452,36 @@ struct OpenSkySettingsView: View {
                         HStack {
                             Text("Flight Path Retention")
                             Spacer()
-                            Text("\(Int(settings?.flightPathRetentionMinutes ?? 30)) min")
+                            Text("\(Int(localFlightPathRetention)) min")
                                 .foregroundStyle(.secondary)
                         }
                         Slider(
-                            value: Binding(
-                                get: { settings?.flightPathRetentionMinutes ?? 30.0 },
-                                set: { newValue in
-                                    service.updateSettings { settings in
-                                        settings.flightPathRetentionMinutes = newValue
-                                    }
-                                }
-                            ),
+                            value: $localFlightPathRetention,
                             in: 5...120,
                             step: 5
                         )
+                        .onChange(of: localFlightPathRetention) { oldValue, newValue in
+                            // Cancel previous debounce
+                            flightPathDebounce?.cancel()
+                            
+                            // Create new debounced update (NO APPLY during drag)
+                            flightPathDebounce = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                                guard !Task.isCancelled else { return }
+                                
+                                service.updateSettings({ settings in
+                                    settings.flightPathRetentionMinutes = newValue
+                                }, shouldApply: false) // Don't restart polling during slider drag
+                            }
+                        }
                     }
                     
                     Toggle("Minimum Altitude Filter", isOn: Binding(
                         get: { settings?.minimumAltitude != nil },
                         set: { newValue in
-                            service.updateSettings { settings in
+                            service.updateSettings({ settings in
                                 settings.minimumAltitude = newValue ? 5000 : nil
-                            }
+                            }, shouldApply: false)
                         }
                     ))
                     
@@ -1201,9 +1489,9 @@ struct OpenSkySettingsView: View {
                         Picker("Minimum Altitude", selection: Binding(
                             get: { settings?.minimumAltitude ?? 5000 },
                             set: { newValue in
-                                service.updateSettings { settings in
+                                service.updateSettings({ settings in
                                     settings.minimumAltitude = newValue
-                                }
+                                }, shouldApply: false)
                             }
                         )) {
                             Text("5,000 ft").tag(5000.0)
@@ -1276,14 +1564,22 @@ struct OpenSkySettingsView: View {
             authSheet
         }
         .task {
-            // Initialize permission status
+            // Initialize permission status once
             updatePermissionStatus()
-            
-            // Update permission status every 10 seconds
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-                updatePermissionStatus()
+        }
+        .onAppear {
+            // Initialize local slider values from settings
+            if let settings = settings {
+                localMaxAircraft = Double(settings.maxAircraftCount)
+                localMaxDistance = settings.maxDistanceKm
+                localFlightPathRetention = settings.flightPathRetentionMinutes
+                localMinAltitude = settings.minimumAltitude ?? 5000
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Update permission status when app becomes active
+            // This catches permission changes made in Settings app
+            updatePermissionStatus()
         }
     }
     
@@ -1336,7 +1632,7 @@ struct OpenSkySettingsView: View {
                         Task {
                             do {
                                 try await service.saveCredentials(username: username, password: password)
-                                service.updateSettings { $0.username = username }
+                                service.updateSettings({ $0.username = username }, shouldApply: false)
                                 showAuthSheet = false
                                 username = ""
                                 password = ""
@@ -1471,8 +1767,11 @@ struct OpenSkyAircraftListView: View {
             }
         }
         .task {
+            // Don't block UI - run fetch in background
             if !service.isPolling && settings?.isEnabled == true {
-                _ = try? await service.fetchAircraft()
+                Task.detached {
+                    _ = try? await service.fetchAircraft()
+                }
             }
         }
     }

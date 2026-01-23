@@ -22,9 +22,10 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters  // Lower accuracy for battery life
-        locationManager.distanceFilter = 50  // Only update every 50 meters
+        locationManager.distanceFilter = 100  // Only update every 100 meters (increased from 50)
         locationManager.pausesLocationUpdatesAutomatically = true  // Save battery
         locationManager.activityType = .other
+        locationManager.allowsBackgroundLocationUpdates = false  // Disable background updates to save resources
         locationPermissionStatus = locationManager.authorizationStatus
     }
     
@@ -42,7 +43,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard locationPermissionStatus == .authorizedWhenInUse || locationPermissionStatus == .authorizedAlways else {
             return
         }
-        guard !isUpdatingLocation else { return } // Prevent duplicate starts
+        guard !isUpdatingLocation else { return }
         
         print("📍 LocationManager: Starting location updates")
         locationManager.startUpdatingLocation()

@@ -582,8 +582,6 @@ struct ContentView: View {
                 }
             }
             .listStyle(.inset)
-            // REMOVED: Constant timer that was causing performance issues
-            // SwiftUI will automatically update when cotViewModel.parsedMessages changes
             .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
                 if oldMessages.count < newMessages.count {
                     if let latest = newMessages.last {

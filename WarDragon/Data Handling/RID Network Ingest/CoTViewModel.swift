@@ -3267,13 +3267,7 @@ extension CoTViewModel {
                 return
             }
             
-            // FORCE UDP ONLY - ignore whatever settings say
             config.protocol = .udp
-            if config.port != 8054 {
-                print("⚠️ WARNING: TAK port is \(config.port), should be 8054 for your server")
-            }
-            
-            // Create TAK client WITHOUT enrollment manager (UDP doesn't need it)
             self.takClient = TAKClient(configuration: config, enrollmentManager: nil)
             self.takClient?.connect()
             
