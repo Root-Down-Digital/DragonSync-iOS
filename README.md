@@ -82,10 +82,18 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 <table>
 <tr>
 <td width="50%">
-<img src="https://github.com/user-attachments/assets/b702c9d5-a034-4cbb-86a4-2c76c4b641b4" width="100%">
+   <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
+  
+  ![CD8FDEBA-3CE5-4318-85B7-FD093C158720_1_201_a](https://github.com/user-attachments/assets/f2d423f6-8a85-4baa-9c0e-8e5ebf66aea9)
+
+
+
 </td>
 <td width="50%">
 <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
+  
+  ![EE346AF2-82AB-43D6-9B86-1ED5C446B5A9_1_201_a](https://github.com/user-attachments/assets/dfa41a2e-d594-4db8-ad9f-3629e1b1644d)
+
 </td>
 </tr>
 <tr>
