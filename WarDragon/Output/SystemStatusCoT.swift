@@ -11,24 +11,26 @@ import UIKit
 
 extension StatusViewModel.StatusMessage {
     /// Convert system status to CoT XML for TAK/ATAK
-    /// Matches Python DragonSync SystemStatus.to_cot_xml() format
-    func toCoTXML() -> String {
+    @MainActor func toCoTXML(enrollmentManager: TAKEnrollmentManager? = nil) -> String {
         let now = Date()
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         
         let time = formatter.string(from: now)
-        let stale = formatter.string(from: now.addingTimeInterval(120)) // 2 minutes stale time
+        let stale = formatter.string(from: now.addingTimeInterval(120))
         
-        // Get kit ID (matches Python: f"wardragon-{serial_number}")
         let kitUID: String
-        if !serialNumber.isEmpty && serialNumber != "unknown" {
-            kitUID = "wardragon-\(serialNumber)"
-        } else if let uuid = UIDevice.current.identifierForVendor?.uuidString {
-            let prefix = String(uuid.prefix(8))
-            kitUID = "wardragon-\(prefix)"
+        if let enrollmentManager = enrollmentManager {
+            kitUID = getDeviceUIDSynchronously(enrollmentManager: enrollmentManager)
         } else {
-            kitUID = "wardragon-unknown"
+            if !serialNumber.isEmpty && serialNumber != "unknown" {
+                kitUID = "wardragon-\(serialNumber)"
+            } else if let uuid = UIDevice.current.identifierForVendor?.uuidString {
+                let prefix = String(uuid.prefix(8))
+                kitUID = "wardragon-\(prefix)"
+            } else {
+                kitUID = "wardragon-unknown"
+            }
         }
         
         // GPS coordinates with validation
@@ -150,5 +152,9 @@ extension StatusViewModel.StatusMessage {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "\(version) (\(build))"
+    }
+    
+    @MainActor private func getDeviceUIDSynchronously(enrollmentManager: TAKEnrollmentManager) -> String {
+        return enrollmentManager.getDeviceUID()
     }
 }

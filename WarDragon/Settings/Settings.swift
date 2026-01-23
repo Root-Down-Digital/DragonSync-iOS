@@ -281,24 +281,42 @@ class Settings: ObservableObject {
 
     // MARK: - TAK Server Settings
     @AppStorage("takEnabled") var takEnabled = false {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            setupTAKClient()
+        }
     }
     
     @AppStorage("takHost") var takHost: String = "" {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            setupTAKClient()
+        }
     }
     
     @AppStorage("takPort") var takPort: Int = 8089 {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            setupTAKClient()
+        }
     }
     
     @AppStorage("takProtocol") private var takProtocolRaw: String = TAKProtocol.tls.rawValue {
-        didSet { objectWillChange.send() }
+        didSet {
+            objectWillChange.send()
+            setupTAKClient()
+        }
     }
     
     var takProtocol: TAKProtocol {
         get { TAKProtocol(rawValue: takProtocolRaw) ?? .tls }
         set { takProtocolRaw = newValue.rawValue }
+    }
+    
+    // Certificate mode removed - enrollment is now the only option for TLS
+    
+    @AppStorage("takEnrollmentUsername") var takEnrollmentUsername: String = "" {
+        didSet { objectWillChange.send() }
     }
     
     @AppStorage("takTLSEnabled") var takTLSEnabled = true {
@@ -309,16 +327,16 @@ class Settings: ObservableObject {
         didSet { objectWillChange.send() }
     }
     
-    // P12 password stored securely in Keychain
-    var takP12Password: String {
+    // Enrollment password stored securely in Keychain
+    var takEnrollmentPassword: String {
         get {
-            (try? KeychainManager.shared.loadString(forKey: "takP12Password")) ?? ""
+            (try? KeychainManager.shared.loadString(forKey: "takEnrollmentPassword")) ?? ""
         }
         set {
             if newValue.isEmpty {
-                try? KeychainManager.shared.delete(key: "takP12Password")
+                try? KeychainManager.shared.delete(key: "takEnrollmentPassword")
             } else {
-                try? KeychainManager.shared.save(newValue, forKey: "takP12Password")
+                try? KeychainManager.shared.save(newValue, forKey: "takEnrollmentPassword")
             }
             objectWillChange.send()
         }
@@ -331,9 +349,9 @@ class Settings: ObservableObject {
                 host: takHost,
                 port: takPort,
                 protocol: takProtocol,
+                enrollmentUsername: takEnrollmentUsername.isEmpty ? nil : takEnrollmentUsername,
+                enrollmentPassword: takEnrollmentPassword.isEmpty ? nil : takEnrollmentPassword,
                 tlsEnabled: takTLSEnabled,
-                p12CertificateData: TAKConfiguration.loadP12FromKeychain(),
-                p12Password: takP12Password.isEmpty ? nil : takP12Password,
                 skipVerification: takSkipVerification
             )
         }
@@ -342,15 +360,38 @@ class Settings: ObservableObject {
             takHost = newValue.host
             takPort = newValue.port
             takProtocol = newValue.protocol
+            takEnrollmentUsername = newValue.enrollmentUsername ?? ""
+            takEnrollmentPassword = newValue.enrollmentPassword ?? ""
             takTLSEnabled = newValue.tlsEnabled
             takSkipVerification = newValue.skipVerification
-            takP12Password = newValue.p12Password ?? ""
             
-            // Save certificate to keychain if provided
-            if newValue.p12CertificateData != nil {
-                try? newValue.saveP12ToKeychain()
-            }
+            setupTAKClient()
         }
+    }
+    
+    private var _takClient: TAKClient?
+    private var _takEnrollmentManager: TAKEnrollmentManager?
+    
+    var takClient: TAKClient? {
+        if _takClient == nil && takEnabled {
+            setupTAKClient()
+        }
+        return _takClient
+    }
+    
+    private func setupTAKClient() {
+        _takClient?.disconnect()
+        _takClient = nil
+        _takEnrollmentManager = nil
+        
+        guard takEnabled else { return }
+        
+        if takProtocol == .tls {
+            _takEnrollmentManager = TAKEnrollmentManager()
+        }
+        
+        _takClient = TAKClient(configuration: takConfiguration, enrollmentManager: _takEnrollmentManager)
+        _takClient?.connect()
     }
     
     func updateTAKConfiguration(_ config: TAKConfiguration) {
@@ -531,6 +572,13 @@ class Settings: ObservableObject {
         }
     }
     
+    @AppStorage("adsbFlightPathRetentionMinutes") var adsbFlightPathRetentionMinutes: Double = 30.0 {
+        didSet {
+            objectWillChange.send()
+            NotificationCenter.default.post(name: .adsbSettingsChanged, object: nil)
+        }
+    }
+    
     var adsbConfiguration: ADSBConfiguration {
         get {
             ADSBConfiguration(
@@ -541,7 +589,8 @@ class Settings: ObservableObject {
                 maxDistance: adsbMaxDistance > 0 ? adsbMaxDistance : nil,
                 minAltitude: adsbMinAltitude > 0 ? adsbMinAltitude : nil,
                 maxAltitude: adsbMaxAltitude < 50000 ? adsbMaxAltitude : nil,
-                maxAircraftCount: adsbMaxAircraftCount
+                maxAircraftCount: adsbMaxAircraftCount,
+                flightPathRetentionMinutes: adsbFlightPathRetentionMinutes
             )
         }
         set {
@@ -553,6 +602,7 @@ class Settings: ObservableObject {
             adsbMinAltitude = newValue.minAltitude ?? 0
             adsbMaxAltitude = newValue.maxAltitude ?? 50000
             adsbMaxAircraftCount = newValue.maxAircraftCount
+            adsbFlightPathRetentionMinutes = newValue.flightPathRetentionMinutes
         }
     }
     

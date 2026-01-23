@@ -659,55 +659,68 @@ def test_tak_connection(config, generator):
     
     try:
         if config.tak_protocol in ['tcp', 'tls']:
-            # TCP/TLS connection
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
             
             print(f"\n🔄 Connecting to {config.tak_host}:{config.tak_port}...")
             sock.connect((config.tak_host, config.tak_port))
-            print("Connected successfully!")
+            print("✅ Connected successfully!")
             
-            # Send test CoT message
             print("\n📡 Sending test CoT XML...")
             cot_xml = generator.generate_drone_cot_with_track()
             sock.sendall(cot_xml.encode('utf-8'))
-            print("CoT message sent!")
+            print("✅ CoT message sent!")
             
             time.sleep(1)
             
-            # Send status message
             print("📡 Sending system status CoT...")
             status_xml = generator.generate_status_message()
             sock.sendall(status_xml.encode('utf-8'))
-            print("Status message sent!")
+            print("✅ Status message sent!")
             
             sock.close()
             
         elif config.tak_protocol == 'udp':
-            # UDP connection
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             
             print(f"\n📡 Sending via UDP to {config.tak_host}:{config.tak_port}...")
+            print("(UDP is connectionless - no handshake needed)\n")
             
-            # Send test messages
             cot_xml = generator.generate_drone_cot_with_track()
-            sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print("CoT message sent!")
+            bytes_sent = sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print(f"✅ CoT message sent! ({bytes_sent} bytes)")
+            print(f"   UID: {generator.current_drone_id}")
             
             time.sleep(0.5)
             
             status_xml = generator.generate_status_message()
-            sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print("Status message sent!")
+            bytes_sent = sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print(f"✅ Status message sent! ({bytes_sent} bytes)")
+            
+            time.sleep(0.5)
+            
+            pilot_xml = generator.generate_pilot_cot()
+            bytes_sent = sock.sendto(pilot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print(f"✅ Pilot message sent! ({bytes_sent} bytes)")
+            
+            time.sleep(0.5)
+            
+            home_xml = generator.generate_home_cot()
+            bytes_sent = sock.sendto(home_xml.encode('utf-8'), (config.tak_host, config.tak_port))
+            print(f"✅ Home message sent! ({bytes_sent} bytes)")
             
             sock.close()
         
-        print("\nTAK server test completed successfully!")
+        print(f"\n✅ TAK server test completed successfully!")
+        print(f"\n💡 Check your TAK clients (ATAK/WinTAK/iTAK) for new contacts")
+        print(f"   Look for UIDs starting with: {generator.current_drone_id}")
         
     except socket.timeout:
         print("\n❌ Connection timeout")
     except ConnectionRefusedError:
         print("\n❌ Connection refused - is TAK server running?")
+    except socket.gaierror:
+        print(f"\n❌ Cannot resolve hostname: {config.tak_host}")
     except Exception as e:
         print(f"\n❌ Error: {e}")
     
@@ -716,68 +729,114 @@ def test_tak_connection(config, generator):
 # ============================================================================
 # ADS-B READSB SIMULATION
 # ============================================================================
+class ADSBSimulator:
+    def __init__(self, count=6):
+        self.aircraft = []
+        # Center of operations (e.g., Area 51)
+        self.center_lat = 37.24
+        self.center_lon = -115.81
+        
+        for i in range(count):
+            self.aircraft.append({
+                "hex": f"{random.randint(0x100000, 0xFFFFFF):06X}",
+                "flight": f"TEST{i+1:02d}",
+                "pattern": i % 3,  # Cycle through Circle, Figure-8, and Ellipse
+                "lane": 0.04 + (i * 0.03),  # Each plane gets a 0.03 degree "lane" separation
+                "speed": 0.05 + (random.uniform(0.02, 0.05)),
+                "alt": 10000 + (i * 3000), # Separated by 3000ft altitude increments
+                "phase": random.uniform(0, math.pi * 2) # Random start point in the loop
+            })
+            
+    def get_aircraft_json(self):
+        t = time.time()
+        current_aircraft = []
+        
+        for ac in self.aircraft:
+            move_t = (t * ac["speed"]) + ac["phase"]
+            lane = ac["lane"]
+            
+            # Pattern 0: Perfect Circle
+            if ac["pattern"] == 0:
+                lat_off = lane * math.sin(move_t)
+                lon_off = lane * math.cos(move_t)
+                
+            # Pattern 1: Figure-8 (Lissajous)
+            elif ac["pattern"] == 1:
+                lat_off = lane * math.sin(move_t)
+                lon_off = (lane * 1.5) * math.sin(2 * move_t) / 2
+                
+            # Pattern 2: Wide Ellipse
+            else:
+                lat_off = (lane * 0.7) * math.sin(move_t)
+                lon_off = (lane * 1.8) * math.cos(move_t)
+                
+            # Calculate Heading (Track)
+            # We use a small look-ahead delta to see where the plane is going
+            dt = 0.01
+            if ac["pattern"] == 0:
+                next_lat = lane * math.sin(move_t + dt)
+                next_lon = lane * math.cos(move_t + dt)
+            elif ac["pattern"] == 1:
+                next_lat = lane * math.sin(move_t + dt)
+                next_lon = (lane * 1.5) * math.sin(2 * (move_t + dt)) / 2
+            else:
+                next_lat = (lane * 0.7) * math.sin(move_t + dt)
+                next_lon = (lane * 1.8) * math.cos(move_t + dt)
+                
+            track = math.degrees(math.atan2(next_lon - lon_off, next_lat - lat_off)) % 360
+            
+            current_aircraft.append({
+                "hex": ac["hex"],
+                "flight": ac["flight"],
+                "alt_baro": ac["alt"],
+                "gs": 200 + (ac["lane"] * 1000), # Further out planes fly faster
+                "track": round(track, 1),
+                "lat": round(self.center_lat + lat_off, 6),
+                "lon": round(self.center_lon + lon_off, 6),
+                "seen": 0.1,
+                "rssi": -18.5,
+                "category": "A1"
+            })
+            
+        return {
+            "now": time.time(),
+            "messages": 123456,
+            "aircraft": current_aircraft
+        }
 
 class ReadsbHTTPHandler(BaseHTTPRequestHandler):
-    """HTTP handler that serves readsb-compatible aircraft.json"""
+    simulator = None # Assigned during server startup
     
     def do_GET(self):
         if self.path == '/data/aircraft.json':
-            # Generate realistic aircraft data
-            now = time.time()
-            
-            aircraft = []
-            for i in range(random.randint(3, 8)):
-                # Generate ICAO hex
-                hex_id = ''.join(random.choices('0123456789ABCDEF', k=6))
-                
-                # Position around Area 51
-                lat = 37.25 + random.uniform(-0.2, 0.2)
-                lon = -115.75 + random.uniform(-0.2, 0.2)
-                
-                aircraft.append({
-                    "hex": hex_id,
-                    "flight": f"N{random.randint(100,999)}AB",
-                    "alt_baro": random.randint(5000, 35000),
-                    "gs": random.randint(150, 500),
-                    "track": random.randint(0, 359),
-                    "lat": round(lat, 6),
-                    "lon": round(lon, 6),
-                    "seen": round(random.uniform(0, 10), 1),
-                    "rssi": round(random.uniform(-25, -10), 1),
-                    "category": random.choice(["A1", "A2", "A3", "A5"]),
-                    "squawk": f"{random.randint(1000, 7777):04d}"
-                })
-            
-            response = {
-                "now": now,
-                "messages": random.randint(10000, 50000),
-                "aircraft": aircraft
-            }
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
+            if ReadsbHTTPHandler.simulator:
+                data = ReadsbHTTPHandler.simulator.get_aircraft_json()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(data).encode())
         else:
             self.send_response(404)
             self.end_headers()
-    
+            
     def log_message(self, format, *args):
-        # Suppress logging
-        pass
+        pass # Keep console clean
+
 
 def start_adsb_server(config):
-    """Start simulated ADS-B readsb HTTP server"""
+    """Start simulated ADS-B readsb HTTP server with persistent aircraft"""
     clear_screen()
-    print("✈️  Starting ADS-B Readsb Simulator")
-    print(f"\nHTTP Server: http://localhost:{config.adsb_port}")
-    print(f"Endpoint: /data/aircraft.json")
+    print("✈️  Starting Persistent ADS-B Simulator")
+    print(f"\nEndpoint: http://localhost:{config.adsb_port}/data/aircraft.json")
     
     try:
+        # Initialize the persistent data
+        simulator = ADSBSimulator(count=5)
+        ReadsbHTTPHandler.simulator = simulator
+        
         server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
-        print("\nServer started successfully!")
-        print("\n📡 Serving random aircraft data...")
+        print("\n✅ Server started! Aircraft are now flying in circles.")
         print("   Press Ctrl+C to stop\n")
         
         server.serve_forever()
@@ -785,12 +844,9 @@ def start_adsb_server(config):
     except KeyboardInterrupt:
         print("\n\n🛑 Server stopped")
         server.shutdown()
-    except OSError as e:
-        if "Address already in use" in str(e):
-            print(f"\n❌ Port {config.adsb_port} already in use")
-        else:
-            print(f"\n❌ Error: {e}")
-    
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        
     input("\nPress Enter to continue...")
 
 # ============================================================================
@@ -1853,3 +1909,4 @@ if __name__ == "__main__":
         print("\n\n👋 Program terminated by user")
     except Exception as e:
         print(f"\n❌ An error occurred: {e}")
+        
