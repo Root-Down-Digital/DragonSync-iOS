@@ -50,6 +50,9 @@ struct DatabaseManagementView: View {
                 }
             } header: {
                 Label("Database Statistics", systemImage: "chart.bar.fill")
+            } footer: {
+                Text("Database size shows disk space used. After deleting records, the file size remains the same as SQLite reserves space for performance.")
+                    .font(.appCaption)
             }
             
             // Migration Status Section
@@ -429,9 +432,23 @@ struct DatabaseManagementView: View {
         
         do {
             try migrationManager.deleteAllSwiftData(modelContext: modelContext)
-            successMessage = "All data deleted successfully"
-            showSuccess = true
+            
+            // Refresh stats to show 0 records
             await loadStats()
+            
+            // Build success message explaining the database size behavior
+            var message = "✓ All records deleted successfully\n\n"
+            
+            if let droneCount = stats?.encounterCount, droneCount == 0,
+               let aircraftCount = stats?.aircraftCount, aircraftCount == 0 {
+                message += "Records: 0 drone encounters, 0 aircraft\n\n"
+            }
+            
+            message += "Note: Database file size will not change immediately. "
+            message += "SQLite reserves the space for future records to improve performance."
+            
+            successMessage = message
+            showSuccess = true
         } catch {
             errorMessage = "Failed to delete data: \(error.localizedDescription)"
             showError = true
