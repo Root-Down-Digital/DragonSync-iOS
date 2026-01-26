@@ -353,7 +353,7 @@ class DroneStorageManager: ObservableObject {
     func loadFromStorage() {
         // Check if SwiftData manager has a ModelContext
         if SwiftDataStorageManager.shared.modelContext == nil {
-            print("⚠️ SwiftDataStorageManager.modelContext is nil - will fallback to UserDefaults")
+            print("SwiftDataStorageManager.modelContext is nil - will fallback to UserDefaults")
         }
         
         // Check if migration has been completed
@@ -372,7 +372,7 @@ class DroneStorageManager: ObservableObject {
             if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
                let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
                 encounters = loaded
-                print("⚠️ SwiftData empty - Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
+                print("SwiftData empty - Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
                 print("Migration may not have completed yet or data needs to be migrated")
             } else {
                 print("No encounters found in either SwiftData or UserDefaults (fresh install)")
@@ -393,7 +393,7 @@ class DroneStorageManager: ObservableObject {
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
         // Fetch encounter from SwiftData
         guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
-            print("⚠️ Encounter not found: \(droneId)")
+            print("Encounter not found: \(droneId)")
             return
         }
         
@@ -430,7 +430,7 @@ class DroneStorageManager: ObservableObject {
     func updateHomeLocation(droneId: String, latitude: Double, longitude: Double) {
         // Fetch encounter from SwiftData
         guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
-            print("⚠️ Encounter not found: \(droneId)")
+            print("Encounter not found: \(droneId)")
             return
         }
         

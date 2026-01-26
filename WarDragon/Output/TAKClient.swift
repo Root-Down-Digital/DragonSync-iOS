@@ -155,7 +155,7 @@ class TAKClient: ObservableObject {
                             switch code {
                             case .ECONNREFUSED:
                                 // Server not listening - this is a real problem
-                                self?.logger.warning("⚠️ UDP destination unreachable - server may not be running")
+                                self?.logger.warning("UDP destination unreachable - server may not be running")
                             case .ENETUNREACH, .EHOSTUNREACH:
                                 // Network routing issues
                                 self?.logger.error("❌ Network unreachable: \(error.localizedDescription)")
@@ -307,7 +307,7 @@ class TAKClient: ObservableObject {
         try setupClientIdentity(options: options, enrollmentManager: enrollmentManager)
         
         if configuration.skipVerification {
-            logger.warning("⚠️ TLS verification disabled - UNSAFE for production!")
+            logger.warning("TLS verification disabled - UNSAFE for production!")
             sec_protocol_options_set_peer_authentication_required(
                 options.securityProtocolOptions,
                 false

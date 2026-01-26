@@ -86,7 +86,7 @@ struct TAKServerSettingsView: View {
                                 Text("Expires: \(certInfo.expiresAt.formatted(date: .abbreviated, time: .omitted))")
                                     .font(.caption)
                                 if certInfo.daysUntilExpiry < 30 {
-                                    Text("⚠️ Expires in \(certInfo.daysUntilExpiry) days")
+                                    Text("Expires in \(certInfo.daysUntilExpiry) days")
                                         .font(.caption)
                                         .foregroundColor(.orange)
                                 }
@@ -216,7 +216,7 @@ struct TAKServerSettingsView: View {
                             .foregroundColor(.orange)
                         
                         if settings.takSkipVerification {
-                            Text("⚠️ UNSAFE: Only use for testing")
+                            Text("UNSAFE: Only use for testing")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                         }
@@ -378,7 +378,7 @@ struct TAKServerSettingsView: View {
                         if httpResponse.statusCode == 200 {
                             testResult = "✓ Enrollment port is accessible! Received \(data.count) bytes"
                         } else {
-                            testResult = "⚠️ Endpoint responded with status \(httpResponse.statusCode)"
+                            testResult = "Endpoint responded with status \(httpResponse.statusCode)"
                         }
                     }
                 }

@@ -23,7 +23,7 @@ try:
     MQTT_AVAILABLE = True
 except ImportError:
     MQTT_AVAILABLE = False
-    print("⚠️  paho-mqtt not installed. MQTT features disabled.")
+    print(" paho-mqtt not installed. MQTT features disabled.")
     print("   Install with: pip3 install paho-mqtt")
 
 # Try to import requests for OpenSky API testing
@@ -32,7 +32,7 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
-    print("⚠️  requests not installed. OpenSky API testing disabled.")
+    print(" requests not installed. OpenSky API testing disabled.")
     print("   Install with: pip3 install requests")
 
 class Config:
@@ -1016,7 +1016,7 @@ def test_opensky_api(config):
         default_lat = location['lat']
         default_lon = location['lon']
     else:
-        print("⚠️  Could not detect location, using Area 51 region as default")
+        print(" Could not detect location, using Area 51 region as default")
         default_lat = 37.25
         default_lon = -115.75
     
@@ -1064,7 +1064,7 @@ def test_opensky_api(config):
             data = response.json()
             
             if not data or 'states' not in data or not data['states']:
-                print("\n⚠️  No aircraft found in this area")
+                print("\n No aircraft found in this area")
                 print("   Try a different location or larger radius")
                 print("   Note: Not all areas have ADS-B coverage")
             else:
@@ -1300,7 +1300,7 @@ def quick_test_mode(config, generator):
                     mqtt_client.loop_start()
                     print("MQTT client connected")
                 except Exception as e:
-                    print(f"⚠️  MQTT connection failed: {e}")
+                    print(f" MQTT connection failed: {e}")
                     mqtt_client = None
             
             # Setup TAK socket
@@ -1312,7 +1312,7 @@ def quick_test_mode(config, generator):
                     tak_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 print(f"TAK {config.tak_protocol.upper()} connection established")
             except Exception as e:
-                print(f"⚠️  TAK connection failed: {e}")
+                print(f" TAK connection failed: {e}")
                 tak_socket = None
             
             # Setup ADS-B HTTP server in background thread
@@ -1323,7 +1323,7 @@ def quick_test_mode(config, generator):
                 adsb_thread.start()
                 print(f"ADS-B server started on port {config.adsb_port}")
             except Exception as e:
-                print(f"⚠️  ADS-B server failed: {e}")
+                print(f" ADS-B server failed: {e}")
                 adsb_server = None
         
         print(f"\n⚙️  Using {config.broadcast_mode.upper()} mode")

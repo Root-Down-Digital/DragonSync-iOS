@@ -41,7 +41,7 @@ struct WarDragonApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            print("⚠️ SwiftData initialization failed: \(error.localizedDescription)")
+            print("SwiftData initialization failed: \(error.localizedDescription)")
             print("   Attempting recovery by resetting SwiftData store...")
             
             // Try to delete corrupted store and recreate
@@ -123,7 +123,7 @@ struct WarDragonApp: App {
                     let backupURL = try migrationManager.createBackup()
                     print("Backup created at: \(backupURL.path)")
                 } catch {
-                    print("⚠️ Warning: Backup creation failed (non-fatal): \(error.localizedDescription)")
+                    print("Warning: Backup creation failed (non-fatal): \(error.localizedDescription)")
                     print("   Migration will continue, but you may want to manually backup your data")
                 }
             } else {
@@ -146,7 +146,7 @@ struct WarDragonApp: App {
                     break
                 } catch {
                     lastError = error
-                    print("⚠️ Migration attempt \(attempt) failed: \(error.localizedDescription)")
+                    print("Migration attempt \(attempt) failed: \(error.localizedDescription)")
                     
                     if attempt < 3 {
                         print("   Will retry...")

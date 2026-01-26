@@ -62,13 +62,81 @@ struct DetectionsStatsView: View {
         }
     }
     
+    // Signal strength/altitude trend data - computed from current detections
+    // This shows average signal strength or altitude over the past 6 minutes
+    private var signalTrendData: [SignalTrendPoint] {
+        let now = Date()
+        let timeWindow: TimeInterval = 360 // 6 minutes
+        let bucketCount = 12 // 30-second buckets
+        let bucketDuration = timeWindow / Double(bucketCount)
+        
+        // Create time buckets going back 6 minutes
+        let buckets: [(start: Date, end: Date)] = (0..<bucketCount).map { i in
+            let start = now.addingTimeInterval(-timeWindow + Double(i) * bucketDuration)
+            let end = now.addingTimeInterval(-timeWindow + Double(i + 1) * bucketDuration)
+            return (start, end)
+        }
+        
+        return buckets.map { bucket in
+            var avgRSSI: Double = -100.0
+            var avgAltitude: Double = 0.0
+            
+            if detectionMode == .aircraft {
+                // For aircraft, calculate average altitude
+                let altitudes = cotViewModel.aircraftTracks.compactMap { track -> Double? in
+                    let timestamp = track.lastSeen
+                    guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
+                    guard let altitude = track.altitudeFeet else { return nil }
+                    return Double(altitude)
+                }
+                
+                if !altitudes.isEmpty {
+                    avgAltitude = altitudes.reduce(0, +) / Double(altitudes.count)
+                }
+            } else {
+                // For drones/both, calculate average RSSI
+                let rssiValues = cotViewModel.parsedMessages.compactMap { message -> Double? in
+                    // Use observedAt timestamp
+                    let timestamp: Date
+                    if let observedAt = message.observedAt {
+                        timestamp = Date(timeIntervalSince1970: observedAt)
+                    } else {
+                        timestamp = message.lastUpdated
+                    }
+                    
+                    guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
+                    guard let rssi = message.rssi else { return nil }
+                    return Double(rssi)
+                }
+                
+                if !rssiValues.isEmpty {
+                    avgRSSI = rssiValues.reduce(0, +) / Double(rssiValues.count)
+                }
+            }
+            
+            return SignalTrendPoint(
+                timestamp: bucket.end,
+                averageRSSI: avgRSSI,
+                averageAltitude: avgAltitude
+            )
+        }
+    }
+    
     var body: some View {
         VStack(spacing: 8) {
-            timelineChart
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(UIColor.secondarySystemBackground))
-                .cornerRadius(8)
+            HStack(spacing: 8) {
+                timelineChart
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(8)
+                
+                signalTrendChart
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(8)
+            }
             
             statsHeader
                 .padding(.horizontal, 12)
@@ -109,6 +177,87 @@ struct DetectionsStatsView: View {
                 if let maxAlt = maxAircraftAltitude {
                     StatPill(icon: "arrow.up.circle.fill", value: "\(maxAlt/1000)k", label: "Alt", color: .green)
                 }
+            }
+        }
+    }
+    
+    // MARK: - Signal Strength Trend Chart
+    
+    private var signalTrendChart: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SIGNAL STRENGTH TREND")
+                .font(.system(.caption2, design: .monospaced))
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+            
+            if detectionMode == .aircraft {
+                // For aircraft mode, show altitude trend instead
+                Chart(signalTrendData) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Avg Alt", point.averageAltitude)
+                    )
+                    .foregroundStyle(.cyan)
+                    .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Avg Alt", point.averageAltitude)
+                    )
+                    .foregroundStyle(.cyan.opacity(0.1))
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartYAxisLabel("Altitude (ft)", alignment: .leading)
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                            .font(.caption2)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .font(.caption2)
+                    }
+                }
+                .frame(height: 80)
+            } else {
+                // For drones/both mode, show RSSI trend
+                Chart(signalTrendData) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Avg RSSI", point.averageRSSI)
+                    )
+                    .foregroundStyle(.orange)
+                    .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Avg RSSI", point.averageRSSI)
+                    )
+                    .foregroundStyle(.orange.opacity(0.1))
+                    .interpolationMethod(.catmullRom)
+                    
+                    // Warning threshold line (stronger signal = closer)
+                    RuleMark(y: .value("Warning", -60))
+                        .foregroundStyle(.red.opacity(0.3))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                }
+                .chartYScale(domain: -100...(-40))
+                .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisValueLabel(format: .dateTime.hour().minute())
+                            .font(.caption2)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                            .font(.caption2)
+                    }
+                }
+                .frame(height: 80)
             }
         }
     }
@@ -613,6 +762,13 @@ private struct TimelineDataPoint: Identifiable {
     let timestamp: Date
     let droneCount: Int
     let aircraftCount: Int
+}
+
+private struct SignalTrendPoint: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let averageRSSI: Double
+    let averageAltitude: Double
 }
 
 private struct ChartDataItem: Identifiable {

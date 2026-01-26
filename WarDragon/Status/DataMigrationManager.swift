@@ -77,7 +77,7 @@ class DataMigrationManager {
             if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
                let legacyEncounters = try? JSONDecoder().decode([String: DroneEncounter].self, from: data),
                !legacyEncounters.isEmpty && count == 0 {
-                logger.warning("⚠️ Migration marked complete but SwiftData is empty while UserDefaults has \(legacyEncounters.count) encounters")
+                logger.warning("Migration marked complete but SwiftData is empty while UserDefaults has \(legacyEncounters.count) encounters")
                 logger.warning("🔄 Data inconsistency detected - will attempt to re-migrate WITHOUT creating new backup")
             } else {
                 if count > 0 {
@@ -168,7 +168,7 @@ class DataMigrationManager {
             logger.info("Migration complete: \(migratedCount) migrated, \(skippedCount) skipped, \(errorCount) errors")
             
             if errorCount > 0 {
-                logger.warning("⚠️ Some encounters failed to migrate, but others succeeded")
+                logger.warning("Some encounters failed to migrate, but others succeeded")
             }
         } catch {
             logger.error("❌ Final save failed: \(error.localizedDescription)")
@@ -239,7 +239,7 @@ class DataMigrationManager {
         logger.info("Validating UserDefaults data before backup...")
         let isValid = validateUserDefaultsData(encountersData)
         if !isValid {
-            logger.warning("⚠️ UserDefaults data appears corrupted - creating backup anyway for forensics")
+            logger.warning("UserDefaults data appears corrupted - creating backup anyway for forensics")
         }
         
         // Create backup with validated format
@@ -450,7 +450,7 @@ class DataMigrationManager {
         
         // Check if there's any data to backup
         if encounters.isEmpty {
-            logger.warning("⚠️ No encounters found to export")
+            logger.warning("No encounters found to export")
             throw MigrationError.backupFailed(NSError(
                 domain: "com.wardragon.migration",
                 code: 1001,
@@ -589,7 +589,7 @@ class DataMigrationManager {
             case .valid:
                 logger.info("\(backupURL.lastPathComponent): Valid (\(result.encounterCount) encounters)")
             case .empty:
-                logger.info("⚠️  \(backupURL.lastPathComponent): Empty (no encounters)")
+                logger.info(" \(backupURL.lastPathComponent): Empty (no encounters)")
             case .corrupted:
                 logger.error("❌ \(backupURL.lastPathComponent): Corrupted - \(result.error ?? "Unknown error")")
             }
@@ -698,7 +698,7 @@ class DataMigrationManager {
                 
                 // Check if backup is empty
                 if encounters.isEmpty {
-                    logger.warning("⚠️ Backup file contains no encounters")
+                    logger.warning("Backup file contains no encounters")
                     throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
                 }
                 
@@ -760,7 +760,7 @@ class DataMigrationManager {
                         logger.info("Successfully decoded \(encounters.count) encounters from base64 using \(self.strategyName(strategy))")
                         
                         if encounters.isEmpty {
-                            logger.warning("⚠️ Backup file contains no encounters")
+                            logger.warning("Backup file contains no encounters")
                             throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
                         }
                         
@@ -784,7 +784,7 @@ class DataMigrationManager {
             }
             // Handle NSNull case (empty UserDefaults backup)
             else if backupDict["droneEncounters"] is NSNull {
-                logger.warning("⚠️ Backup contains NSNull for droneEncounters (empty UserDefaults backup)")
+                logger.warning("Backup contains NSNull for droneEncounters (empty UserDefaults backup)")
                 throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
             }
             // Check if encounters is directly in the dictionary (not base64)
@@ -805,7 +805,7 @@ class DataMigrationManager {
                         logger.info("Successfully decoded \(encounters.count) encounters from dictionary using \(self.strategyName(strategy))")
                         
                         if encounters.isEmpty {
-                            logger.warning("⚠️ Backup file contains no encounters")
+                            logger.warning("Backup file contains no encounters")
                             throw MigrationError.decodingFailed("Backup file is empty - no encounters to restore")
                         }
                         

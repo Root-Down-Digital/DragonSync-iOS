@@ -129,7 +129,7 @@ class TAKEnrollmentManager: ObservableObject {
     
     func enroll(host: String, username: String, password: String) async throws {
         logger.info("Starting TAK Server enrollment for user: \(username)")
-        logger.info("⚠️ Note: Using legacy CSR-based enrollment. For newer TAK Servers, use enrollWithAPI() instead.")
+        logger.info("Note: Using legacy CSR-based enrollment. For newer TAK Servers, use enrollWithAPI() instead.")
         enrollmentState = .enrolling
         enrollmentProgress = "Downloading truststore certificate..."
         

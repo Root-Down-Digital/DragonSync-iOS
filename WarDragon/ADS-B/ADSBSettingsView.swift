@@ -45,7 +45,7 @@ struct ADSBSettingsView: View {
                             .keyboardType(.URL)
                         
                         if !settings.adsbDataPath.hasSuffix(".json") {
-                            Text("⚠️ Path must end with .json")
+                            Text("Path must end with .json")
                                 .font(.caption)
                                 .foregroundColor(.orange)
                         } else {

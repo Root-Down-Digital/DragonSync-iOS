@@ -202,7 +202,7 @@ struct DatabaseManagementView: View {
                 Label("Danger Zone", systemImage: "exclamationmark.triangle.fill")
                     .foregroundColor(.red)
             } footer: {
-                Text("⚠️ This will permanently delete all drone encounters, aircraft encounters, flight paths, and signatures. This action cannot be undone. Create a backup first!")
+                Text("This will permanently delete all drone encounters, aircraft encounters, flight paths, and signatures. This action cannot be undone. Create a backup first!")
                     .font(.appCaption)
                     .foregroundColor(.red)
             }
@@ -266,13 +266,13 @@ struct DatabaseManagementView: View {
             let total = droneCount + aircraftCount
             
             if droneCount > 0 && aircraftCount > 0 {
-                Text("⚠️ This will permanently delete \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") (\(total) total) and cannot be undone. Make sure you have a backup!")
+                Text("This will permanently delete \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") (\(total) total) and cannot be undone. Make sure you have a backup!")
             } else if droneCount > 0 {
-                Text("⚠️ This will permanently delete all \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
+                Text("This will permanently delete all \(droneCount) drone encounter\(droneCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
             } else if aircraftCount > 0 {
-                Text("⚠️ This will permanently delete all \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
+                Text("This will permanently delete all \(aircraftCount) aircraft encounter\(aircraftCount == 1 ? "" : "s") and cannot be undone. Make sure you have a backup!")
             } else {
-                Text("⚠️ This will permanently delete all data and cannot be undone.")
+                Text("This will permanently delete all data and cannot be undone.")
             }
         }
         .alert("Restore from Backup?", isPresented: $showRestoreConfirmation, presenting: fileToRestore) { fileURL in
@@ -507,7 +507,7 @@ struct DatabaseManagementView: View {
         var message = "Backup Verification Complete:\n"
         message += "\(validCount) valid backup\(validCount == 1 ? "" : "s")\n"
         if emptyCount > 0 {
-            message += "⚠️ \(emptyCount) empty backup\(emptyCount == 1 ? "" : "s")\n"
+            message += "\(emptyCount) empty backup\(emptyCount == 1 ? "" : "s")\n"
         }
         if corruptedCount > 0 {
             message += "\(corruptedCount) corrupted backup\(corruptedCount == 1 ? "" : "s")"
@@ -663,7 +663,7 @@ struct BackupFileRow: View {
             
             // Show error if corrupted
             if let result = verificationResult, result.status == .corrupted, let error = result.error {
-                Text("⚠️ \(error)")
+                Text("\(error)")
                     .font(.caption2)
                     .foregroundColor(.red)
                     .lineLimit(2)

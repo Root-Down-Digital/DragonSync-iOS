@@ -1028,7 +1028,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         self?.isListeningCot = false
                         // REMOVED automatic recovery to prevent reconnection loops
                         // User can manually restart via UI
-                        print("⚠️ Multicast connection failed. Please stop and restart listening manually.")
+                        print("Multicast connection failed. Please stop and restart listening manually.")
                         
                         // Optional: Show notification to user
                         let content = UNMutableNotificationContent()
@@ -2224,7 +2224,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
            message.uid.contains("adsb") ||
            message.idType == "ADS-B Aircraft" ||
            message.idType.contains("Aircraft") {
-            print("⚠️ Filtering out aircraft message - UID: \(message.uid), Type: \(message.idType)")
+            print("Filtering out aircraft message - UID: \(message.uid), Type: \(message.idType)")
             return
         }
         
@@ -3503,13 +3503,13 @@ extension CoTViewModel {
     
     private func publishToLattice(_ message: CoTMessage) {
         guard let latticeClient = latticeClient else {
-            print("⚠️ Lattice publish skipped: latticeClient is nil")
+            print("Lattice publish skipped: latticeClient is nil")
             return
         }
         
         Task { @MainActor in
             guard Settings.shared.latticeEnabled else {
-                print("⚠️ Lattice publish skipped: latticeEnabled is false")
+                print("Lattice publish skipped: latticeEnabled is false")
                 return
             }
             
@@ -3581,7 +3581,7 @@ extension CoTViewModel {
                 // Automatically disable ADS-B in settings
                 Settings.shared.adsbEnabled = false
                 
-                print("⚠️ ADS-B has been automatically disabled after repeated connection failures.")
+                print("ADS-B has been automatically disabled after repeated connection failures.")
                 print("💡 Check that readsb/dump1090 is running at: \(config.readsbURL)")
                 print("   You can re-enable ADS-B in Settings once the server is available.")
                 
