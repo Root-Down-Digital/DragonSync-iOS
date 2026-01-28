@@ -369,8 +369,8 @@ class Settings: ObservableObject {
         }
     }
     
-    private var _takClient: TAKClient?
-    private var _takEnrollmentManager: TAKEnrollmentManager?
+    var _takClient: TAKClient?
+    var _takEnrollmentManager: TAKEnrollmentManager?
     
     var takClient: TAKClient? {
         if _takClient == nil && takEnabled {
@@ -384,7 +384,9 @@ class Settings: ObservableObject {
         _takClient = nil
         _takEnrollmentManager = nil
         
-        guard takEnabled else { return }
+        guard takEnabled else {
+            return
+        }
         
         if takProtocol == .tls {
             _takEnrollmentManager = TAKEnrollmentManager()
