@@ -282,6 +282,11 @@ class StatusViewModel: ObservableObject {
         
         lastStatusMessageReceived = Date()
         
+        // TODO: Send to TAK if enabled (uncomment when TAKMessageSender.swift is added to project)
+        // Task {
+        //     await TAKMessageSender.shared.sendSystemStatus(processedMessage, enrollmentManager: Settings.shared._takEnrollmentManager)
+        // }
+        
         // Start location updates if needed (we're actually receiving messages)
         if Settings.shared.useUserLocationForStatus {
             locationManager.startLocationUpdates()

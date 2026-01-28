@@ -162,7 +162,10 @@ struct ADSBHistoryChartView: View {
                 }
             }
             .chartXAxis {
-                AxisMarks(position: .bottom)
+                AxisMarks(position: .bottom) { value in
+                    AxisValueLabel()
+                        .font(.system(size: 10))
+                }
             }
             .chartYAxis {
                 AxisMarks(position: .leading) { value in

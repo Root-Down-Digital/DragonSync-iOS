@@ -209,9 +209,12 @@ struct DetectionsStatsView: View {
                 }
                 .chartYAxisLabel("Altitude (ft)", alignment: .leading)
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
-                        AxisValueLabel(format: .dateTime.hour().minute())
-                            .font(.caption2)
+                    AxisMarks(values: .stride(by: .minute, count: 2)) { value in
+                        AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
+                            .font(.system(size: 9))
+                    }
+                    AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                        AxisGridLine()
                     }
                 }
                 .chartYAxis {
@@ -246,9 +249,12 @@ struct DetectionsStatsView: View {
                 .chartYScale(domain: -100...(-40))
                 .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
-                        AxisValueLabel(format: .dateTime.hour().minute())
-                            .font(.caption2)
+                    AxisMarks(values: .stride(by: .minute, count: 2)) { value in
+                        AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
+                            .font(.system(size: 9))
+                    }
+                    AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                        AxisGridLine()
                     }
                 }
                 .chartYAxis {
@@ -306,9 +312,12 @@ struct DetectionsStatsView: View {
             }
             .frame(height: 80)
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisMarks(values: .stride(by: .minute, count: 2)) { value in
                     AxisValueLabel(format: .dateTime.hour().minute())
-                        .font(.caption2)
+                        .font(.system(size: 9))
+                }
+                AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                    AxisGridLine()
                 }
             }
             .chartYAxis {

@@ -323,7 +323,7 @@ struct AircraftStatusTab: View {
                     AxisValueLabel {
                         if let range = value.as(String.self) {
                             Text(range)
-                                .font(.caption2)
+                                .font(.system(size: 9))
                         }
                     }
                 }
