@@ -134,17 +134,23 @@ class DroneMessageGenerator:
         rid_source = random.choice(["FAA", "EASA", "CAA"])
         
         # Match exact DragonSync format
-        return f"""<?xml version='1.0' encoding='UTF-8'?>
+        xml = f"""<?xml version='1.0' encoding='UTF-8'?>
 <event version="2.0" uid="{uid}" type="a-u-A-M-H-R" time="{time_str}" start="{start_str}" stale="{stale_str}" how="m-g">
     <point lat="{lat:.6f}" lon="{lon:.6f}" hae="{alt:.1f}" ce="35.0" le="999999"/>
     <detail>
         <contact callsign="{uid}"/>
         <precisionlocation geopointsrc="gps" altsrc="gps"/>
         <track course="{course:.1f}" speed="{speed:.1f}"/>
-        <remarks>MAC: {mac}, RSSI: {rssi}dBm; ID Type: Serial Number (ANSI/CTA-2063-A); UA Type: Helicopter or Multirotor (2); Operator ID: TestOperator; Speed: {speed:.1f} m/s; Vert Speed: {vspeed:.1f} m/s; Altitude: {alt:.1f} m; AGL: {height_agl:.1f} m; Course: {course:.1f}°; Index: {random.randint(1, 100)}; Runtime: {int(time.time() - self.start_time)}s; Freq: {freq} Hz; Seen By: {seen_by}; Observed At: {unix_timestamp}; RID Time: {time_str}; RID: {rid_make} {rid_model} ({rid_source})</remarks>
+        <remarks>MAC: {mac}, RSSI: {rssi}dBm; ID Type: Serial Number (ANSI/CTA-2063-A); UA Type: Helicopter or Multirotor (2); Operator ID: TestOperator; Speed: {speed:.1f} m/s; Vert Speed: {vspeed:.1f} m/s; Altitude: {alt:.1f} m; AGL: {height_agl:.1f} m; Direction: {course:.1f}°; Index: {random.randint(1, 100)}; Runtime: {int(time.time() - self.start_time)}s; Freq: {freq} Hz; Seen By: {seen_by}; Observed At: {unix_timestamp}; RID Time: {time_str}; RID: {rid_make} {rid_model} ({rid_source})</remarks>
         <color argb="-256"/>
     </detail>
 </event>"""
+        
+        # Debug: Print track info periodically
+        if int(time.time() * 10) % 50 == 0:
+            print(f"  📍 Drone XML: UID={uid} Lat={lat:.6f} Lon={lon:.6f} Course={course:.1f}° Speed={speed:.1f}m/s")
+        
+        return xml
 
     def generate_pilot_cot(self):
         """Generate separate pilot CoT message matching DragonSync format"""
@@ -1452,37 +1458,33 @@ def quick_test_mode(config, generator):
                     print(f"[{timestamp}] Update #{counter}: ✓ Drone ✓ FPV ✓ Status")
                 
                 elif choice == '4':  # Simulated Flight Path
-                    # All messages in sequence for realistic flight
+                    # Generate ONLY the drone message with track data
+                    # Do NOT send pilot/home messages - these are filtered by WarDragon
                     drone_msg = generator.generate_drone_cot_with_track()
-                    pilot_msg = generator.generate_pilot_cot()
-                    home_msg = generator.generate_home_cot()
                     status_msg = generator.generate_status_message()
                     
                     if config.broadcast_mode == 'multicast':
                         cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
                         time.sleep(0.05)
-                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
-                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
                         status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
                     else:
                         cot_sock.send_string(drone_msg)
                         time.sleep(0.05)
-                        cot_sock.send_string(pilot_msg)
-                        time.sleep(0.05)
-                        cot_sock.send_string(home_msg)
-                        time.sleep(0.05)
                         status_sock.send_string(status_msg)
                     
-                    # Extract position for display
+                    # Extract position and track data for debug display
                     import re
                     lat_match = re.search(r'lat="([^"]+)"', drone_msg)
                     lon_match = re.search(r'lon="([^"]+)"', drone_msg)
-                    if lat_match and lon_match:
-                        print(f"[{timestamp}] Flight update #{counter}: Position ({lat_match.group(1)}, {lon_match.group(1)})")
+                    course_match = re.search(r'course="([^"]+)"', drone_msg)
+                    speed_match = re.search(r'speed="([^"]+)"', drone_msg)
+                    uid_match = re.search(r'uid="([^"]+)"', drone_msg)
+                    
+                    if lat_match and lon_match and course_match and speed_match:
+                        uid = uid_match.group(1) if uid_match else "unknown"
+                        print(f"[{timestamp}] 🛸 Update #{counter}: UID={uid} Pos=({lat_match.group(1)}, {lon_match.group(1)}) Course={course_match.group(1)}° Speed={speed_match.group(1)}m/s")
                     else:
-                        print(f"[{timestamp}] Flight update #{counter}: Complete message set sent")
+                        print(f"[{timestamp}] Flight update #{counter}: Complete message sent")
                 
                 elif choice == '5':  # Everything At Once
                     # 1. Send primary CoT messages (Drone, Pilot, Home, Status)

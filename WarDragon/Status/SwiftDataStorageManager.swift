@@ -18,7 +18,7 @@ class SwiftDataStorageManager: ObservableObject {
     private let logger = Logger(subsystem: "com.wardragon", category: "Storage")
     var cotViewModel: CoTViewModel?
     
-    @Published private(set) var encounters: [String: DroneEncounter] = [:]
+    @Published var encounters: [String: DroneEncounter] = [:]
     
     // Reference to model context (will be set from ContentView)
     var modelContext: ModelContext?
@@ -208,10 +208,14 @@ class SwiftDataStorageManager: ObservableObject {
                 if distance > 0.1 || timeGap > 2 {
                     encounter.flightPoints.append(newPoint)
                     didAddPoint = true
+                    print("✈️ FLIGHT PATH: Added point #\(encounter.flightPoints.count) for \(droneId) - Distance: \(String(format: "%.2f", distance))m, TimeGap: \(String(format: "%.1f", timeGap))s")
+                } else {
+                    print("⏭️ FLIGHT PATH: Skipped point for \(droneId) - Distance: \(String(format: "%.2f", distance))m, TimeGap: \(String(format: "%.1f", timeGap))s (too close)")
                 }
             } else {
                 encounter.flightPoints.append(newPoint)
                 didAddPoint = true
+                print("✈️ FLIGHT PATH: Added FIRST point for \(droneId)")
             }
         }
         
@@ -306,6 +310,16 @@ class SwiftDataStorageManager: ObservableObject {
         
         needsSave = true
         updateInMemoryCacheForEncounterFast(encounter)
+        
+        // Also update DroneStorageManager's cache immediately if a flight point was added
+        if didAddPoint {
+            Task { @MainActor in
+                if let legacyEncounter = self.encounters[encounter.id] {
+                    DroneStorageManager.shared.updateEncounterInCache(legacyEncounter)
+//                    print("🔄 Updated DroneStorageManager cache for \(encounter.id) - Flight path now has \(legacyEncounter.flightPath.count) points")
+                }
+            }
+        }
     }
     // MARK: - Query Operations
     
@@ -725,15 +739,13 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter) {
-        if encounters[encounter.id] == nil {
-            // New encounter - must update with lightweight conversion
-            encounters[encounter.id] = encounter.toLegacyLightweight()
-        } else {
-            // Existing encounter - just update the timestamp without full conversion
-            if var existing = encounters[encounter.id] {
-                existing.lastSeen = encounter.lastSeen
-                encounters[encounter.id] = existing
-            }
+        // Always update the full encounter data to keep flight path in sync
+        // This is critical for UI to show updated flight paths
+        encounters[encounter.id] = encounter.toLegacyLightweight()
+        
+        // Notify DroneStorageManager to update its cache too
+        Task { @MainActor in
+            DroneStorageManager.shared.objectWillChange.send()
         }
     }
     

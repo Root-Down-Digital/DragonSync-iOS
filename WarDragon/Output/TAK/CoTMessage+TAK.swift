@@ -39,9 +39,32 @@ extension CoTViewModel.CoTMessage {
         xml += "<event version=\"2.0\" uid=\"\(uid)\" type=\"\(cotType)\" time=\"\(time)\" start=\"\(time)\" stale=\"\(stale)\" how=\"m-g\">\n"
         xml += "  <point lat=\"\(lat)\" lon=\"\(lon)\" hae=\"\(hae)\" ce=\"\(ce)\" le=\"\(le)\"/>\n"
         
-        // Add track element if we have course/speed
-        if let course = trackCourse, let speed = trackSpeed, !course.isEmpty, !speed.isEmpty {
-            xml += "  <track course=\"\(course)\" speed=\"\(speed)\"/>\n"
+        // Add track element - try trackCourse/trackSpeed first, then fallback to direction/speed
+        var courseValue: String? = nil
+        var speedValue: String? = nil
+        
+        // Get course from trackCourse or direction
+        if let course = trackCourse, !course.isEmpty, course != "0.0" {
+            courseValue = course
+        } else if let dir = direction, !dir.isEmpty, dir != "0.0" {
+            courseValue = dir
+        }
+        
+        // Get speed from trackSpeed or speed field
+        if let trackSpd = trackSpeed, !trackSpd.isEmpty, trackSpd != "0.0" {
+            speedValue = trackSpd
+        } else if !speed.isEmpty, speed != "0.0" {
+            // Speed field is a string, use it directly if valid
+            if let speedDouble = Double(speed) {
+                speedValue = String(format: "%.2f", speedDouble)
+            }
+        }
+        
+        // Always include track element if we have either course or speed
+        if courseValue != nil || speedValue != nil {
+            let course = courseValue ?? "0.0"
+            let spd = speedValue ?? "0.0"
+            xml += "  <track course=\"\(course)\" speed=\"\(spd)\"/>\n"
         }
         
         xml += "  <detail>\n"
@@ -66,37 +89,18 @@ extension CoTViewModel.CoTMessage {
     }
     
     /// Build CoT type string based on drone properties
-    /// Format: a-u-A-M-H-{R|S|U}-{O}
+    /// Format: a-u-A-M-H-Q (Quadcopter is the most compatible)
+    /// TAK/ATAK requires specific format for proper icon rendering
     /// - a: Atom (core CoT element)
     /// - u: Unmanned (UAS)
     /// - A: Air
-    /// - M: Military
+    /// - M: Military (for proper rendering)
     /// - H: Helicopter/Multirotor
-    /// - R: CAA Registration / S: Serial Number / U: Unknown ID
-    /// - O: Has operator location
+    /// - Q: Quadcopter (ensures proper UAS icon)
     private func buildCoTType() -> String {
-        var type = "a-u-A-M-H"
-        
-        // Add ID type suffix
-        if !idType.isEmpty {
-            if idType.contains("CAA") {
-                type += "-R"
-            } else if idType.contains("Serial") {
-                type += "-S"
-            } else {
-                type += "-U"
-            }
-        } else {
-            type += "-U"
-        }
-        
-        // Add operator suffix if we have operator location
-        if let pilotLatValue = Double(pilotLat), let pilotLonValue = Double(pilotLon),
-           pilotLatValue != 0.0 && pilotLonValue != 0.0 {
-            type += "-O"
-        }
-        
-        return type
+        // Use simplified type that TAK recognizes for drone icons
+        // The type "a-u-A-M-H-Q" is the standard for quadcopter drones in TAK
+        return "a-u-A-M-H-Q"
     }
     
     /// Build remarks field with all metadata (matching Python format)

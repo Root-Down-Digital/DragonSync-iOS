@@ -11,7 +11,6 @@ import MapKit
 struct LiveMapView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     @State public var mapCameraPosition: MapCameraPosition
-    @State private var showDroneList = false
     @State private var showDroneDetail = false
     @State private var selectedDrone: CoTViewModel.CoTMessage?
     @State private var selectedFlightPath: [CLLocationCoordinate2D] = []
@@ -327,10 +326,35 @@ struct LiveMapView: View {
                                 let isLastDrone = message.uid == uniqueDrones.last?.uid
                                 let color = isLastDrone ? Color.red : Color.blue
                                 
-                                Annotation(message.uid, coordinate: coordinate) {
-                                    Circle()
-                                        .fill(color)
-                                        .frame(width: 10, height: 10)
+                                Annotation("", coordinate: coordinate) {
+                                    VStack(spacing: 2) {
+                                        ZStack {
+                                            // Background circle for better visibility
+                                            Circle()
+                                                .fill(color)
+                                                .frame(width: 30, height: 30)
+                                            
+                                            // Drone icon with rotation based on heading
+                                            Image(systemName: "airplane")
+                                                .resizable()
+                                                .frame(width: 18, height: 18)
+                                                .foregroundStyle(.white)
+                                                .rotationEffect(.degrees(message.headingDeg - 90))
+                                                .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
+                                        }
+                                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 2)
+                                        
+                                        // Drone ID label
+                                        Text(message.uid)
+                                            .font(.caption2)
+                                            .bold()
+                                            .foregroundColor(.primary)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 2)
+                                            .background(color.opacity(0.2))
+                                            .background(.ultraThinMaterial)
+                                            .cornerRadius(4)
+                                    }
                                 }
                             }
                         }
@@ -498,7 +522,15 @@ struct LiveMapView: View {
                 Spacer()
                 let droneCount = uniqueDrones.count
                 let aircraftCount = cotViewModel.aircraftTracks.count
-                Button(action: { showDroneList.toggle() }) {
+                // Detection count button - tapping dismisses the map and returns to Detections tab
+                Button(action: { 
+                    // Dismiss this view to return to the calling screen (Detections tab)
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let window = windowScene.windows.first,
+                       let presentingVC = window.rootViewController?.presentedViewController {
+                        presentingVC.dismiss(animated: true)
+                    }
+                }) {
                     VStack(spacing: 4) {
                         // Show counts based on filter mode
                         if filterMode != .aircraft && droneCount > 0 {
@@ -524,52 +556,6 @@ struct LiveMapView: View {
                 }
                 .padding(.bottom)
             }
-        }
-        .sheet(isPresented: $showDroneList) {
-            NavigationView {
-                List {
-                    if !uniqueDrones.isEmpty {
-                        Section("Drones (\(uniqueDrones.count))") {
-                            ForEach(uniqueDrones) { message in
-                                let destination = createDroneDetailView(for: message)
-                                NavigationLink(destination: destination) {
-                                    DroneListRowView(message: message, cotViewModel: cotViewModel)
-                                }
-                            }
-                        }
-                    }
-                    
-                    if !cotViewModel.aircraftTracks.isEmpty {
-                        Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
-                            ForEach(cotViewModel.aircraftTracks) { aircraft in
-                                NavigationLink {
-                                    AircraftDetailContent(aircraft: aircraft)
-                                } label: {
-                                    AircraftRow(aircraft: aircraft)
-                                }
-                            }
-                        }
-                    }
-                    
-                    if uniqueDrones.isEmpty && cotViewModel.aircraftTracks.isEmpty {
-                        Section {
-                            Text("No active targets")
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                    }
-                }
-                .navigationTitle("Active Detections")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Done") {
-                            showDroneList = false
-                        }
-                    }
-                }
-            }
-            .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showDroneDetail) {
             if let drone = selectedDrone {

@@ -317,10 +317,17 @@ extension StoredDroneEncounter {
     
     /// Lightweight conversion that only includes essential data for list views
     /// This avoids converting thousands of flight points and signatures
+    /// Uses more points for recent activity (last hour) vs old encounters
     func toLegacyLightweight() -> DroneEncounter {
-        // Only include last few flight points for preview (e.g., last 10)
+        // Determine if this is a recent/active encounter (updated in last hour)
+        let isRecentlyActive = Date().timeIntervalSince(lastSeen) < 3600
+        
+        // For recent encounters, include more points for smooth flight path display
+        // For old encounters, only include a few points for preview
+        let pointLimit = isRecentlyActive ? 200 : 10
+        
         let recentFlightPoints = flightPoints
-            .suffix(10)
+            .suffix(pointLimit)
             .map { point in
                 FlightPathPoint(
                     latitude: point.latitude,
@@ -335,9 +342,10 @@ extension StoredDroneEncounter {
                 )
             }
         
-        // Only include last few signatures (e.g., last 10)
+        // Only include last few signatures (e.g., last 50 for active, 10 for old)
+        let signatureLimit = isRecentlyActive ? 50 : 10
         let recentSignatures = signatures
-            .suffix(10)
+            .suffix(signatureLimit)
             .compactMap { sig in
                 SignatureData(
                     timestamp: sig.timestamp,

@@ -535,7 +535,10 @@ struct MessageRow: View {
                 return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
             }()
             
-            Map {
+            Map(position: .constant(.camera(MapCamera(
+                centerCoordinate: message.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                distance: 500
+            )))) {
                 if let coordinate = message.coordinate {
                     Annotation(message.uid, coordinate: coordinate) {
                         Image(systemName: "airplane")
@@ -568,6 +571,7 @@ struct MessageRow: View {
                     }
                 }
             }
+            .mapStyle(.standard)
             .frame(height: 150)
             .cornerRadius(10)
             .overlay(

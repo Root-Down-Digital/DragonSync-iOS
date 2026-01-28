@@ -390,6 +390,13 @@ class DroneStorageManager: ObservableObject {
         encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacy()) })
     }
     
+    /// Update a single encounter in the cache
+    /// Used by SwiftDataStorageManager to keep cache in sync
+    func updateEncounterInCache(_ encounter: DroneEncounter) {
+        encounters[encounter.id] = encounter
+        objectWillChange.send()
+    }
+    
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
         // Fetch encounter from SwiftData
         guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {

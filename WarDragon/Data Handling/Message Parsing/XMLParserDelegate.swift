@@ -157,7 +157,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             trackAttributes = attributes
             track_course   = attributes["course"]
             track_speed    = attributes["speed"]
-            print("DEBUG XML Parser: Extracted track - course: \(String(describing: track_course)), speed: \(String(describing: track_speed))")
+//            print("DEBUG XML Parser: Extracted track - course: \(String(describing: track_course)), speed: \(String(describing: track_speed))")
         }
         
     }
@@ -355,7 +355,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.runtime = droneData["runtime"] as? String ?? ""
             message.trackCourse  = track_course
             message.trackSpeed   = track_speed
-            print("DEBUG XML Parser: Assigned track to message - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
+//            print("DEBUG XML Parser: Assigned track to message - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
             message.originalRawString = originalRawString
             
             // Parse Auth Message fields
@@ -628,6 +628,18 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             isStatusMessage = remarks.contains("CPU Usage:")
         }
         
+        // Check if this is a pilot or home marker message that should be filtered
+        // These are sent by DragonSync as separate CoT events
+        if elementName == "event" {
+            let uid = eventAttributes["uid"] ?? ""
+            // Skip pilot and home marker messages - they are metadata, not drone tracks
+            if uid.hasPrefix("pilot-") || uid.hasPrefix("home-") {
+                print("DEBUG: Skipping pilot/home marker message: \(uid)")
+                elementStack.removeLast()
+                return
+            }
+        }
+        
         // Route to appropriate handler based on message type
         if isStatusMessage {
             handleStatusMessage(elementName)
@@ -806,7 +818,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                     message.trackSpeed = track_speed  // Preserve value from <track> element
                 }
                 
-                print("DEBUG XML Parser (remarks path): Track data - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
+//                print("DEBUG XML Parser (remarks path): Track data - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
                 message.originalRawString = originalRawString
                 
                 cotMessage = message
