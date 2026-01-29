@@ -672,9 +672,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         self.statusViewModel = statusViewModel
         self.spectrumViewModel = spectrumViewModel
         
-        // Setup MQTT and TAK clients
         Task { @MainActor in
-            // Cache settings values to avoid main actor access from background threads
             self.cachedConnectionMode = Settings.shared.connectionMode
             self.cachedMulticastHost = Settings.shared.multicastHost
             self.cachedMulticastPort = UInt16(Settings.shared.multicastPort)
@@ -683,8 +681,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
             self.cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
             self.cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
-            self.cachedIsListening = Settings.shared.isListening
+            self.cachedIsListening = false
             self.cachedEnableBackgroundDetection = Settings.shared.enableBackgroundDetection
+            
+            Settings.shared.isListening = false
+            self.isListeningCot = false
             
             self.checkPermissions()
             self.setupMQTTClient()
@@ -694,17 +695,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             Task.detached {
                 await MainActor.run {
                     SwiftDataStorageManager.shared.cleanupOldAircraftEncounters(maxAircraftCount: 200)
-                    print("Aircraft storage cleanup completed on launch")
                 }
             }
             
-            // Delay ADS-B setup to give the server time to be ready
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             await self.setupADSBClient()
             
             self.restoreAlertRingsFromStorage()
-            
-            // Start inactivity cleanup timer (matches Python DragonSync behavior)
             self.startInactivityCleanupTimer()
         }
         
@@ -767,9 +764,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     deinit {
         print("🧹 CoTViewModel deinit - final cleanup")
         
-        // End all background tasks
-        BackgroundManager.shared.endAllBackgroundTasks()
-        
         // Invalidate all timers
         inactivityCleanupTimer?.invalidate()
         backgroundMaintenanceTimer?.invalidate()
@@ -778,7 +772,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         multicastConnection?.cancel()
         cotListener?.cancel()
         statusListener?.cancel()
-        zmqHandler?.disconnect()
         
         // Clean up external connections - capture locally to avoid self in Task
         let mqtt = mqttClient
@@ -833,25 +826,20 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     @objc private func handleAppWillTerminate() {
-        print("App terminating - cleaning up background tasks and connections")
+        print("App terminating - cleaning up connections")
         
-        // End all background tasks FIRST
         BackgroundManager.shared.endAllBackgroundTasks()
         
-        // Invalidate all timers synchronously
         inactivityCleanupTimer?.invalidate()
         inactivityCleanupTimer = nil
         backgroundMaintenanceTimer?.invalidate()
         backgroundMaintenanceTimer = nil
         
-        // Force stop all network connections
         stopListening()
         
-        // Cancel all Combine subscriptions
         cancellables.removeAll()
         adsbCancellables.removeAll()
         
-        // Disconnect external clients synchronously - wrapped in Task to avoid main actor errors
         Task { @MainActor in
             self.mqttClient?.disconnect()
             self.takClient?.disconnect()
@@ -859,7 +847,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.latticeClient = nil
         }
         
-        // Remove all observers
         NotificationCenter.default.removeObserver(self)
         
         print("App termination cleanup completed")
@@ -3080,28 +3067,21 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             return 
         }
         
-        print("Stopping all listeners IMMEDIATELY")
+        print("Stopping all listeners")
         
-        // Clear all flags synchronously
         isListeningCot = false
         isReconnecting = false
         isStarting = false
         
-        // End background tasks FIRST
-        BackgroundManager.shared.endAllBackgroundTasks()
-        
-        // Invalidate timers synchronously
         backgroundMaintenanceTimer?.invalidate()
         backgroundMaintenanceTimer = nil
         
-        // Remove notification observer synchronously
         NotificationCenter.default.removeObserver(
             self,
             name: Notification.Name("RefreshNetworkConnections"),
             object: nil
         )
         
-        // Cancel multicast connection first with forced cleanup
         if let connection = multicastConnection {
             connection.stateUpdateHandler = nil
             connection.cancel()
@@ -3109,7 +3089,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             print("Multicast connection cancelled")
         }
         
-        // Cancel listeners with force close and nil out handlers
         if let listener = cotListener {
             listener.stateUpdateHandler = nil
             listener.newConnectionHandler = nil
@@ -3126,20 +3105,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             print("Status listener cancelled")
         }
         
-        // Disconnect ZMQ handler synchronously
         if let zmqHandler = zmqHandler {
             zmqHandler.disconnect()
             self.zmqHandler = nil
             print("ZMQ: Disconnected")
         }
         
-        // Stop background processing
-        backgroundManager.stopBackgroundProcessing()
+        print("All listeners stopped")
         
-        print("All listeners stopped and background tasks ended")
-        
-        // Give the system a brief moment to release resources
-        // But keep it short for termination scenarios
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             print("Network resources cleanup completed")
         }
