@@ -68,7 +68,9 @@ struct ContentView: View {
             settingsTab
             historyTab
         }
-        .onChange(of: settings.isListening) {
+        .onChange(of: settings.isListening) { oldValue, newValue in
+            // Debounce rapid toggles
+            guard oldValue != newValue else { return }
             handleListeningChange()
         }
         .onChange(of: selectedTab) { oldValue, newValue in

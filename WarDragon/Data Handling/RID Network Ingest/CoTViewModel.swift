@@ -61,6 +61,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     private let listenerQueue = DispatchQueue(label: "CoTListenerQueue")
     public var isListeningCot = false
+    private var isStarting = false
     public var macIdHistory: [String: Set<String>] = [:]
     public var macProcessing: [String: Bool] = [:]
     private var lastNotificationTime: Date?
@@ -990,29 +991,46 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     func startListening() {
-        // Prevent multiple starts or starts during reconnection
-        guard !isListeningCot && !isReconnecting else { 
-            print("Already listening or reconnecting, skipping start")
-            return 
+        // ATOMIC CHECK - Exit immediately if already in progress
+        guard !isListeningCot && !isReconnecting && !isStarting else {
+            print("Already listening (\(isListeningCot)), reconnecting (\(isReconnecting)), or starting (\(isStarting)) - skipping")
+            return
         }
         
+        // Mark as starting FIRST
+        isStarting = true
+        
         print("Settings: Toggle listening to true")
+        print("Cleaning up existing connections before restart...")
         
-        // Set reconnecting flag to prevent concurrent starts
-        isReconnecting = true
+        // FORCE CLEANUP - Cancel any existing connection synchronously
+        if let existing = multicastConnection {
+            existing.cancel()
+            multicastConnection = nil
+        }
         
-        // Clean up any existing connections with proper delay
-        if cotListener != nil || multicastConnection != nil || zmqHandler != nil {
-            print("Cleaning up existing connections before restart...")
-            stopListening()
+        if let existing = cotListener {
+            existing.cancel()
+            cotListener = nil
+        }
+        
+        if let existing = statusListener {
+            existing.cancel()
+            statusListener = nil
+        }
+        
+        // Give the OS time to release the socket
+        Task {
+            try? await Task.sleep(nanoseconds: 150_000_000) // 0.15 seconds
             
-            // Wait for cleanup to complete before starting new connections
-            // Increased delay to ensure socket unbinding
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.proceedWithStartListening()
+            await MainActor.run {
+                // Now actually start
+                self.proceedWithStartListening()
+                
+                // Clear the starting flag AFTER everything is set up
+                self.isStarting = false
+                print("Listening started successfully, cleared reconnecting flag")
             }
-        } else {
-            proceedWithStartListening()
         }
     }
     
@@ -1535,7 +1553,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
 
     @MainActor
     private func updateFPVMessage(_ updatedMessage: CoTMessage) async {
-        // Find existing FPV message and update it - need to check both formats
         let possibleUIDs = [
             updatedMessage.uid,
             "drone-\(updatedMessage.uid)"
@@ -1550,31 +1567,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         guard let index = existingIndex else {
-            print("DEBUG: No existing FPV message found for UIDs: \(possibleUIDs)")
             return
         }
         
-        print("DEBUG: Updating FPV message at index \(index): \(self.parsedMessages[index].uid)")
-        
         var existingMessage = self.parsedMessages[index]
-        
-        // Update FPV-specific fields
         existingMessage.fpvRSSI = updatedMessage.fpvRSSI
         existingMessage.rssi = updatedMessage.rssi
         existingMessage.fpvTimestamp = updatedMessage.fpvTimestamp
         existingMessage.lastUpdated = Date()
         
-        
-        // Update signal sources
         if let newSource = updatedMessage.signalSources.first {
             existingMessage.signalSources = [newSource]
         }
         
-        // Update BT/WiFi fields
         existingMessage.aa = updatedMessage.aa
         existingMessage.adv_mac = updatedMessage.adv_mac
         
-        // Send webhook for FPV updates if enabled
         if Settings.shared.webhooksEnabled {
             self.sendFPVWebhookNotification(for: existingMessage)
         }
@@ -2990,15 +2998,17 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     func stopListening() {
-        guard isListeningCot else { 
+        guard isListeningCot || multicastConnection != nil else { 
             print("Already stopped, skipping stopListening()")
             return 
         }
         
-        isListeningCot = false
-        isReconnecting = false // Reset reconnecting flag
-        
         print("Stopping all listeners...")
+        
+        // Clear all flags
+        isListeningCot = false
+        isReconnecting = false
+        isStarting = false
         
         // Remove notification observer
         NotificationCenter.default.removeObserver(
