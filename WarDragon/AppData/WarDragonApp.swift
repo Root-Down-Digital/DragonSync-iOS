@@ -22,6 +22,24 @@ struct WarDragonApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     
+    @StateObject private var statusViewModel = StatusViewModel()
+    @StateObject private var spectrumViewModel = SpectrumData.SpectrumViewModel()
+    @StateObject private var cotViewModel: CoTViewModel
+    
+    init() {
+        let statusVM = StatusViewModel()
+        let spectrumVM = SpectrumData.SpectrumViewModel()
+        let cotVM = CoTViewModel(statusViewModel: statusVM, spectrumViewModel: spectrumVM)
+        
+        _statusViewModel = StateObject(wrappedValue: statusVM)
+        _spectrumViewModel = StateObject(wrappedValue: spectrumVM)
+        _cotViewModel = StateObject(wrappedValue: cotVM)
+        
+        Task { @MainActor in
+            OpenSkyService.shared.cotViewModel = cotVM
+        }
+    }
+    
     // SwiftData model container with recovery
     let modelContainer: ModelContainer = {
         let schema = Schema([
@@ -84,10 +102,11 @@ struct WarDragonApp: App {
         WindowGroup {
             ContentView()
                 .modelContainer(modelContainer)
+                .environmentObject(statusViewModel)
+                .environmentObject(spectrumViewModel)
+                .environmentObject(cotViewModel)
                 .task {
-                    // Configure OpenSky service with model context
                     await configureOpenSkyService()
-                    // Perform migration after view appears
                     await performMigrationIfNeeded()
                 }
         }
@@ -236,9 +255,20 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
-        // Always start with a clean state - not listening
+        // Check if we were monitoring in background before termination
+        let wasBackgroundMonitoring = UserDefaults.standard.bool(forKey: "BackgroundMonitoringActive")
+        
         Task { @MainActor in
-            Settings.shared.isListening = false
+            if wasBackgroundMonitoring {
+                print("App restored after background termination - resuming monitoring")
+                if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
+                    BackgroundManager.shared.startBackgroundProcessing()
+                }
+            } else {
+                // Clean state on fresh launch
+                Settings.shared.isListening = false
+                print("Fresh app launch - reset listening state")
+            }
         }
 
         UNUserNotificationCenter.current().delegate = self
@@ -290,11 +320,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         }
         
         if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
+            // Mark that we're going to background with active monitoring
+            UserDefaults.standard.set(true, forKey: "BackgroundMonitoringActive")
             BackgroundManager.shared.startBackgroundProcessing()
         }
     }
 
-    @objc private func appMovingToForeground() { }
+    @objc private func appMovingToForeground() {
+        // Clear background monitoring flag when returning to foreground
+        UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+    }
 
     private func registerBGTasks() {
         bgIDs.forEach { id in

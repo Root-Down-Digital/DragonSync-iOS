@@ -13,10 +13,10 @@ import Charts
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @StateObject private var statusViewModel = StatusViewModel()
-    @StateObject private var spectrumViewModel = SpectrumData.SpectrumViewModel()
+    @EnvironmentObject private var statusViewModel: StatusViewModel
+    @EnvironmentObject private var spectrumViewModel: SpectrumData.SpectrumViewModel
+    @EnvironmentObject private var cotViewModel: CoTViewModel
     @StateObject private var droneStorage = DroneStorageManager.shared
-    @StateObject private var cotViewModel: CoTViewModel
     @StateObject private var settings = Settings.shared
     @State private var showAlert = false
     @State private var latestMessage: CoTViewModel.CoTMessage?
@@ -44,19 +44,7 @@ struct ContentView: View {
     }
     
     init() {
-        // Create temporary non-StateObject instances for initialization
-        let statusVM = StatusViewModel()
-        let cotVM = CoTViewModel(statusViewModel: statusVM)
-        
-        // Initialize the StateObject properties
-        self._statusViewModel = StateObject(wrappedValue: statusVM)
-        self._cotViewModel = StateObject(wrappedValue: cotVM)
         self._selectedTab = State(initialValue: Settings.shared.isListening ? 0 : 3)
-        
-        // Connect OpenSkyService to CoTViewModel
-        Task { @MainActor in
-            OpenSkyService.shared.cotViewModel = cotVM
-        }
     }
     
 
