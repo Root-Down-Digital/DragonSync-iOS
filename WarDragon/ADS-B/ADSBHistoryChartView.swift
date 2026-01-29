@@ -241,7 +241,7 @@ struct ADSBHistoryChartView: View {
             adsbEncounters = try modelContext.fetch(descriptor)
             print("Loaded \(adsbEncounters.count) aircraft from SwiftData")
         } catch {
-            print("❌ Failed to fetch ADSB encounters: \(error)")
+            print("Failed to fetch ADSB encounters: \(error)")
             adsbEncounters = []
         }
     }
@@ -267,7 +267,7 @@ struct ADSBHistoryChartView: View {
             
             print("Successfully deleted all aircraft")
         } catch {
-            print("❌ Failed to delete all aircraft: \(error)")
+            print("Failed to delete all aircraft: \(error)")
             
             // Even if save failed, try to reload to get fresh state
             loadAircraftData()

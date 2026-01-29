@@ -912,19 +912,19 @@ class ZMQHandler: ObservableObject {
         print("📥 ZMQ: Received status JSON of length \(jsonString.count)")
         
         guard let jsonData = jsonString.data(using: .utf8) else {
-            print("❌ ZMQ: Failed to convert status string to Data")
+            print("ZMQ: Failed to convert status string to Data")
             return nil
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            print("❌ ZMQ: Failed to parse status JSON")
+            print("ZMQ: Failed to parse status JSON")
             print("First 500 chars: \(jsonString.prefix(500))")
             return nil
         }
         
-        print("✅ ZMQ: Status JSON parsed, keys: \(json.keys.joined(separator: ", "))")
+        print(" ZMQ: Status JSON parsed, keys: \(json.keys.joined(separator: ", "))")
         let xml = createStatusXML(json)
-        print("✅ ZMQ: Status XML created (\(xml.count) chars)")
+        print(" ZMQ: Status XML created (\(xml.count) chars)")
         return xml
     }
     

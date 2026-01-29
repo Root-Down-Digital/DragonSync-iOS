@@ -150,7 +150,7 @@ class StatusViewModel: ObservableObject {
                 
                 print("Successfully cleared ADSB history")
             } catch {
-                print("❌ Failed to clear ADSB history: \(error)")
+                print("Failed to clear ADSB history: \(error)")
             }
         }
     }

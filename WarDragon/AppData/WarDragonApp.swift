@@ -20,6 +20,7 @@ extension Font {
 @main
 struct WarDragonApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     
     // SwiftData model container with recovery
     let modelContainer: ModelContainer = {
@@ -73,7 +74,7 @@ struct WarDragonApp: App {
                 
                 return container
             } catch {
-                print("❌ Recovery failed: \(error.localizedDescription)")
+                print("Recovery failed: \(error.localizedDescription)")
                 fatalError("Could not create or recover ModelContainer. This should never happen. Error: \(error)")
             }
         }
@@ -89,6 +90,22 @@ struct WarDragonApp: App {
                     // Perform migration after view appears
                     await performMigrationIfNeeded()
                 }
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            switch newPhase {
+            case .background:
+                print("App moved to background")
+            case .inactive:
+                print("App became inactive")
+                if oldPhase == .background {
+                    print("App terminating - triggering cleanup via scene phase")
+                    BackgroundManager.shared.endAllBackgroundTasks()
+                }
+            case .active:
+                print("App became active")
+            @unknown default:
+                break
+            }
         }
     }
     
@@ -127,7 +144,7 @@ struct WarDragonApp: App {
                     print("   Migration will continue, but you may want to manually backup your data")
                 }
             } else {
-                print("ℹ️ Backup already exists, skipping duplicate backup creation")
+                print("Backup already exists, skipping duplicate backup creation")
             }
             
             // Perform migration with retry logic
@@ -180,7 +197,7 @@ struct WarDragonApp: App {
                 }
                 if updatedCount > 0 {
                     try context.save()
-                    print("✅ Updated cached stats for \(updatedCount) encounters")
+                    print(" Updated cached stats for \(updatedCount) encounters")
                 }
                 
                 print("🎉 Migration complete - app is now using the new storage system")
@@ -189,7 +206,7 @@ struct WarDragonApp: App {
             }
             
         } catch {
-            print("❌ Migration failed after all attempts: \(error.localizedDescription)")
+            print("Migration failed after all attempts: \(error.localizedDescription)")
             print("   Don't worry - your data is safe!")
             print("   • App will continue using UserDefaults as fallback")
             print("   • Migration will be retried automatically on next launch")

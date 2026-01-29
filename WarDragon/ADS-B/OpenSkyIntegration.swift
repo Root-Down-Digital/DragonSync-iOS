@@ -563,7 +563,7 @@ final class OpenSkyService: ObservableObject {
     }
     
     func configure(with context: ModelContext) {
-        print("🟢 [PERF] configure: START (immediate return)")
+        print("[PERF] configure: START (immediate return)")
         
         self.modelContext = context
         
@@ -571,13 +571,13 @@ final class OpenSkyService: ObservableObject {
         Task.detached { @MainActor in
             let startTime = CFAbsoluteTimeGetCurrent()
             self.loadSettings()
-            print("🟢 [PERF] configure: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
+            print("[PERF] configure: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
         }
     }
     
     private func loadSettings() {
         let startTime = CFAbsoluteTimeGetCurrent()
-        print("🟢 [PERF] loadSettings: START")
+        print("[PERF] loadSettings: START")
         
         guard let context = modelContext else { 
             print("🔴 [ERROR] loadSettings: No modelContext!")
@@ -590,11 +590,11 @@ final class OpenSkyService: ObservableObject {
         do {
             let fetchStart = CFAbsoluteTimeGetCurrent()
             let results = try context.fetch(descriptor)
-            print("🟢 [PERF] loadSettings: Fetch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - fetchStart) * 1000))ms, found \(results.count) settings")
+            print("[PERF] loadSettings: Fetch took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - fetchStart) * 1000))ms, found \(results.count) settings")
             
             if let existingSettings = results.first {
                 self.settings = existingSettings
-                print("🟢 [PERF] loadSettings: Using existing settings")
+                print("[PERF] loadSettings: Using existing settings")
             } else {
                 let createStart = CFAbsoluteTimeGetCurrent()
                 let newSettings = OpenSkySettings()
@@ -602,7 +602,7 @@ final class OpenSkyService: ObservableObject {
                 do {
                     try context.save()
                     self.settings = newSettings
-                    print("🟢 [PERF] loadSettings: Created new settings, save took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - createStart) * 1000))ms")
+                    print("[PERF] loadSettings: Created new settings, save took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - createStart) * 1000))ms")
                 } catch {
                     print("🔴 [ERROR] loadSettings: Failed to save new settings: \(error)")
                 }
@@ -612,10 +612,10 @@ final class OpenSkyService: ObservableObject {
             Task.detached { @MainActor in
                 let applyStart = CFAbsoluteTimeGetCurrent()
                 self.applySettings()
-                print("🟢 [PERF] loadSettings: applySettings took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - applyStart) * 1000))ms")
+                print("[PERF] loadSettings: applySettings took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - applyStart) * 1000))ms")
             }
             
-            print("🟢 [PERF] loadSettings: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
+            print("[PERF] loadSettings: TOTAL took \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - startTime) * 1000))ms")
         } catch {
             print("🔴 [ERROR] Failed to load OpenSky settings: \(error)")
         }
@@ -841,7 +841,7 @@ final class OpenSkyService: ObservableObject {
         let pollingInterval = interval ?? recommendedPollingInterval
         isPolling = true
         
-        print("🟢 [PERF] startPolling: Polling started with interval \(pollingInterval)s")
+        print("[PERF] startPolling: Polling started with interval \(pollingInterval)s")
         
         // Start location updates when polling begins
         locationManager.startLocationUpdates()

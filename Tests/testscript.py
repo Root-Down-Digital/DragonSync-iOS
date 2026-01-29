@@ -562,7 +562,7 @@ def setup_zmq():
 def test_mqtt_connection(config):
     """Test MQTT broker connectivity and publish sample messages"""
     if not MQTT_AVAILABLE:
-        print("❌ MQTT testing requires paho-mqtt: pip3 install paho-mqtt")
+        print("MQTT testing requires paho-mqtt: pip3 install paho-mqtt")
         input("\nPress Enter to continue...")
         return
     
@@ -585,7 +585,7 @@ def test_mqtt_connection(config):
             if rc == 0:
                 print("Connected to MQTT broker successfully!")
             else:
-                print(f"❌ Connection failed with code: {rc}")
+                print(f"Connection failed with code: {rc}")
         
         def on_publish(client, userdata, mid):
             print(f"📤 Message published (ID: {mid})")
@@ -648,7 +648,7 @@ def test_mqtt_connection(config):
         client.disconnect()
         
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
     
     input("\n\nPress Enter to continue...")
 
@@ -670,19 +670,19 @@ def test_tak_connection(config, generator):
             
             print(f"\n🔄 Connecting to {config.tak_host}:{config.tak_port}...")
             sock.connect((config.tak_host, config.tak_port))
-            print("✅ Connected successfully!")
+            print(" Connected successfully!")
             
             print("\n📡 Sending test CoT XML...")
             cot_xml = generator.generate_drone_cot_with_track()
             sock.sendall(cot_xml.encode('utf-8'))
-            print("✅ CoT message sent!")
+            print(" CoT message sent!")
             
             time.sleep(1)
             
             print("📡 Sending system status CoT...")
             status_xml = generator.generate_status_message()
             sock.sendall(status_xml.encode('utf-8'))
-            print("✅ Status message sent!")
+            print(" Status message sent!")
             
             sock.close()
             
@@ -694,41 +694,41 @@ def test_tak_connection(config, generator):
             
             cot_xml = generator.generate_drone_cot_with_track()
             bytes_sent = sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f"✅ CoT message sent! ({bytes_sent} bytes)")
+            print(f" CoT message sent! ({bytes_sent} bytes)")
             print(f"   UID: {generator.current_drone_id}")
             
             time.sleep(0.5)
             
             status_xml = generator.generate_status_message()
             bytes_sent = sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f"✅ Status message sent! ({bytes_sent} bytes)")
+            print(f" Status message sent! ({bytes_sent} bytes)")
             
             time.sleep(0.5)
             
             pilot_xml = generator.generate_pilot_cot()
             bytes_sent = sock.sendto(pilot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f"✅ Pilot message sent! ({bytes_sent} bytes)")
+            print(f" Pilot message sent! ({bytes_sent} bytes)")
             
             time.sleep(0.5)
             
             home_xml = generator.generate_home_cot()
             bytes_sent = sock.sendto(home_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f"✅ Home message sent! ({bytes_sent} bytes)")
+            print(f" Home message sent! ({bytes_sent} bytes)")
             
             sock.close()
         
-        print(f"\n✅ TAK server test completed successfully!")
+        print(f"\n TAK server test completed successfully!")
         print(f"\n💡 Check your TAK clients (ATAK/WinTAK/iTAK) for new contacts")
         print(f"   Look for UIDs starting with: {generator.current_drone_id}")
         
     except socket.timeout:
-        print("\n❌ Connection timeout")
+        print("\nConnection timeout")
     except ConnectionRefusedError:
-        print("\n❌ Connection refused - is TAK server running?")
+        print("\nConnection refused - is TAK server running?")
     except socket.gaierror:
-        print(f"\n❌ Cannot resolve hostname: {config.tak_host}")
+        print(f"\nCannot resolve hostname: {config.tak_host}")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
     
     input("\n\nPress Enter to continue...")
 
@@ -842,16 +842,16 @@ def start_adsb_server(config):
         ReadsbHTTPHandler.simulator = simulator
         
         server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
-        print("\n✅ Server started! Aircraft are now flying in circles.")
+        print("\n Server started! Aircraft are now flying in circles.")
         print("   Press Ctrl+C to stop\n")
         
         server.serve_forever()
         
     except KeyboardInterrupt:
-        print("\n\n🛑 Server stopped")
+        print("\n\nServer stopped")
         server.shutdown()
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         
     input("\nPress Enter to continue...")
 
@@ -938,7 +938,7 @@ def configure_adsb_settings(config):
             config.adsb_port = new_port
             print(f"Port updated to {config.adsb_port}")
         except ValueError:
-            print("❌ Invalid port number")
+            print("Invalid port number")
     
     input("\nPress Enter to continue...")
 
@@ -1003,7 +1003,7 @@ def get_approximate_location():
 def test_opensky_api(config):
     """Test OpenSky Network API and display live aircraft data"""
     if not REQUESTS_AVAILABLE:
-        print("❌ OpenSky testing requires requests: pip3 install requests")
+        print("OpenSky testing requires requests: pip3 install requests")
         input("\nPress Enter to continue...")
         return
     
@@ -1187,32 +1187,32 @@ def test_opensky_api(config):
                                 print(f"Broadcast {len(cot_messages)} messages via ZMQ")
         
         elif response.status_code == 401:
-            print("\n❌ Authentication failed")
+            print("\nAuthentication failed")
             print("   OpenSky API requires authentication for some queries")
             print("   You may need to register at https://opensky-network.org")
         
         elif response.status_code == 404:
-            print("\n❌ API endpoint not found")
+            print("\nAPI endpoint not found")
             print("   Check that you have internet connectivity")
         
         else:
-            print(f"\n❌ API request failed with status code: {response.status_code}")
+            print(f"\nAPI request failed with status code: {response.status_code}")
             print(f"   Response: {response.text}")
     
     except requests.exceptions.Timeout:
-        print("\n❌ Request timed out")
+        print("\nRequest timed out")
         print("   Check your internet connection")
     
     except requests.exceptions.ConnectionError:
-        print("\n❌ Connection error")
+        print("\nConnection error")
         print("   Check your internet connection")
         print("   OpenSky Network may be unavailable")
     
     except ValueError as e:
-        print(f"\n❌ Invalid input: {e}")
+        print(f"\nInvalid input: {e}")
     
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
     
     input("\n\nPress Enter to continue...")
 
@@ -1583,7 +1583,7 @@ def quick_test_mode(config, generator):
                 time.sleep(interval)
                 
         except KeyboardInterrupt:
-            print("\n\n🛑 Test stopped")
+            print("\n\nTest stopped")
             
             # Cleanup multicast/ZMQ
             if config.broadcast_mode == 'multicast':
@@ -1896,7 +1896,7 @@ def main_menu():
                     time.sleep(interval)
 
             except KeyboardInterrupt:
-                print("\n\n🛑 Broadcast stopped")
+                print("\n\nBroadcast stopped")
                 if config.broadcast_mode == 'multicast':
                     cot_sock.close()
                     status_sock.close()
@@ -1910,5 +1910,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\n👋 Program terminated by user")
     except Exception as e:
-        print(f"\n❌ An error occurred: {e}")
+        print(f"\nAn error occurred: {e}")
         

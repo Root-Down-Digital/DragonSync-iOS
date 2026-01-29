@@ -106,7 +106,7 @@ class DataMigrationManager {
             
             logger.info("Migration completed successfully - will not run again")
         } catch {
-            logger.error("❌ Migration failed: \(error.localizedDescription)")
+            logger.error("Migration failed: \(error.localizedDescription)")
             // Don't mark as complete if migration failed - will retry next launch
             throw MigrationError.migrationFailed(error)
         }
@@ -171,7 +171,7 @@ class DataMigrationManager {
                 logger.warning("Some encounters failed to migrate, but others succeeded")
             }
         } catch {
-            logger.error("❌ Final save failed: \(error.localizedDescription)")
+            logger.error("Final save failed: \(error.localizedDescription)")
             throw error
         }
         
@@ -269,7 +269,7 @@ class DataMigrationManager {
             try validateBackupFile(backupURL)
             logger.info("Backup created and verified at: \(backupURL.lastPathComponent)")
         } catch {
-            logger.error("❌ Backup verification failed: \(error.localizedDescription)")
+            logger.error("Backup verification failed: \(error.localizedDescription)")
             // Delete the bad backup
             try? FileManager.default.removeItem(at: backupURL)
             throw MigrationError.backupFailed(NSError(
@@ -327,7 +327,7 @@ class DataMigrationManager {
             }
         }
         
-        logger.error("❌ Data validation failed - could not decode with any strategy")
+        logger.error("Data validation failed - could not decode with any strategy")
         return false
     }
     
@@ -476,7 +476,7 @@ class DataMigrationManager {
             let validated = try decoder.decode([String: DroneEncounter].self, from: jsonData)
             logger.info("Validation passed - \(validated.count) encounters can be decoded")
         } catch {
-            logger.error("❌ Validation failed: \(error.localizedDescription)")
+            logger.error("Validation failed: \(error.localizedDescription)")
             throw MigrationError.backupFailed(NSError(
                 domain: "com.wardragon.migration",
                 code: 1003,
@@ -591,7 +591,7 @@ class DataMigrationManager {
             case .empty:
                 logger.info(" \(backupURL.lastPathComponent): Empty (no encounters)")
             case .corrupted:
-                logger.error("❌ \(backupURL.lastPathComponent): Corrupted - \(result.error ?? "Unknown error")")
+                logger.error("\(backupURL.lastPathComponent): Corrupted - \(result.error ?? "Unknown error")")
             }
         }
         
@@ -676,7 +676,7 @@ class DataMigrationManager {
         do {
             try validateBackupFile(backupURL)
         } catch {
-            logger.error("❌ Backup validation failed: \(error.localizedDescription)")
+            logger.error("Backup validation failed: \(error.localizedDescription)")
             throw MigrationError.decodingFailed("Invalid backup format or backup may be corrupted: \(error.localizedDescription)")
         }
         

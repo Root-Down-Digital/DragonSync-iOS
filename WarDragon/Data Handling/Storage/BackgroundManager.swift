@@ -190,6 +190,23 @@ final class BackgroundManager {
         }
     }
     
+    /// Force end all background tasks (for app termination)
+    func endAllBackgroundTasks() {
+        print("BackgroundManager: Ending all background tasks")
+        
+        // Stop the entire background processing system
+        stopBackgroundProcessing()
+        
+        // Ensure the task is ended
+        endDrainTask()
+        
+        // Cancel the timer
+        bgRefreshTimer?.invalidate()
+        bgRefreshTimer = nil
+        
+        print(" BackgroundManager: All tasks ended")
+    }
+    
     private func disconnectMulticast() {
         group?.cancel()
         group = nil

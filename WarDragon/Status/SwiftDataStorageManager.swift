@@ -403,7 +403,7 @@ class SwiftDataStorageManager: ObservableObject {
             
             logger.info("Successfully deleted all encounters")
         } catch {
-            logger.error("❌ Failed to delete all encounters: \(error.localizedDescription)")
+            logger.error("Failed to delete all encounters: \(error.localizedDescription)")
             
             // Even if deletion failed, try to sync in-memory cache with actual state
             updateInMemoryCache()
@@ -460,7 +460,7 @@ class SwiftDataStorageManager: ObservableObject {
             if let encounter = fetchEncounter(id: possibleId) {
                 encounter.metadata.removeValue(forKey: "doNotTrack")
                 cleared = true
-                logger.info("✅ Cleared do not track for: \(possibleId)")
+                logger.info(" Cleared do not track for: \(possibleId)")
             }
         }
         
@@ -492,7 +492,7 @@ class SwiftDataStorageManager: ObservableObject {
             do {
                 try modelContext?.save()
                 updateInMemoryCache()
-                logger.info("✅ Cleared do not track for \(clearedCount) encounters")
+                logger.info(" Cleared do not track for \(clearedCount) encounters")
             } catch {
                 logger.error("Failed to save after clearing all do not track: \(error.localizedDescription)")
             }
@@ -522,7 +522,7 @@ class SwiftDataStorageManager: ObservableObject {
         do {
             allEncounters = try context.fetch(descriptor)
         } catch {
-            logger.error("❌ Failed to fetch encounters for repair: \(error.localizedDescription)")
+            logger.error("Failed to fetch encounters for repair: \(error.localizedDescription)")
             return
         }
         
@@ -549,12 +549,12 @@ class SwiftDataStorageManager: ObservableObject {
         if repairedCount > 0 {
             do {
                 try context.save()
-                logger.info("✅ Repaired cached stats for \(repairedCount) encounters")
+                logger.info(" Repaired cached stats for \(repairedCount) encounters")
             } catch {
-                logger.error("❌ Failed to save repaired stats: \(error.localizedDescription)")
+                logger.error("Failed to save repaired stats: \(error.localizedDescription)")
             }
         } else {
-            logger.info("✅ All encounters have valid cached stats")
+            logger.info(" All encounters have valid cached stats")
         }
     }
     
@@ -788,10 +788,10 @@ class SwiftDataStorageManager: ObservableObject {
             // Update cache
             updateInMemoryCache()
             
-            logger.info("✅ Deleted \(deleteCount) old aircraft encounters")
+            logger.info(" Deleted \(deleteCount) old aircraft encounters")
             
         } catch {
-            logger.error("❌ Aircraft cleanup failed: \(error.localizedDescription)")
+            logger.error("Aircraft cleanup failed: \(error.localizedDescription)")
         }
     }
     
@@ -816,10 +816,10 @@ class SwiftDataStorageManager: ObservableObject {
             try context.save()
             updateInMemoryCache()
             
-            logger.info("✅ Deleted all aircraft encounters (drones preserved)")
+            logger.info(" Deleted all aircraft encounters (drones preserved)")
             
         } catch {
-            logger.error("❌ Failed to delete aircraft encounters: \(error.localizedDescription)")
+            logger.error("Failed to delete aircraft encounters: \(error.localizedDescription)")
         }
     }
 }

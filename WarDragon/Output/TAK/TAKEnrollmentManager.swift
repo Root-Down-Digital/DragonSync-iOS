@@ -636,7 +636,7 @@ class TAKEnrollmentManager: ObservableObject {
                     
                 } else if httpResponse.statusCode == 401 {
                     // Auth failed - don't try other endpoints
-                    logger.error("❌ Authentication failed - check username and password")
+                    logger.error("Authentication failed - check username and password")
                     throw EnrollmentError.authenticationFailed
                     
                 } else if httpResponse.statusCode == 404 {
@@ -680,7 +680,7 @@ class TAKEnrollmentManager: ObservableObject {
         }
         
         // All endpoints failed
-        logger.error("❌ All enrollment endpoints failed")
+        logger.error("All enrollment endpoints failed")
         logger.error("Attempted TAK Server versions: \(attemptedVersions.joined(separator: ", "))")
         logger.error("Your TAK Server may be using a custom enrollment configuration")
         logger.error("Last error: \(lastError?.localizedDescription ?? "unknown")")

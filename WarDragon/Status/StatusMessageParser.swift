@@ -16,22 +16,22 @@ struct StatusMessageParser {
         logger.debug("🔍 Attempting to parse status JSON of length: \(jsonString.count)")
         
         guard let data = jsonString.data(using: .utf8) else {
-            logger.error("❌ Failed to convert JSON string to Data")
+            logger.error("Failed to convert JSON string to Data")
             return nil
         }
         
         do {
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                logger.error("❌ JSON is not a dictionary")
+                logger.error("JSON is not a dictionary")
                 logger.debug("Raw JSON: \(jsonString.prefix(500))")
                 return nil
             }
             
-            logger.debug("✅ JSON parsed successfully, keys: \(json.keys.joined(separator: ", "))")
+            logger.debug(" JSON parsed successfully, keys: \(json.keys.joined(separator: ", "))")
             
             // Try to extract required fields with detailed logging
             guard let uid = json["uid"] as? String ?? json["id"] as? String ?? json["device_id"] as? String else {
-                logger.error("❌ Missing 'uid' field in JSON")
+                logger.error("Missing 'uid' field in JSON")
                 logger.debug("Available keys: \(json.keys.joined(separator: ", "))")
                 return nil
             }
@@ -64,11 +64,11 @@ struct StatusMessageParser {
                 antStats: antStats
             )
             
-            logger.info("✅ Successfully parsed status message for \(serialNumber)")
+            logger.info(" Successfully parsed status message for \(serialNumber)")
             return message
             
         } catch {
-            logger.error("❌ JSON parsing error: \(error.localizedDescription)")
+            logger.error("JSON parsing error: \(error.localizedDescription)")
             logger.debug("Raw JSON: \(jsonString.prefix(1000))")
             return nil
         }

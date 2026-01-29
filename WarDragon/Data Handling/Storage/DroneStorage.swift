@@ -339,7 +339,7 @@ class DroneStorageManager: ObservableObject {
         encounters.removeAll()
         objectWillChange.send()
         
-        print("✅ Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
+        print(" Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
     }
     
     func saveToStorage() {
@@ -378,9 +378,9 @@ class DroneStorageManager: ObservableObject {
                 print("No encounters found in either SwiftData or UserDefaults (fresh install)")
             }
         } else if encounters.isEmpty && migrationCompleted {
-            print("✅ Migration completed - SwiftData is intentionally empty (all data deleted or no encounters yet)")
+            print(" Migration completed - SwiftData is intentionally empty (all data deleted or no encounters yet)")
         } else {
-            print("✅ Using \(encounters.count) encounters from SwiftData")
+            print(" Using \(encounters.count) encounters from SwiftData")
         }
     }
     

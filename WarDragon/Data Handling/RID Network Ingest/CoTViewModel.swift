@@ -306,7 +306,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 // Linear interpolation
                 let normalizedValue = minRSSI + (clampedSignal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
                 
-                print("DEBUG normalizedRSSI: FPV signal \(fpvSignal) -> \(normalizedValue) dBm")
+//                print("DEBUG normalizedRSSI: FPV signal \(fpvSignal) -> \(normalizedValue) dBm")
                 return normalizedValue
             }
             
@@ -323,7 +323,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 let maxRSSI: Double = -40.0
                 let clampedSignal = min(max(Double(rssi), minSignal), maxSignal)
                 let normalizedValue = minRSSI + (clampedSignal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
-                print("DEBUG normalizedRSSI: Large rssi value \(rssi) -> \(normalizedValue) dBm")
+//                print("DEBUG normalizedRSSI: Large rssi value \(rssi) -> \(normalizedValue) dBm")
                 return normalizedValue
             }
             
@@ -332,7 +332,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 return Double(-rssi)
             }
             
-            print("DEBUG normalizedRSSI: No valid RSSI found for \(uid)")
+//            print("DEBUG normalizedRSSI: No valid RSSI found for \(uid)")
             return nil
         }
         
@@ -694,7 +694,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             Task.detached {
                 await MainActor.run {
                     SwiftDataStorageManager.shared.cleanupOldAircraftEncounters(maxAircraftCount: 200)
-                    print("✅ Aircraft storage cleanup completed on launch")
+                    print("Aircraft storage cleanup completed on launch")
                 }
             }
             
@@ -719,6 +719,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self,
             selector: #selector(handleAppWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppWillTerminate),
+            name: UIApplication.willTerminateNotification,
             object: nil
         )
         // Also add observer for refreshing connections
@@ -758,6 +764,44 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             .store(in: &cancellables)
     }
     
+    deinit {
+        print("🧹 CoTViewModel deinit - final cleanup")
+        
+        // End all background tasks
+        BackgroundManager.shared.endAllBackgroundTasks()
+        
+        // Invalidate all timers
+        inactivityCleanupTimer?.invalidate()
+        backgroundMaintenanceTimer?.invalidate()
+        
+        // Cancel all network connections (non-isolated)
+        multicastConnection?.cancel()
+        cotListener?.cancel()
+        statusListener?.cancel()
+        zmqHandler?.disconnect()
+        
+        // Clean up external connections - capture locally to avoid self in Task
+        let mqtt = mqttClient
+        let tak = takClient
+        let adsb = adsbClient
+        
+        // Disconnect on main actor without capturing self
+        Task { @MainActor in
+            mqtt?.disconnect()
+            tak?.disconnect()
+            adsb?.stop()
+        }
+        
+        // Cancel all Combine subscriptions
+        cancellables.removeAll()
+        adsbCancellables.removeAll()
+        
+        // Remove all observers
+        NotificationCenter.default.removeObserver(self)
+        
+        print("CoTViewModel cleanup completed")
+    }
+    
     /// Update cached settings values - call this when settings change
     @MainActor
     private func updateCachedSettings() {
@@ -786,6 +830,39 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Process any buffered messages from background
         processBackgroundBuffer()
         resumeFromBackground()
+    }
+    
+    @objc private func handleAppWillTerminate() {
+        print("App terminating - cleaning up background tasks and connections")
+        
+        // End all background tasks FIRST
+        BackgroundManager.shared.endAllBackgroundTasks()
+        
+        // Invalidate all timers synchronously
+        inactivityCleanupTimer?.invalidate()
+        inactivityCleanupTimer = nil
+        backgroundMaintenanceTimer?.invalidate()
+        backgroundMaintenanceTimer = nil
+        
+        // Force stop all network connections
+        stopListening()
+        
+        // Cancel all Combine subscriptions
+        cancellables.removeAll()
+        adsbCancellables.removeAll()
+        
+        // Disconnect external clients synchronously - wrapped in Task to avoid main actor errors
+        Task { @MainActor in
+            self.mqttClient?.disconnect()
+            self.takClient?.disconnect()
+            self.adsbClient?.stop()
+            self.latticeClient = nil
+        }
+        
+        // Remove all observers
+        NotificationCenter.default.removeObserver(self)
+        
+        print("App termination cleanup completed")
     }
     
     @objc private func refreshConnections() {
@@ -2088,7 +2165,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Send to StatusViewModel on main thread
         Task { @MainActor in
             self.statusViewModel.addStatusMessage(statusMessage)
-            print("✅ Status message processed successfully and sent to StatusViewModel")
+            print("Status message processed successfully and sent to StatusViewModel")
             print("   Serial: \(serialNumber), CPU: \(String(format: "%.1f", cpuUsage))%, Uptime: \(Int(uptime))s")
         }
     }
@@ -3003,14 +3080,21 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             return 
         }
         
-        print("Stopping all listeners...")
+        print("Stopping all listeners IMMEDIATELY")
         
-        // Clear all flags
+        // Clear all flags synchronously
         isListeningCot = false
         isReconnecting = false
         isStarting = false
         
-        // Remove notification observer
+        // End background tasks FIRST
+        BackgroundManager.shared.endAllBackgroundTasks()
+        
+        // Invalidate timers synchronously
+        backgroundMaintenanceTimer?.invalidate()
+        backgroundMaintenanceTimer = nil
+        
+        // Remove notification observer synchronously
         NotificationCenter.default.removeObserver(
             self,
             name: Notification.Name("RefreshNetworkConnections"),
@@ -3042,23 +3126,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             print("Status listener cancelled")
         }
         
-        // Disconnect ZMQ handler
+        // Disconnect ZMQ handler synchronously
         if let zmqHandler = zmqHandler {
             zmqHandler.disconnect()
             self.zmqHandler = nil
             print("ZMQ: Disconnected")
         }
         
-        // Stop background processing and invalidate timers
+        // Stop background processing
         backgroundManager.stopBackgroundProcessing()
-        backgroundMaintenanceTimer?.invalidate()
-        backgroundMaintenanceTimer = nil
         
-        // Give the system MORE time to fully release network resources
-        // Critical: UDP multicast sockets need time to unbind from port
-        // Increased from 0.5s to 1.0s for more reliable cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            print("All listeners stopped and connections cleaned up.")
+        print("All listeners stopped and background tasks ended")
+        
+        // Give the system a brief moment to release resources
+        // But keep it short for termination scenarios
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            print("Network resources cleanup completed")
         }
     }
     
@@ -3586,7 +3669,7 @@ extension CoTViewModel {
                 try await latticeClient.publish(detection: message)
                 print("Published detection \(message.uid) to Lattice")
             } catch {
-                print("❌ Lattice publish failed: \(error.localizedDescription)")
+                print("Lattice publish failed: \(error.localizedDescription)")
             }
         }
     }

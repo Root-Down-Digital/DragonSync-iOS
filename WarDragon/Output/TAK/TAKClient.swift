@@ -158,7 +158,7 @@ class TAKClient: ObservableObject {
                                 self?.logger.warning("UDP destination unreachable - server may not be running")
                             case .ENETUNREACH, .EHOSTUNREACH:
                                 // Network routing issues
-                                self?.logger.error("❌ Network unreachable: \(error.localizedDescription)")
+                                self?.logger.error("Network unreachable: \(error.localizedDescription)")
                             default:
                                 self?.logger.debug("UDP send warning: \(error.localizedDescription)")
                             }

@@ -199,7 +199,7 @@ extension KeychainManager {
                     
                     print("Migrated \(key) to Keychain")
                 } catch {
-                    print("❌ Failed to migrate \(key): \(error)")
+                    print("Failed to migrate \(key): \(error)")
                 }
             }
         }
