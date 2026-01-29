@@ -289,13 +289,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         /// FPV detectors often use raw ADC values or non-standard scales
         /// This mapping assumes: 1200 = very weak (-100 dBm), 3500 = very strong (-40 dBm)
         var normalizedRSSI: Double? {
-            // If we have a standard RSSI value (negative dBm), return it
-            if let rssi = rssi, rssi < 0 {
-                return Double(rssi)
-            }
-            
-            // If we have FPV signal strength in non-standard range
-            if let fpvSignal = fpvRSSI, fpvSignal > 100 {
+            // PRIORITY 1: Check if this is an FPV detection with fpvRSSI value
+            // FPV signals use 1000-3500 range (raw ADC from RX5808)
+            if isFPVDetection, let fpvSignal = fpvRSSI {
                 // Map FPV signal (1200-3500) to RSSI dBm (-100 to -40)
                 // Linear interpolation: RSSI = minRSSI + (signal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
                 let minSignal: Double = 1200.0  // Weakest FPV signal
@@ -309,20 +305,41 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 // Linear interpolation
                 let normalizedValue = minRSSI + (clampedSignal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
                 
+                print("DEBUG normalizedRSSI: FPV signal \(fpvSignal) -> \(normalizedValue) dBm")
                 return normalizedValue
             }
             
-            // If we have standard RSSI (positive value, convert to negative)
+            // PRIORITY 2: Standard negative RSSI value (already in dBm)
+            if let rssi = rssi, rssi < 0 {
+                return Double(rssi)
+            }
+            
+            // PRIORITY 3: Check if rssi field contains large FPV-style value (shouldn't happen, but fallback)
+            if let rssi = rssi, rssi > 1000 {
+                let minSignal: Double = 1200.0
+                let maxSignal: Double = 3500.0
+                let minRSSI: Double = -100.0
+                let maxRSSI: Double = -40.0
+                let clampedSignal = min(max(Double(rssi), minSignal), maxSignal)
+                let normalizedValue = minRSSI + (clampedSignal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
+                print("DEBUG normalizedRSSI: Large rssi value \(rssi) -> \(normalizedValue) dBm")
+                return normalizedValue
+            }
+            
+            // PRIORITY 4: Standard positive RSSI (convert to negative)
             if let rssi = rssi, rssi > 0 && rssi < 100 {
                 return Double(-rssi)
             }
             
+            print("DEBUG normalizedRSSI: No valid RSSI found for \(uid)")
             return nil
         }
         
         // FPV Detection Properties
         var isFPVDetection: Bool {
-            return uid.hasPrefix("fpv-") && idType.contains("FPV")
+            // Simply check if UID starts with "fpv-" - this is definitive
+            // The idType check is unreliable because it may not be preserved during updates
+            return uid.hasPrefix("fpv-")
         }
         
         var fpvDisplayName: String {

@@ -107,7 +107,9 @@ struct DetectionsStatsView: View {
                     guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
                     
                     // Use normalized RSSI which handles both standard and FPV signal values
-                    guard let rssi = message.normalizedRSSI else { return nil }
+                    guard let rssi = message.normalizedRSSI else {
+                        return nil
+                    }
                     return rssi
                 }
                 
@@ -248,7 +250,7 @@ struct DetectionsStatsView: View {
                         .foregroundStyle(.red.opacity(0.3))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
                 }
-                .chartYScale(domain: -100...(-40))
+                .chartYScale(domain: -128...(-20))
                 .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .minute, count: 2)) { value in
