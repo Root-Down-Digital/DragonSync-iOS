@@ -283,6 +283,43 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         var ridSource: String?
         var ridLookupSuccess: Bool = false
         
+        // MARK: - FPV Signal Conversion
+        
+        /// Converts FPV signal strength values (1200-3500 range) to standard RSSI dBm (-100 to -40)
+        /// FPV detectors often use raw ADC values or non-standard scales
+        /// This mapping assumes: 1200 = very weak (-100 dBm), 3500 = very strong (-40 dBm)
+        var normalizedRSSI: Double? {
+            // If we have a standard RSSI value (negative dBm), return it
+            if let rssi = rssi, rssi < 0 {
+                return Double(rssi)
+            }
+            
+            // If we have FPV signal strength in non-standard range
+            if let fpvSignal = fpvRSSI, fpvSignal > 100 {
+                // Map FPV signal (1200-3500) to RSSI dBm (-100 to -40)
+                // Linear interpolation: RSSI = minRSSI + (signal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
+                let minSignal: Double = 1200.0  // Weakest FPV signal
+                let maxSignal: Double = 3500.0  // Strongest FPV signal
+                let minRSSI: Double = -100.0    // Corresponding weak RSSI
+                let maxRSSI: Double = -40.0     // Corresponding strong RSSI
+                
+                // Clamp signal to valid range
+                let clampedSignal = min(max(fpvSignal, minSignal), maxSignal)
+                
+                // Linear interpolation
+                let normalizedValue = minRSSI + (clampedSignal - minSignal) * (maxRSSI - minRSSI) / (maxSignal - minSignal)
+                
+                return normalizedValue
+            }
+            
+            // If we have standard RSSI (positive value, convert to negative)
+            if let rssi = rssi, rssi > 0 && rssi < 100 {
+                return Double(-rssi)
+            }
+            
+            return nil
+        }
+        
         // FPV Detection Properties
         var isFPVDetection: Bool {
             return uid.hasPrefix("fpv-") && idType.contains("FPV")
@@ -296,6 +333,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         var fpvSignalStrengthFormatted: String {
+            // Use normalized RSSI which converts FPV signals to dBm scale
+            if let normalized = normalizedRSSI {
+                return String(format: "%.0f dBm", normalized)
+            }
+            // Fallback to raw FPV signal value
             if let rssi = fpvRSSI {
                 return String(format: "%.0f", rssi)
             }

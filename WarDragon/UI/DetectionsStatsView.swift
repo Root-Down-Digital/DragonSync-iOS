@@ -105,8 +105,10 @@ struct DetectionsStatsView: View {
                     }
                     
                     guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
-                    guard let rssi = message.rssi else { return nil }
-                    return Double(rssi)
+                    
+                    // Use normalized RSSI which handles both standard and FPV signal values
+                    guard let rssi = message.normalizedRSSI else { return nil }
+                    return rssi
                 }
                 
                 if !rssiValues.isEmpty {
@@ -589,7 +591,7 @@ struct DetectionsStatsView: View {
     
     // Signal strength distribution
     private var droneSignalData: [RangeDataItem] {
-        let signals = cotViewModel.parsedMessages.compactMap { $0.rssi }
+        let signals = cotViewModel.parsedMessages.compactMap { $0.normalizedRSSI }
         guard !signals.isEmpty else { return [] }
         
         let ranges = [
