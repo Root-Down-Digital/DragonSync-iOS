@@ -7,4 +7,10 @@
    <FileRef
       location = "group:Pods/Pods.xcodeproj">
    </FileRef>
+   <FileRef
+      location = "group:PRIVACY_POLICY.md">
+   </FileRef>
+   <FileRef
+      location = "group:PRIVACY.md">
+   </FileRef>
 </Workspace>
