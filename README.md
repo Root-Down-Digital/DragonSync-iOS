@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> **TestFlight beta has expired**. With rapid DragonSync/DroneID development by @alphafox02, I lack resources to continue this project. Open an issue if you'd like to see development resume.
+> **TestFlight beta has expired**. Look out for a new App Store test build soon!
 
 
 <div align="center">
@@ -82,10 +82,18 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 <table>
 <tr>
 <td width="50%">
-<img src="https://github.com/user-attachments/assets/b702c9d5-a034-4cbb-86a4-2c76c4b641b4" width="100%">
+   <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
+  
+  ![CD8FDEBA-3CE5-4318-85B7-FD093C158720_1_201_a](https://github.com/user-attachments/assets/f2d423f6-8a85-4baa-9c0e-8e5ebf66aea9)
+
+
+
 </td>
 <td width="50%">
 <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
+  
+  ![EE346AF2-82AB-43D6-9B86-1ED5C446B5A9_1_201_a](https://github.com/user-attachments/assets/dfa41a2e-d594-4db8-ad9f-3629e1b1644d)
+
 </td>
 </tr>
 <tr>
@@ -103,17 +111,15 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 ## Integrations
 
 **Push Detection Data To:**
-- **REST API** - 7 JSON endpoints on port 8088 (`/drones` `/aircraft` `/status` `/signals` `/config` `/health` `/update/check`)
 - **MQTT** - Home Assistant auto-discovery, TLS support, QoS 0-2
 - **TAK/ATAK** - CoT XML via multicast/TCP/TLS with iOS Keychain .p12
-- **Kismet** - Automatic device tagging via REST API
 - **Lattice DAS** - Structured detection reports to Lattice platform
 - **Webhooks** - Discord, Slack, custom HTTP POST with event filtering
 
 **Receive Data From:**
 - **ZMQ** - Ports 4224 (detections) and 4225 (system status) from DroneID backend
 - **Multicast CoT** - 239.2.3.1:6969 from DragonSync.py wrapper
-- **ADS-B HTTP** - readsb, tar1090, dump1090 JSON feeds
+- **ADS-B** - readsb, tar1090, dump1090 JSON feeds and [OpenSky Network](https://opensky-network.org)
 - **Background Mode** - Continuous monitoring with local notifications
 
 ### Reference 
@@ -135,9 +141,14 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ---
 
-## Option 1: WarDragon Pro (Turnkey)
+## Option 1: WarDragon Pro
 
-Pre-configured system with ANTSDR E200, RX5808, GPS hardware.
+Pre-configured system with ANTSDR E200, RX5808, GPS hardware. 
+
+Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes, but should be working with the latest version on the WarDragon. Be sure to `git pull` in both DroneID and DragonSync directories. 
+
+The hardware may also have other issues working with the app if commands are not used as referenced below. Use the troubleshooting guide to fix common issues. 
+
 
 **Quick Start:**
 1. Power on device
@@ -146,13 +157,24 @@ Pre-configured system with ANTSDR E200, RX5808, GPS hardware.
 4. Start monitoring
 
 **Troubleshooting:**
-```bash
-# Config file: /home/dragon/WarDragon/DragonSync/config.ini
-zmq_host = 0.0.0.0                 # Use if localhost fails
-tak_multicast_addr = 224.0.0.1     # Alternative multicast address
-```
-- System status requires GPS lock (use `--static_gps` flag or wait for fix)
-- SDR temps require DJI firmware on ANTSDR (UHD firmware won't report temps)
+
+No Network Connection/Data: 
+
+A. Toggling the in-app connection off and on is sometimes needed first run for Apple to request connections. 
+
+B. Backend ***connection settings*** that may need modification:
+
+   - Edit the Config file: `/home/dragon/WarDragon/DragonSync/config.ini`
+     - Change if localhost fails to ***listen for zmq**
+     `zmq_host = 0.0.0.0`
+     - Alternative ***multicast*** address 
+     `tak_multicast_addr = 224.0.0.1`  
+
+System Status: 
+
+A. To send data, `wardragon_monitor.py` ***requires GPS lock*** (use `--static_gps` flag or wait for lock)
+
+B. ***SDR temps*** require DJI firmware on ANTSDR (UHD firmware won't report temps)
 
 ---
 
@@ -284,17 +306,14 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
         │                     │      │ HTTP JSON      │
         │  ZMQ: 4224, 4225    │      │ readsb/tar1090 │
         │  CoT: 239.2.3.1     │      └────────────────┘
-        │  API: 8088          │
         └──────────┬──────────┘
                    │
         ┌──────────▼──────────┐
         │   Output Channels   │
         │                     │
-        │  REST API (JSON)    │
         │  MQTT               │
         │  TAK/ATAK (CoT)     │
         │  Webhooks           │
-        │  Kismet Tags        │
         │  Lattice DAS        │
         └─────────────────────┘
 ```
@@ -302,7 +321,7 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 **Data Flow:**
 - **Ingestion**: ZMQ JSON (4224 detections, 4225 status), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
 - **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting
-- **Output**: REST API (8088), MQTT, TAK/ATAK, webhooks, Kismet, Lattice
+- **Output**: MQTT, TAK/ATAK, Webhooks & Lattice
 
 ---
 
@@ -323,20 +342,16 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 ## Connection Protocols
 
 **ZMQ (Recommended)** - Full JSON telemetry with complete detection data
-- Port 4224: Drone and aircraft detections
+- Port 4224: Drone detections
 - Port 4225: System health and status
-
+  
 **Multicast CoT** - TAK/ATAK integration with reduced detail
 - Address: 239.2.3.1:6969
 - Protocol: CoT XML
 
-**ADS-B HTTP** - Aircraft tracking from standard feeds
+**ADS-B HTTP** - Aircraft tracking from standard feeds or OpenSky
 - Endpoints: readsb, tar1090, dump1090
-- Format: JSON
-
-**REST API** - Expose detections via HTTP
-- Port: 8088
-- Format: JSON
+- OpenSky Network: Use with or without an account
 
 **MQTT** - Publish to Home Assistant or broker
 - Formats: JSON, Home Assistant discovery
@@ -364,6 +379,18 @@ Open `WarDragon.xcworkspace` in Xcode 15+.
 ## Credits & License
 
 **Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
+
+**Third-party frameworks used:** 
+```
+SwiftyZeroMQ5
+CocoaMQTT
+CocoaAsyncSocket
+Starscream
+```
+
+API Data Sources: 
+- faa.gov
+- opensky-network.org
 
 **License:** [MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
 
