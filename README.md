@@ -1,6 +1,5 @@
 > [!IMPORTANT]
-> **TestFlight beta has expired**. Look out for a new App Store test build soon!
-
+> **TestFlight beta has expired**.
 
 <div align="center">
   
@@ -82,26 +81,26 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 <table>
 <tr>
 <td width="50%">
-   <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
-  
-  ![CD8FDEBA-3CE5-4318-85B7-FD093C158720_1_201_a](https://github.com/user-attachments/assets/f2d423f6-8a85-4baa-9c0e-8e5ebf66aea9)
-
-
-
-</td>
-<td width="50%">
-<img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
+  <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
   
   ![EE346AF2-82AB-43D6-9B86-1ED5C446B5A9_1_201_a](https://github.com/user-attachments/assets/dfa41a2e-d594-4db8-ad9f-3629e1b1644d)
 
 </td>
+<td width="50%">
+   <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
+  
+  ![CD8FDEBA-3CE5-4318-85B7-FD093C158720_1_201_a](https://github.com/user-attachments/assets/f2d423f6-8a85-4baa-9c0e-8e5ebf66aea9)
+</td>
 </tr>
 <tr>
 <td width="50%">
-<img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="100%">
+  <img src="https://github.com/user-attachments/assets/816debe7-6c05-4c7a-9e88-14a6a4f0989a" width="100%">
 </td>
 <td width="50%">
-<img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="100%">
+  
+  ![EF03E9CF-B175-4B55-BCDE-B6B65A9032A4_4_5005_c](https://github.com/user-attachments/assets/5ee6bb15-584e-4724-bf26-4e6f45e77980)
+
+  <img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="100%">
 </td>
 </tr>
 </table>
@@ -284,11 +283,11 @@ python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
 ┌─────────────────────────────────────────────────────┐
 │               Detection Sources                     │
 │                                                     │
-│  WiFi RID (2.4/5GHz) ─── wifi_receiver.py          │
+│  WiFi RID (2.4/5GHz) ─── wifi_receiver.py           │
 │  Bluetooth RID ────────── sniff_receiver.py         │
-│  SDR Decode ──────────── ANTSDR E200               │
-│  FPV Video ───────────── RX5808 + fpv_mdn_receiver │
-│  ESP32 Standalone ────── Drag0net WiFi 2.4GHz      │
+│  SDR Decode ──────────── ANTSDR E200                │
+│  FPV Video ───────────── RX5808 + fpv_mdn_receiver  │
+│  ESP32 Standalone ────── Drag0net WiFi 2.4GHz       │
 └────────────────────┬────────────────────────────────┘
                      │
         ┌────────────┴────────────┐
@@ -388,11 +387,13 @@ CocoaAsyncSocket
 Starscream
 ```
 
-API Data Sources: 
+**API Data Sources:**
 - faa.gov
 - opensky-network.org
 
-**License:** [MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)
+**[Privacy Policy](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/PRIVACY.md)**
+
+**[MIT License](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/LICENSE.md)**
 
 ---
 
