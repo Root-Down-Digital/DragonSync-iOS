@@ -247,7 +247,6 @@ struct MessageRow: View {
     @ViewBuilder
     private func headerView() -> some View {
         HStack {
-            // Use computed property for encounter info
             let customName = currentEncounter?.customName ?? ""
             let trustStatus = currentEncounter?.trustStatus ?? .unknown
             
@@ -262,6 +261,9 @@ struct MessageRow: View {
                     Text(message.id)
                         .font(.system(.title3, design: .monospaced))
                         .foregroundColor(.primary)
+                        .onAppear {
+                            print("📋 Displaying drone: ID=\(message.id), UID=\(message.uid)")
+                        }
                 }
                 
                 if let caaReg = message.caaRegistration, !caaReg.isEmpty {
@@ -507,11 +509,22 @@ struct MessageRow: View {
                 .frame(height: 80)
             }
         } else {
-            let flightCoords = DroneStorageManager.shared
-                .encounters[message.uid]?.flightPath
-                .map { $0.coordinate } ?? []
-            
             let encounter = DroneStorageManager.shared.encounters[message.uid]
+            
+            let flightCoords: [CLLocationCoordinate2D] = {
+                var coords = encounter?.flightPath.map { $0.coordinate } ?? []
+                
+                // Ensure current position is included in the path
+                if let currentCoord = message.coordinate,
+                   !coords.contains(where: { coord in
+                       abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
+                       abs(coord.longitude - currentCoord.longitude) < 0.00001
+                   }) {
+                    coords.append(currentCoord)
+                }
+                
+                return coords
+            }()
             
             let pilotCoordinate: CLLocationCoordinate2D? = {
                 guard let pilotLatStr = encounter?.metadata["pilotLat"],
@@ -545,7 +558,6 @@ struct MessageRow: View {
                             .resizable()
                             .frame(width: 20, height: 20)
                             .rotationEffect(.degrees(message.headingDeg - 90))
-                            .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                             .foregroundStyle(.blue)
                     }
                 }
@@ -686,9 +698,11 @@ struct MessageRow: View {
                 )
             }
             .task(id: message.id) {
-                // PERFORMANCE: Load data once when row appears, not on every update
                 droneEncounter = DroneStorageManager.shared.encounters[message.uid]
                 droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+                print("📱 MessageRow loaded for \(message.uid) (message.id: \(message.id))")
+                print("   - Has encounter: \(droneEncounter != nil)")
+                print("   - Has signature: \(droneSignature != nil)")
             }
             .contextMenu {
                 Button(action: {

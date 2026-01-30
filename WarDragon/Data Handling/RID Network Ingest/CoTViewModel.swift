@@ -425,20 +425,30 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         var fpvSensorLat: Double?  // Sensor location when detection occurred
         var fpvSensorLon: Double?  // Sensor location when detection occurred
         
-        // Helper
+        // Helper - Heading calculation with priority order
         public var headingDeg: Double {
-            // First try to get heading from track data
+            // Priority 1: Use trackCourse from multicast CoT <track> element
             if let rawTrack = trackCourse,
                rawTrack != "0.0",
                let deg = Double(rawTrack.replacingOccurrences(of: "°", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)) {
                 return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
             }
-              
-              // If no track data, try to calculate from last two known positions
-              // This requires synchronous access, so we'll return 0 if we can't access
-              // The proper solution is to calculate heading when message is received
-              return 0.0
+            
+            // Priority 2: Use direction from ZMQ Location/Vector Message
+            if let directionStr = direction,
+               directionStr != "0.0",
+               let deg = Double(directionStr.replacingOccurrences(of: "°", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return (deg.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+            }
+            
+            // Priority 3: Could calculate from flight path history, but that requires
+            // async/main actor access to DroneStorageManager which isn't safe here
+            // The calculation would happen in the map view instead
+            
+            // Default: 0° (North)
+            return 0.0
         }
 
 

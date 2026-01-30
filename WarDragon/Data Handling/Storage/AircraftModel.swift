@@ -49,9 +49,15 @@ struct Aircraft: Identifiable, Codable, Equatable {
     var emergency: String?  // Emergency/priority status
     var tisb: [String]?  // TIS-B flags
     var lastSeen: Date  // Local timestamp when received
+    var source: AircraftSource = .adsb  // Track whether from ADS-B or OpenSky
     
     // Flight path history (not from readsb, tracked locally)
     var positionHistory: [PositionHistoryPoint] = []
+    
+    enum AircraftSource: String, Codable {
+        case adsb = "ADS-B"
+        case opensky = "OpenSky"
+    }
     
     // MARK: - Position History
     
@@ -171,6 +177,7 @@ struct Aircraft: Identifiable, Codable, Equatable {
         case silType = "sil_type"
         case emergency
         case tisb
+        case source  // Track aircraft source (ADS-B or OpenSky)
     }
     
     // Support for dump1090 original format (uses "altitude" instead of "alt_baro")
@@ -261,6 +268,9 @@ struct Aircraft: Identifiable, Codable, Equatable {
         emergency = try container.decodeIfPresent(String.self, forKey: .emergency)
         tisb = try container.decodeIfPresent([String].self, forKey: .tisb)
         
+        // Try to decode source, default to ADS-B if not present (backward compatibility)
+        source = try container.decodeIfPresent(AircraftSource.self, forKey: .source) ?? .adsb
+        
         lastSeen = Date()
         positionHistory = []  // Initialize empty history
     }
@@ -294,12 +304,13 @@ struct Aircraft: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(silType, forKey: .silType)
         try container.encodeIfPresent(emergency, forKey: .emergency)
         try container.encodeIfPresent(tisb, forKey: .tisb)
+        try container.encode(source, forKey: .source)
         // Note: positionHistory is not encoded (local tracking only)
     }
     
     init(hex: String, lat: Double? = nil, lon: Double? = nil, altitude: Double? = nil,
          track: Double? = nil, groundSpeed: Double? = nil, flight: String? = nil,
-         squawk: String? = nil, rssi: Double? = nil) {
+         squawk: String? = nil, rssi: Double? = nil, source: AircraftSource = .adsb) {
         self.hex = hex
         self.lat = lat
         self.lon = lon
@@ -310,6 +321,7 @@ struct Aircraft: Identifiable, Codable, Equatable {
         self.squawk = squawk
         self.rssi = rssi
         self.lastSeen = Date()
+        self.source = source
         self.positionHistory = []
     }
     
@@ -392,7 +404,7 @@ extension Aircraft {
         var dict: [String: Any] = [
             "hex": hex,
             "type": "aircraft",
-            "source": "adsb",
+            "source": source.rawValue.lowercased(),
             "timestamp": ISO8601DateFormatter().string(from: lastSeen)
         ]
         

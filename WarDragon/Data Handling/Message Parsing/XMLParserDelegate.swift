@@ -408,12 +408,14 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         
         if let basicId = jsonData["Basic ID"] as? [String: Any] {
             let id = basicId["id"] as? String ?? UUID().uuidString
-            // Always use the original ID for the drone identifier
             let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
             let idType = basicId["id_type"] as? String ?? ""
+            let mac = basicId["MAC"] as? String ?? ""
+            
+            print("🔍 PARSER: Creating message - ID: \(droneId), idType: \(idType), MAC: \(mac)")
+            
             var caaReg: String?
             
-            // CAA registration should be stored separately, not as the primary ID
             if idType.contains("CAA") {
                 caaReg = id
                 print("CAA IN XML CONVERSION - storing as registration, not primary ID")
@@ -428,12 +430,12 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             let authMsg = jsonData["Auth Message"] as? [String: Any]
             
             // Get MAC from all possible sources
-            var mac = basicId["MAC"] as? String ?? ""
+            var macAddress = basicId["MAC"] as? String ?? ""
             var manufacturer: String?
             
             // Check if MAC exists and match it against prefixes
-            if !mac.isEmpty {
-                let normalizedMac = mac.uppercased()
+            if !macAddress.isEmpty {
+                let normalizedMac = macAddress.uppercased()
                 for (key, prefixes) in macPrefixesByManufacturer {
                     for prefix in prefixes {
                         let normalizedPrefix = prefix.uppercased()
@@ -447,12 +449,12 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             }
             
             // Fallback to extract MAC from Self-ID Message
-            if mac.isEmpty, let selfIDtext = selfId?["text"] as? String {
-                mac = selfIDtext
+            if macAddress.isEmpty, let selfIDtext = selfId?["text"] as? String {
+                macAddress = selfIDtext
                     .replacingOccurrences(of: "UAV ", with: "")
                     .replacingOccurrences(of: " operational", with: "")
                 
-                let normalizedMac = mac.uppercased()
+                let normalizedMac = macAddress.uppercased()
                 for (key, prefixes) in macPrefixesByManufacturer {
                     for prefix in prefixes {
                         let normalizedPrefix = prefix.uppercased()
@@ -497,7 +499,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.caaRegistration = caaReg
             message.height = String(describing: location?["height_agl"] ?? "0.0")
             message.protocolVersion = location?["protocol_version"] as? String
-            message.mac = mac
+            message.mac = macAddress
             message.rssi = basicId["RSSI"] as? Int ?? 0
             message.manufacturer = manufacturer
             message.freq = jsonData["freq"] as? Double

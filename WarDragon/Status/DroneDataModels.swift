@@ -319,6 +319,20 @@ extension StoredDroneEncounter {
     /// This avoids converting thousands of flight points and signatures
     /// Uses more points for recent activity (last hour) vs old encounters
     func toLegacyLightweight() -> DroneEncounter {
+        // Safety check: ensure we have a valid model context
+        // If the object has been deleted/detached, return a minimal encounter
+        guard modelContext != nil else {
+            return DroneEncounter(
+                id: id,
+                firstSeen: firstSeen,
+                lastSeen: lastSeen,
+                flightPath: [],
+                signatures: [],
+                metadata: [:],
+                macHistory: []
+            )
+        }
+        
         // Determine if this is a recent/active encounter (updated in last hour)
         let isRecentlyActive = Date().timeIntervalSince(lastSeen) < 3600
         
@@ -356,14 +370,18 @@ extension StoredDroneEncounter {
                 )
             }
         
+        // Safely access metadata - it might fault if object was deleted
+        let safeMetadata = metadata
+        let safeMacAddresses = macAddresses
+        
         return DroneEncounter(
             id: id,
             firstSeen: firstSeen,
             lastSeen: lastSeen,
             flightPath: recentFlightPoints,
             signatures: recentSignatures,
-            metadata: metadata,
-            macHistory: Set(macAddresses)
+            metadata: safeMetadata,
+            macHistory: Set(safeMacAddresses)
         )
     }
 }

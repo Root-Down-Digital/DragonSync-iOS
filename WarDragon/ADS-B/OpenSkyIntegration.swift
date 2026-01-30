@@ -1101,7 +1101,8 @@ final class OpenSkyService: ObservableObject {
             altitude: altitudeFeet,
             track: openSkyAircraft.trueTrack,
             groundSpeed: groundSpeedKnots,
-            flight: openSkyAircraft.callsign
+            flight: openSkyAircraft.callsign,
+            source: .opensky  // Mark as OpenSky source
         )
     }
     
@@ -1133,17 +1134,20 @@ final class OpenSkyService: ObservableObject {
                 existingAircraft.cleanupOldHistory(retentionMinutes: retentionMinutes)
                 
                 // Update the new aircraft with the position history
+                // This ensures the displayed aircraft has the most recent history including current position
                 newAircraft.positionHistory = existingAircraft.positionHistory
                 
                 // Store back in dictionary
                 updatedHistory[newAircraft.hex] = existingAircraft
+                
+                // Use the updated aircraft with full history for display
+                processedAircraft.append(newAircraft)
             } else {
                 // New aircraft - record initial position
                 newAircraft.recordPosition()
                 updatedHistory[newAircraft.hex] = newAircraft
+                processedAircraft.append(newAircraft)
             }
-            
-            processedAircraft.append(newAircraft)
         }
         
         // Remove stale aircraft from history

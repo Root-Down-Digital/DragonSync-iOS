@@ -163,24 +163,38 @@ class SwiftDataStorageManager: ObservableObject {
         
         var targetId: String = droneId
         
-        // Check cache first for MAC lookup (fast path)
-        if let mac = message.mac, !mac.isEmpty {
-            if let cachedId = macToIdCache[mac] {
-                targetId = cachedId
-            } else if let existing = findEncounterByMAC(mac, context: context) {
-                targetId = existing.id
-                macToIdCache[mac] = existing.id
-            }
+        logger.info("💾 saveEncounter: Processing \(droneId), idType: \(message.idType), MAC: \(message.mac ?? "none")")
+        
+        if message.idType.contains("Serial Number") {
+            logger.info("💾 Serial Number detected - never consolidate by MAC, using ID: \(droneId)")
         } else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
             if let cachedId = caaToIdCache[caaReg] {
+                logger.info("💾 Found CAA in cache: \(caaReg) -> \(cachedId)")
                 targetId = cachedId
             } else if let existing = findEncounterByCAA(caaReg, context: context) {
+                logger.info("💾 Found CAA in database: \(caaReg) -> \(existing.id)")
                 targetId = existing.id
                 caaToIdCache[caaReg] = existing.id
             }
+        } else if let mac = message.mac, !mac.isEmpty, !message.idType.contains("Serial Number") {
+            if let cachedId = macToIdCache[mac] {
+                if cachedId == droneId || fetchEncounter(id: droneId) == nil {
+                    logger.info("💾 Using MAC from cache: \(mac) -> \(cachedId)")
+                    targetId = cachedId
+                } else {
+                    logger.info("💾 MAC in cache points to different drone (\(cachedId)), using original ID: \(droneId)")
+                }
+            } else if let existing = findEncounterByMAC(mac, context: context), existing.id == droneId {
+                logger.info("💾 Found MAC in database: \(mac) -> \(existing.id)")
+                targetId = existing.id
+                macToIdCache[mac] = existing.id
+            }
         }
         
-        // Fetch or create encounter
+        if targetId != droneId {
+            logger.info("💾 Consolidating \(droneId) -> \(targetId)")
+        }
+        
         let encounter = fetchOrCreateEncounter(id: targetId, message: message, context: context)
         
         // Add flight point if valid
@@ -394,19 +408,43 @@ class SwiftDataStorageManager: ObservableObject {
             // Save the deletions
             try context.save()
             
-            // Clear caches
+            // Clear caches FIRST - before trying to fetch anything
             macToIdCache.removeAll()
             caaToIdCache.removeAll()
             
-            // Update in-memory cache after successful save
-            updateInMemoryCache()
+            // Clear in-memory cache immediately without refetching deleted objects
+            self.encounters.removeAll()
             
+            logger.info("🔄 updateInMemoryCache: Updated cache with 0 encounters")
+            logger.info("   - Drone encounters: 0, IDs: []")
             logger.info("Successfully deleted all encounters")
+            
         } catch {
             logger.error("Failed to delete all encounters: \(error.localizedDescription)")
             
             // Even if deletion failed, try to sync in-memory cache with actual state
-            updateInMemoryCache()
+            // by safely refetching only if context is still valid
+            do {
+                let descriptor = FetchDescriptor<StoredDroneEncounter>()
+                let remaining = try context.fetch(descriptor)
+                
+                // Safely convert only valid encounters
+                var convertedEncounters: [String: DroneEncounter] = [:]
+                for encounter in remaining {
+                    // Skip if modelContext is nil (object was deleted/detached)
+                    guard encounter.modelContext != nil else {
+                        continue
+                    }
+                    convertedEncounters[encounter.id] = encounter.toLegacyLightweight()
+                }
+                
+                self.encounters = convertedEncounters
+                logger.info("🔄 updateInMemoryCache: Updated cache with \(self.encounters.count) encounters after error")
+            } catch {
+                // If refetch also fails, just clear everything
+                self.encounters.removeAll()
+                logger.error("Failed to update cache after deletion error, cleared cache")
+            }
         }
     }
     
@@ -638,9 +676,11 @@ class SwiftDataStorageManager: ObservableObject {
     
     private func fetchOrCreateEncounter(id: String, message: CoTViewModel.CoTMessage?, context: ModelContext) -> StoredDroneEncounter {
         if let existing = fetchEncounter(id: id) {
+            logger.info("💾 Found existing encounter for ID: \(id)")
             return existing
         }
         
+        logger.info("💾 Creating NEW encounter for ID: \(id)")
         let new = StoredDroneEncounter(
             id: id,
             firstSeen: Date(),
@@ -651,6 +691,7 @@ class SwiftDataStorageManager: ObservableObject {
             macAddresses: []
         )
         context.insert(new)
+        logger.info("💾 ✅ Successfully created and inserted new encounter: \(id)")
         return new
     }
     
@@ -731,19 +772,43 @@ class SwiftDataStorageManager: ObservableObject {
     
     private func updateInMemoryCache() {
         let stored = fetchAllEncounters()
-        encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacyLightweight()) })
+        
+        // Filter out any deleted or invalid encounters before conversion
+        var convertedEncounters: [String: DroneEncounter] = [:]
+        for encounter in stored {
+            // Skip if modelContext is nil (object was deleted/detached)
+            guard encounter.modelContext != nil else {
+                logger.warning("Skipping deleted/detached encounter \(encounter.id) during cache update")
+                continue
+            }
+            
+            convertedEncounters[encounter.id] = encounter.toLegacyLightweight()
+        }
+        
+        self.encounters = convertedEncounters
+        logger.info("🔄 updateInMemoryCache: Updated cache with \(self.encounters.count) encounters")
+        let droneEncounters = self.encounters.filter { !$0.key.hasPrefix("aircraft-") }
+        logger.info("   - Drone encounters: \(droneEncounters.count), IDs: \(Array(droneEncounters.keys.prefix(10)))")
     }
     
     private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
+        // Skip if object was deleted
+        guard encounter.modelContext != nil else {
+            logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounter")
+            return
+        }
         encounters[encounter.id] = encounter.toLegacyLightweight()
     }
     
     private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter) {
-        // Always update the full encounter data to keep flight path in sync
-        // This is critical for UI to show updated flight paths
+        // Skip if object was deleted
+        guard encounter.modelContext != nil else {
+            logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounterFast")
+            return
+        }
         encounters[encounter.id] = encounter.toLegacyLightweight()
+        logger.info("🔄 updateInMemoryCacheForEncounterFast: Updated encounter \(encounter.id)")
         
-        // Notify DroneStorageManager to update its cache too
         Task { @MainActor in
             DroneStorageManager.shared.objectWillChange.send()
         }

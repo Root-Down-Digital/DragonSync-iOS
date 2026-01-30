@@ -229,25 +229,58 @@ struct StoredEncountersView: View {
     struct EncounterRow: View {
         let encounter: StoredDroneEncounter
         
+        // Check if object is valid/not deleted
+        private var isValid: Bool {
+            encounter.modelContext != nil
+        }
+        
         // Use cached values from the model - NO direct relationship access
         private var cachedMaxAltitude: Double {
-            encounter.maxAltitude  // Uses cached value or computes safely
+            guard isValid else { return 0 }
+            return encounter.maxAltitude  // Uses cached value or computes safely
         }
         
         private var cachedMaxSpeed: Double {
-            encounter.maxSpeed  // Uses cached value or computes safely
+            guard isValid else { return 0 }
+            return encounter.maxSpeed  // Uses cached value or computes safely
         }
         
         private var cachedAverageRSSI: Double {
-            encounter.averageRSSI  // Uses cached value or computes safely
+            guard isValid else { return 0 }
+            return encounter.averageRSSI  // Uses cached value or computes safely
         }
         
         private var flightPointCount: Int {
+            guard isValid else { return 0 }
             // ALWAYS use cached count - NEVER access relationships
-            encounter.cachedFlightPointCount
+            return encounter.cachedFlightPointCount
+        }
+        
+        // Safe accessor for metadata that won't crash on deleted objects
+        private var caaRegistration: String? {
+            guard isValid else { return nil }
+            return encounter.metadata["caaRegistration"]
+        }
+        
+        private var macAddress: String? {
+            guard isValid else { return nil }
+            return encounter.metadata["mac"]
+        }
+        
+        private var metadata: [String: String] {
+            guard isValid else { return [:] }
+            return encounter.metadata
         }
         
         var body: some View {
+            if !isValid {
+                EmptyView()
+            } else {
+                actualBody
+            }
+        }
+        
+        private var actualBody: some View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     if !encounter.customName.isEmpty {
@@ -263,7 +296,7 @@ struct StoredEncountersView: View {
                             .font(.appHeadline)
                     }
                     
-                    if let caaReg = encounter.metadata["caaRegistration"] {
+                    if let caaReg = caaRegistration {
                         Text("CAA: \(caaReg)")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
@@ -271,12 +304,23 @@ struct StoredEncountersView: View {
                     
                     Spacer()
                     
+                    // Use track course if available, otherwise fall back to direction or heading
+                    let heading: Double = {
+                        if let trackCourse = metadata["trackCourse"], let course = Double(trackCourse) {
+                            return course
+                        } else if let direction = metadata["direction"], let dir = Double(direction) {
+                            return dir
+                        } else {
+                            return encounter.headingDeg
+                        }
+                    }()
+                    
                     Image(systemName: "airplane")
                         .foregroundStyle(.blue)
-                        .rotationEffect(.degrees(encounter.headingDeg - 90))
+                        .rotationEffect(.degrees(heading - 90))
                 }
                 
-                if let mac = encounter.metadata["mac"] {
+                if let mac = metadata["mac"] {
                     Text("MAC: \(mac)")
                         .font(.appCaption)
                 }
@@ -565,20 +609,36 @@ struct StoredEncountersView: View {
                 }
                 
                 Group {
-                    ForEach(pilotItems) { item in
-                        Annotation(item.title, coordinate: item.coordinate) {
-                            Image(systemName: item.systemImageName)
-                                .foregroundStyle(item.tintColor)
+                    // Draw pilot trail if there's movement
+                    let pilotCoordinates = pilotItems.map { $0.coordinate }
+                    if pilotCoordinates.count > 1 {
+                        MapPolyline(coordinates: pilotCoordinates)
+                            .stroke(.orange, lineWidth: 2)
+                    }
+                    
+                    // Only show latest pilot position
+                    if let latestPilot = pilotItems.last {
+                        Annotation("Pilot", coordinate: latestPilot.coordinate) {
+                            Image(systemName: "person.fill")
+                                .foregroundStyle(.orange)
                                 .background(Circle().fill(.white))
                         }
                     }
                 }
                 
                 Group {
-                    ForEach(homeItems) { item in
-                        Annotation(item.title, coordinate: item.coordinate) {
-                            Image(systemName: item.systemImageName)
-                                .foregroundStyle(item.tintColor)
+                    // Draw home trail if there's movement
+                    let homeCoordinates = homeItems.map { $0.coordinate }
+                    if homeCoordinates.count > 1 {
+                        MapPolyline(coordinates: homeCoordinates)
+                            .stroke(.yellow, lineWidth: 2)
+                    }
+                    
+                    // Only show latest home position
+                    if let latestHome = homeItems.last {
+                        Annotation("Home", coordinate: latestHome.coordinate) {
+                            Image(systemName: "house.fill")
+                                .foregroundStyle(.green)
                                 .background(Circle().fill(.white))
                         }
                     }

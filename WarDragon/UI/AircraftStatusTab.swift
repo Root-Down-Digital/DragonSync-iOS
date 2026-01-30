@@ -443,11 +443,11 @@ struct AircraftStatusTab: View {
     }
     
     private var openSkyCount: Int {
-        cotViewModel.aircraftTracks.filter { $0.hex.count == 6 }.count
+        cotViewModel.aircraftTracks.filter { $0.source == .opensky }.count
     }
     
     private var adsbCount: Int {
-        cotViewModel.aircraftTracks.filter { $0.hex.count != 6 }.count
+        cotViewModel.aircraftTracks.filter { $0.source == .adsb }.count
     }
     
     private var hasOpenSkyAircraft: Bool {
@@ -546,11 +546,7 @@ private struct AircraftStatusRow: View {
             HStack(spacing: 8) {
                 Badge(text: aircraft.hex, color: .blue)
                 
-                if aircraft.hex.count == 6 {
-                    Badge(text: "OPENSKY", color: .blue)
-                } else {
-                    Badge(text: "ADS-B", color: .green)
-                }
+                Badge(text: aircraft.source.rawValue, color: aircraft.source == .adsb ? .green : .blue)
                 
                 if aircraft.isEmergency {
                     Badge(text: "EMERGENCY", color: .red)

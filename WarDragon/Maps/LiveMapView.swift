@@ -49,6 +49,17 @@ struct LiveMapView: View {
         let lat = Double(initialMessage.lat) ?? 0
         let lon = Double(initialMessage.lon) ?? 0
         
+        var initialFlightPaths: [String: [(coordinate: CLLocationCoordinate2D, timestamp: Date)]] = [:]
+        for (droneId, encounter) in DroneStorageManager.shared.encounters {
+            let pathPoints = encounter.flightPath.map { point in
+                (coordinate: point.coordinate, timestamp: Date(timeIntervalSince1970: point.timestamp))
+            }
+            if !pathPoints.isEmpty {
+                initialFlightPaths[droneId] = pathPoints
+            }
+        }
+        _flightPaths = State(initialValue: initialFlightPaths)
+        
         // Try to fit all visible targets (drones + aircraft) based on filter mode
         var allCoords: [CLLocationCoordinate2D] = []
         
@@ -232,6 +243,43 @@ struct LiveMapView: View {
         }
     }
     
+    /// Get flight path for a drone and ensure it ends at current position
+    private func getValidFlightPathWithCurrent(for drone: CoTViewModel.CoTMessage) -> [CLLocationCoordinate2D] {
+        var validPath = getValidFlightPath(for: drone.uid)
+        
+        // Ensure path ends at current position
+        if let currentCoord = drone.coordinate, validPath.count > 0 {
+            if let lastPathCoord = validPath.last {
+                let latDiff = abs(currentCoord.latitude - lastPathCoord.latitude)
+                let lonDiff = abs(currentCoord.longitude - lastPathCoord.longitude)
+                // If moved at all, append current position
+                if latDiff > 0.0000001 || lonDiff > 0.0000001 {
+                    validPath.append(currentCoord)
+                }
+            }
+        }
+        
+        return validPath
+    }
+    
+    /// Get flight path for an aircraft and ensure it ends at current position
+    private func getAircraftFlightPathWithCurrent(for aircraft: Aircraft) -> [CLLocationCoordinate2D] {
+        guard let currentCoord = aircraft.coordinate else {
+            return []
+        }
+        
+        var coordinates = aircraft.positionHistory.map { $0.coordinate }
+        
+        if coordinates.isEmpty {
+            return [currentCoord]
+        }
+        
+        // Always replace the last point with current position to ensure perfect alignment
+        coordinates[coordinates.count - 1] = currentCoord
+        
+        return coordinates
+    }
+    
     private func createDroneDetailView(for message: CoTViewModel.CoTMessage) -> DroneDetailView {
         let flightPath = getValidFlightPath(for: message.uid)
         return DroneDetailView(message: message, flightPath: flightPath, cotViewModel: cotViewModel)
@@ -289,18 +337,12 @@ struct LiveMapView: View {
             Map(position: $mapCameraPosition, interactionModes: .all) {
                 // Show drone flight paths only if showing drones and toggle is on
                 if filterMode != .aircraft && showFlightPaths {
-                    ForEach(flightPaths.keys.sorted(), id: \.self) { droneId in
-                        if let path = flightPaths[droneId], path.count > 1 {
-                            // Both lat and lon must be non-zero (use AND not OR)
-                            let validPath = path.filter { pathPoint in
-                                let coord = pathPoint.coordinate
-                                return coord.latitude != 0 && coord.longitude != 0
-                            }
-                            if validPath.count > 1 {
-                                let coordinates = validPath.map { $0.coordinate }
-                                MapPolyline(coordinates: coordinates)
-                                    .stroke(Color.blue, lineWidth: 2)
-                            }
+                    ForEach(uniqueDrones, id: \.uid) { drone in
+                        let validPath = getValidFlightPathWithCurrent(for: drone)
+                        
+                        if validPath.count > 1 {
+                            MapPolyline(coordinates: validPath)
+                                .stroke(Color.blue, lineWidth: 2)
                         }
                     }
                 }
@@ -308,8 +350,9 @@ struct LiveMapView: View {
                 // Show aircraft flight paths only if showing aircraft and toggle is on
                 if filterMode != .drones && showFlightPaths {
                     ForEach(uniqueAircraft, id: \.hex) { aircraft in
-                        if aircraft.positionHistory.count > 1 {
-                            let coordinates = aircraft.positionHistory.map { $0.coordinate }
+                        let coordinates = getAircraftFlightPathWithCurrent(for: aircraft)
+                        
+                        if coordinates.count > 1 {
                             MapPolyline(coordinates: coordinates)
                                 .stroke(Color.green, lineWidth: 2)
                         }
@@ -329,22 +372,18 @@ struct LiveMapView: View {
                                 Annotation("", coordinate: coordinate) {
                                     VStack(spacing: 2) {
                                         ZStack {
-                                            // Background circle for better visibility
                                             Circle()
                                                 .fill(color)
                                                 .frame(width: 30, height: 30)
                                             
-                                            // Drone icon with rotation based on heading
                                             Image(systemName: "airplane")
                                                 .resizable()
                                                 .frame(width: 18, height: 18)
                                                 .foregroundStyle(.white)
                                                 .rotationEffect(.degrees(message.headingDeg - 90))
-                                                .animation(.easeInOut(duration: 0.15), value: message.headingDeg)
                                         }
                                         .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 2)
                                         
-                                        // Drone ID label
                                         Text(message.uid)
                                             .font(.caption2)
                                             .bold()
@@ -361,15 +400,12 @@ struct LiveMapView: View {
                     }
                 }
                 
-                // MARK: - Aircraft Annotations (ADS-B)
-                // Show aircraft only if showing aircraft
                 if filterMode != .drones {
                     ForEach(uniqueAircraft, id: \.hex) { aircraft in
                         if let coordinate = aircraft.coordinate {
                             Annotation(aircraft.displayName, coordinate: coordinate) {
                                 VStack(spacing: 2) {
                                     ZStack {
-                                        // Aircraft icon with rotation
                                         Image(systemName: "airplane")
                                             .resizable()
                                             .frame(width: 24, height: 24)
@@ -378,7 +414,6 @@ struct LiveMapView: View {
                                             .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
                                     }
                                     
-                                    // Callsign/Hex label
                                     Text(aircraft.displayName)
                                         .font(.caption2)
                                         .bold()
@@ -389,7 +424,6 @@ struct LiveMapView: View {
                                         .background(.ultraThinMaterial)
                                         .cornerRadius(4)
                                     
-                                    // Altitude
                                     if let alt = aircraft.altitudeFeet {
                                         Text("\(alt)ft")
                                             .font(.caption2)

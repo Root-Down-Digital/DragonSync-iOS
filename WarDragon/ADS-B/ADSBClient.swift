@@ -243,7 +243,8 @@ class ADSBClient: ObservableObject {
             let decoder = JSONDecoder()
             let readsbResponse = try decoder.decode(ReadsbResponse.self, from: data)
             
-            // Update aircraft history with new positions
+            // Update aircraft history with new positions and build updated aircraft array
+            var updatedAircraft: [Aircraft] = []
             for var aircraft in readsbResponse.aircraft {
                 // Get existing aircraft from history or create new entry
                 if var existingAircraft = aircraftHistory[aircraft.hex] {
@@ -265,15 +266,16 @@ class ADSBClient: ObservableObject {
                     // Cleanup old history based on retention time
                     existingAircraft.cleanupOldHistory(retentionMinutes: configuration.flightPathRetentionMinutes)
                     
-                    // Copy history to current aircraft
-                    aircraft.positionHistory = existingAircraft.positionHistory
-                    
                     // Update in history
                     aircraftHistory[aircraft.hex] = existingAircraft
+                    
+                    // Use the updated aircraft with full history
+                    updatedAircraft.append(existingAircraft)
                 } else {
                     // New aircraft - initialize with current position
                     aircraft.recordPosition()
                     aircraftHistory[aircraft.hex] = aircraft
+                    updatedAircraft.append(aircraft)
                 }
             }
             
@@ -284,8 +286,8 @@ class ADSBClient: ObservableObject {
                 aircraft.lastSeen > cutoffDate
             }
             
-            // Filter aircraft based on configuration
-            var filteredAircraft = readsbResponse.aircraft.filter { $0.coordinate != nil }
+            // Filter aircraft based on configuration (use updatedAircraft with history instead of readsbResponse.aircraft)
+            var filteredAircraft = updatedAircraft.filter { $0.coordinate != nil }
             
             // Distance filtering if enabled and user location is available
             if let maxDistance = configuration.maxDistance,
@@ -324,14 +326,7 @@ class ADSBClient: ObservableObject {
                     .map { $0.aircraft }
             }
             
-            // Attach position history from aircraftHistory to filtered aircraft
-            filteredAircraft = filteredAircraft.map { aircraft in
-                var updatedAircraft = aircraft
-                if let historicalAircraft = aircraftHistory[aircraft.hex] {
-                    updatedAircraft.positionHistory = historicalAircraft.positionHistory
-                }
-                return updatedAircraft
-            }
+            // Aircraft already have position history from aircraftHistory - no need to re-attach
             
             // Update state
             aircraft = filteredAircraft

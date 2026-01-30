@@ -87,7 +87,6 @@ struct AircraftRow: View {
                             } icon: {
                                 Image(systemName: "location.north.fill")
                                     .font(.caption2)
-                                    .rotationEffect(.degrees(track))
                             }
                         }
                     }

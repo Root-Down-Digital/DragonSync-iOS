@@ -73,7 +73,9 @@ class DroneMessageGenerator:
         
         # Track drone states for realistic movement and consistent IDs
         self.drone_states = {}
-        self.current_drone_id = f"{random.randint(100, 100)}"
+        self.drone_ids = ["100", "101", "102"]
+        self.current_drone_index = 0
+        self.current_drone_id = self.drone_ids[0]
 
 
     def random_mac(self):
@@ -118,13 +120,14 @@ class DroneMessageGenerator:
         
         # Calculate course (direction of movement)
         course = (math.degrees(math.atan2(dx, dy))) % 360
-    #       course = random.randint(0,360)
+        
+        self.current_drone_index = (self.current_drone_index + 1) % len(self.drone_ids)
+        uid = self.drone_ids[self.current_drone_index]
+        self.current_drone_id = uid
+        
         mac = self.random_mac()
-        # Fixed values
-    #       mac = "E0:4E:7A:9A:67:99"
         rssi = -60 + int(10 * math.sin(t))
-        desc = f"DJI {random.randint(100, 199)}"
-        uid = f"{random.randint(100, 100)}"
+        desc = f"Anzu Raptor {uid}"
         
         # NEW BACKEND/ENRICHMENT FIELDS
         freq = round(random.uniform(5725000000, 5875000000), 2)  # Frequency in Hz (5.8GHz FPV band)
@@ -156,10 +159,18 @@ class DroneMessageGenerator:
         """Generate separate pilot CoT message matching DragonSync format"""
         time_str, start_str, stale_str = self.get_timestamps()
         
-        # Pilot stays in relatively fixed location
-        pilot_lat = (self.lat_range[0] + self.lat_range[1]) / 2 + random.uniform(-0.001, 0.001)
-        pilot_lon = (self.lon_range[0] + self.lon_range[1]) / 2 + random.uniform(-0.001, 0.001)
-        pilot_alt = 50 + random.uniform(-5, 5)  # Ground level with some variation
+        # Pilot moves in a walking pattern (slow, realistic movement)
+        # Use slower time scale so pilot moves visibly but slowly
+        t = time.time() * 0.02  # Much slower than drone
+        
+        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
+        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
+        
+        # Pilot walks in a small oval pattern (realistic for someone tracking a drone)
+        # Movement radius: ~200-300 meters
+        pilot_lat = center_lat + 0.002 * math.sin(t)  # ~200m north-south
+        pilot_lon = center_lon + 0.002 * math.cos(t * 0.7)  # ~200m east-west
+        pilot_alt = 50 + 2 * math.sin(t * 0.3)  # Small altitude changes (terrain)
         
         # Extract base ID from drone ID
         base_id = self.current_drone_id.replace("drone-", "")
@@ -180,10 +191,18 @@ class DroneMessageGenerator:
         """Generate separate home/takeoff point CoT message matching DragonSync format"""
         time_str, start_str, stale_str = self.get_timestamps()
         
-        # Home point is fixed
-        home_lat = (self.lat_range[0] + self.lat_range[1]) / 2
-        home_lon = (self.lon_range[0] + self.lon_range[1]) / 2
-        home_alt = 100  # Fixed takeoff altitude
+        # Home point moves slowly (pilot might relocate their "home" base)
+        # Use very slow time scale - home point shouldn't move much
+        t = time.time() * 0.01  # Even slower than pilot
+        
+        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
+        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
+        
+        # Home point drifts slowly (pilot might be in a vehicle or moving base station)
+        # Very small movement: ~100m over long period
+        home_lat = center_lat + 0.001 * math.sin(t)  # ~100m drift
+        home_lon = center_lon + 0.001 * math.cos(t)  # ~100m drift
+        home_alt = 100 + 5 * math.sin(t * 0.5)  # Minor altitude variations
         
         # Extract base ID from drone ID
         base_id = self.current_drone_id.replace("drone-", "")
@@ -391,14 +410,20 @@ class DroneMessageGenerator:
         speed = round(15 + 5 * math.cos(t), 1)
         vspeed = round(2.5 * math.cos(0.5 * t), 2)
         
-        # Calculate course: direction of motion, then turn 90° left
-        course = (math.degrees(math.atan2(let_dx, let_dy)) - 90) % 360
+        # Calculate course: direction of motion
+        dx = math.cos(t * 2) * radius_lon
+        dy = math.cos(t) * radius_lat
+        course = (math.degrees(math.atan2(dx, dy))) % 360
+        
+        # Cycle through drone IDs for multiple drones
+        self.current_drone_index = (self.current_drone_index + 1) % len(self.drone_ids)
+        uid = self.drone_ids[self.current_drone_index]
+        self.current_drone_id = uid
         
         # Other fields
         mac = self.random_mac()
         rssi = -60 + int(10 * math.sin(t))
-        desc = f"DJI {random.randint(100, 199)}"
-        uid = f"{random.randint(103, 103)}"
+        desc = f"DJI {uid}"
         
         message = {
             "index": 10,

@@ -565,13 +565,13 @@ struct AircraftOverviewCard: View {
         cotViewModel.aircraftTracks.filter { !$0.isStale }
     }
     
-    // Separate OpenSky aircraft (ICAO24 is 6 chars) from ADS-B (other hex formats)
+    // Separate OpenSky aircraft from ADS-B
     private var openSkyAircraft: [Aircraft] {
-        activeAircraft.filter { $0.hex.count == 6 }
+        activeAircraft.filter { $0.source == .opensky }
     }
     
     private var adsbAircraft: [Aircraft] {
-        activeAircraft.filter { $0.hex.count != 6 }
+        activeAircraft.filter { $0.source == .adsb }
     }
     
     private var cardTitle: String {
