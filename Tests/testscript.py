@@ -73,9 +73,18 @@ class DroneMessageGenerator:
         
         # Track drone states for realistic movement and consistent IDs
         self.drone_states = {}
-        self.drone_ids = ["100", "101", "102"]
+        # Realistic serial numbers matching actual drone formats
+        self.drone_ids = [
+            "112624150A90E3AE1EC0",  # ESP32 format (20 chars hex)
+            "3NZDJ1Y0010ABC",         # DJI format
+            "1869600XXYYZZ"           # Ruko/Generic format
+        ]
         self.current_drone_index = 0
         self.current_drone_id = self.drone_ids[0]
+        
+        # CAA registration IDs for testing
+        self.caa_ids = ["123456", "789ABC", "XYZ999"]
+        self.current_caa_index = 0
 
 
     def random_mac(self):
@@ -151,7 +160,7 @@ class DroneMessageGenerator:
         
         # Debug: Print track info periodically
         if int(time.time() * 10) % 50 == 0:
-            print(f"  📍 Drone XML: UID={uid} Lat={lat:.6f} Lon={lon:.6f} Course={course:.1f}° Speed={speed:.1f}m/s")
+            print(f"  DEBUG:  Drone XML: UID={uid} Lat={lat:.6f} Lon={lon:.6f} Course={course:.1f}° Speed={speed:.1f}m/s")
         
         return xml
 
@@ -618,13 +627,13 @@ def test_mqtt_connection(config):
         client.on_connect = on_connect
         client.on_publish = on_publish
         
-        print("\n🔄 Connecting...")
+        print("\nDEBUG:  Connecting...")
         client.connect(config.mqtt_broker, config.mqtt_port, 60)
         client.loop_start()
         time.sleep(2)
         
         # Publish test messages
-        print("\n📡 Publishing test messages...")
+        print("\nDEBUG:  Publishing test messages...")
         
         # 1. Test drone detection
         drone_topic = f"{config.mqtt_base_topic}/drones/TEST_DRONE"
@@ -693,18 +702,18 @@ def test_tak_connection(config, generator):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10)
             
-            print(f"\n🔄 Connecting to {config.tak_host}:{config.tak_port}...")
+            print(f"\nDEBUG:  Connecting to {config.tak_host}:{config.tak_port}...")
             sock.connect((config.tak_host, config.tak_port))
             print(" Connected successfully!")
             
-            print("\n📡 Sending test CoT XML...")
+            print("\nDEBUG:  Sending test CoT XML...")
             cot_xml = generator.generate_drone_cot_with_track()
             sock.sendall(cot_xml.encode('utf-8'))
             print(" CoT message sent!")
             
             time.sleep(1)
             
-            print("📡 Sending system status CoT...")
+            print("DEBUG:  Sending system status CoT...")
             status_xml = generator.generate_status_message()
             sock.sendall(status_xml.encode('utf-8'))
             print(" Status message sent!")
@@ -714,7 +723,7 @@ def test_tak_connection(config, generator):
         elif config.tak_protocol == 'udp':
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             
-            print(f"\n📡 Sending via UDP to {config.tak_host}:{config.tak_port}...")
+            print(f"\nDEBUG:  Sending via UDP to {config.tak_host}:{config.tak_port}...")
             print("(UDP is connectionless - no handshake needed)\n")
             
             cot_xml = generator.generate_drone_cot_with_track()
@@ -858,7 +867,7 @@ class ReadsbHTTPHandler(BaseHTTPRequestHandler):
 def start_adsb_server(config):
     """Start simulated ADS-B readsb HTTP server with persistent aircraft"""
     clear_screen()
-    print("✈️  Starting Persistent ADS-B Simulator")
+    print("DEBUG:   Starting Persistent ADS-B Simulator")
     print(f"\nEndpoint: http://localhost:{config.adsb_port}/data/aircraft.json")
     
     try:
@@ -887,7 +896,7 @@ def start_adsb_server(config):
 def configure_mqtt_settings(config):
     """Configure MQTT broker settings"""
     clear_screen()
-    print("🔧 MQTT Configuration")
+    print("DEBUG:  MQTT Configuration")
     print(f"\nCurrent Settings:")
     print(f"  Broker: {config.mqtt_broker}:{config.mqtt_port}")
     print(f"  Base Topic: {config.mqtt_base_topic}")
@@ -921,7 +930,7 @@ def configure_mqtt_settings(config):
 def configure_tak_settings(config):
     """Configure TAK server settings"""
     clear_screen()
-    print("🔧 TAK Server Configuration")
+    print("DEBUG:  TAK Server Configuration")
     print(f"\nCurrent Settings:")
     print(f"  Server: {config.tak_host}:{config.tak_port}")
     print(f"  Protocol: {config.tak_protocol.upper()}")
@@ -948,7 +957,7 @@ def configure_tak_settings(config):
 def configure_adsb_settings(config):
     """Configure ADS-B settings"""
     clear_screen()
-    print("🔧 ADS-B Configuration")
+    print("DEBUG:  ADS-B Configuration")
     print(f"\nCurrent Settings:")
     print(f"  HTTP Port: {config.adsb_port}")
     
@@ -970,7 +979,7 @@ def configure_adsb_settings(config):
 def configure_opensky_settings(config):
     """Configure OpenSky Network settings"""
     clear_screen()
-    print("🔧 OpenSky Network Configuration")
+    print("DEBUG:  OpenSky Network Configuration")
     print(f"\nCurrent Settings:")
     print(f"  Username: {config.opensky_username or 'Not set (anonymous)'}")
     print(f"  Password: {'*' * len(config.opensky_password) if config.opensky_password else 'Not set'}")
@@ -1033,7 +1042,7 @@ def test_opensky_api(config):
         return
     
     clear_screen()
-    print("✈️  OpenSky Network API Test")
+    print("DEBUG:   OpenSky Network API Test")
     print("\nOpenSky provides LIVE aircraft data from real ADS-B receivers worldwide.")
     print("Note: This is separate from the local ADS-B readsb simulator.\n")
     
@@ -1078,7 +1087,7 @@ def test_opensky_api(config):
         # API documentation: https://openskynetwork.github.io/opensky-api/rest.html
         url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
         
-        print(f"\n🔄 Fetching data from OpenSky Network...")
+        print(f"\nDEBUG:  Fetching data from OpenSky Network...")
         print(f"   URL: {url}")
         
         # Make API request with authentication if available
@@ -1118,7 +1127,7 @@ def test_opensky_api(config):
                     velocity = state[9]
                     true_track = state[10]
                     
-                    print(f"\n✈️  Aircraft #{i+1}:")
+                    print(f"\nDEBUG:   Aircraft #{i+1}:")
                     print(f"   ICAO24: {icao24}")
                     print(f"   Callsign: {callsign}")
                     print(f"   Country: {origin_country}")
@@ -1149,9 +1158,9 @@ def test_opensky_api(config):
                 print("\n" + "="*80)
                 
                 # Offer to convert to CoT format
-                convert = input("\n📡 Convert to CoT XML format? (y/n): ").lower()
+                convert = input("\nDEBUG:  Convert to CoT XML format? (y/n): ").lower()
                 if convert == 'y':
-                    print("\n🔄 Generating CoT messages...")
+                    print("\nDEBUG:  Generating CoT messages...")
                     cot_messages = []
                     
                     for state in data['states']:
@@ -1319,7 +1328,7 @@ def quick_test_mode(config, generator):
         adsb_thread = None
         
         if choice == '5':
-            print("\n🔧 Setting up simulated services...")
+            print("\nDEBUG:  Setting up simulated services...")
             
             # Setup MQTT if available
             if MQTT_AVAILABLE:
@@ -1358,7 +1367,7 @@ def quick_test_mode(config, generator):
                 adsb_server = None
         
         print(f"\n⚙️  Using {config.broadcast_mode.upper()} mode")
-        print(f"📡 Broadcasting to: {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
+        print(f"DEBUG:  Broadcasting to: {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
         
         if choice == '5':
             print(f"\n🔌 Additional Services Active:")
@@ -1661,7 +1670,7 @@ def main_menu():
         print("\n🚀 QUICK TEST (No External Services Required)")
         print("  X. Quick Test Mode - Test App Directly")
         
-        print("\n📡 MULTICAST/ZMQ TESTS")
+        print("\nDEBUG:  MULTICAST/ZMQ TESTS")
         print("  1. Multicast: DragonSync Drone CoT XML (with Track)")
         print("  2. Multicast: DragonSync Pilot CoT XML")
         print("  3. Multicast: DragonSync Home/Takeoff CoT XML")
@@ -1677,7 +1686,7 @@ def main_menu():
         print("\n🎯 TAK SERVER TESTS")
         print("  T. Test TAK Server Connection & Send CoT")
         
-        print("\n✈️  ADS-B TESTS")
+        print("\nDEBUG:   ADS-B TESTS")
         print("  A. Start ADS-B Readsb Simulator (Local HTTP Server)")
         
         print("\n🌐 OPENSKY NETWORK TESTS")
@@ -1773,7 +1782,7 @@ def main_menu():
                         else:
                             cot_sock.send_string(message)
                             
-                        print(f"📡 Sent DragonSync Drone CoT (with track) at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent DragonSync Drone CoT (with track) at {time.strftime('%H:%M:%S')}")
                         print(f"Message preview: {message[:200]}...\n")
                     
                     elif choice == '2':  # DragonSync Pilot CoT
@@ -1784,7 +1793,7 @@ def main_menu():
                         else:
                             cot_sock.send_string(message)
                             
-                        print(f"📡 Sent DragonSync Pilot CoT at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent DragonSync Pilot CoT at {time.strftime('%H:%M:%S')}")
                         print(f"Message preview: {message[:200]}...\n")
                     
                     elif choice == '3':  # DragonSync Home CoT
@@ -1795,7 +1804,7 @@ def main_menu():
                         else:
                             cot_sock.send_string(message)
                             
-                        print(f"📡 Sent DragonSync Home/Takeoff CoT at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent DragonSync Home/Takeoff CoT at {time.strftime('%H:%M:%S')}")
                         print(f"Message preview: {message[:200]}...\n")
                     
                     elif choice == '4':  # DragonSync Status with Track
@@ -1806,7 +1815,7 @@ def main_menu():
                         else:
                             status_sock.send_string(message)
                             
-                        print(f"📡 Sent DragonSync Status (with track) at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent DragonSync Status (with track) at {time.strftime('%H:%M:%S')}")
                         print(f"Message preview: {message[:200]}...\n")
                     
                     elif choice == '5':  # ESP32 Format
@@ -1817,7 +1826,7 @@ def main_menu():
                         else:
                             cot_sock.send_string(message)
                             
-                        print(f"📡 Sent ESP32 format message at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent ESP32 format message at {time.strftime('%H:%M:%S')}")
                     
                     elif choice == '6':  # FPV Detection Messages
                         init_message = generator.generate_fpv_detection_message()
@@ -1827,7 +1836,7 @@ def main_menu():
                         else:
                             cot_sock.send_string(init_message)
                             
-                        print(f"📡 Sent FPV Detection message at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent FPV Detection message at {time.strftime('%H:%M:%S')}")
                         
                         try:
                             update_count = 0
@@ -1841,7 +1850,7 @@ def main_menu():
                                     cot_sock.send_string(update_message)
                                     
                                 update_count += 1
-                                print(f"📡 Sent FPV Update message #{update_count} at {time.strftime('%H:%M:%S')}")
+                                print(f"DEBUG:  Sent FPV Update message #{update_count} at {time.strftime('%H:%M:%S')}")
                         except KeyboardInterrupt:
                             break
                     
@@ -1880,7 +1889,7 @@ def main_menu():
                         else:
                             status_sock.send_string(status_message)
                             
-                        print(f"📡 Sent Complete DragonSync XML Message Set at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent Complete DragonSync XML Message Set at {time.strftime('%H:%M:%S')}")
                         print(f"   ✓ Drone CoT XML (with track)")
                         print(f"   ✓ Pilot CoT XML")
                         print(f"   ✓ Home CoT XML") 
@@ -1913,7 +1922,7 @@ def main_menu():
                             else:
                                 cot_sock.send_string(fpv_update)
                         
-                        print(f"📡 Sent Complete ESP32/ZMQ JSON Message Set at {time.strftime('%H:%M:%S')}")
+                        print(f"DEBUG:  Sent Complete ESP32/ZMQ JSON Message Set at {time.strftime('%H:%M:%S')}")
                         print(f"   ✓ ESP32 RID Telemetry JSON")
                         print(f"   ✓ FPV Detection JSON")
                         print(f"   ✓ FPV Update JSON\n")

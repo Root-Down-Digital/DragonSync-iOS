@@ -154,7 +154,6 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         
-        // Ensure timer is running
         ensureTimerStarted()
         
         let lat = Double(message.lat) ?? 0
@@ -163,36 +162,68 @@ class SwiftDataStorageManager: ObservableObject {
         
         var targetId: String = droneId
         
-        logger.info("💾 saveEncounter: Processing \(droneId), idType: \(message.idType), MAC: \(message.mac ?? "none")")
+        logger.info("saveEncounter: Processing \(droneId), idType: \(message.idType), MAC: \(message.mac ?? "none")")
         
         if message.idType.contains("Serial Number") {
-            logger.info("💾 Serial Number detected - never consolidate by MAC, using ID: \(droneId)")
+            logger.info("Serial Number detected - use serial \(droneId) as unique ID")
+            targetId = droneId
+        
+            if let mac = message.mac, !mac.isEmpty {
+                if let existingIdForMac = macToIdCache[mac], existingIdForMac != droneId {
+                    logger.warning("MAC \(mac) was previously seen with serial \(existingIdForMac), now seen with \(droneId)")
+                } else {
+                    macToIdCache[mac] = droneId
+                    logger.info("Cached MAC for serial: \(mac) -> \(droneId)")
+                }
+            }
         } else if message.idType.contains("CAA"), let caaReg = message.caaRegistration {
             if let cachedId = caaToIdCache[caaReg] {
-                logger.info("💾 Found CAA in cache: \(caaReg) -> \(cachedId)")
+                logger.info("Found CAA in cache: \(caaReg) -> \(cachedId)")
                 targetId = cachedId
             } else if let existing = findEncounterByCAA(caaReg, context: context) {
-                logger.info("💾 Found CAA in database: \(caaReg) -> \(existing.id)")
+                logger.info("Found CAA in database: \(caaReg) -> \(existing.id)")
                 targetId = existing.id
                 caaToIdCache[caaReg] = existing.id
             }
-        } else if let mac = message.mac, !mac.isEmpty, !message.idType.contains("Serial Number") {
+            
+            // Track MAC for this CAA registration
+            if let mac = message.mac, !mac.isEmpty {
+                macToIdCache[mac] = targetId
+            }
+        } else if let mac = message.mac, !mac.isEmpty {
+            // For non-serial, non-CAA IDs (like manufacturer serials), use MAC for consolidation
             if let cachedId = macToIdCache[mac] {
-                if cachedId == droneId || fetchEncounter(id: droneId) == nil {
-                    logger.info("💾 Using MAC from cache: \(mac) -> \(cachedId)")
+                let existingEncounter = fetchEncounter(id: cachedId)
+                let droneEncounter = fetchEncounter(id: droneId)
+                
+                if droneEncounter == nil {
+                    logger.info("Using MAC from cache: \(mac) -> \(cachedId) (no existing encounter for \(droneId))")
                     targetId = cachedId
+                } else if existingEncounter != nil, cachedId == droneId {
+                    logger.info("MAC maps to same drone: \(mac) -> \(droneId)")
+                    targetId = droneId
                 } else {
-                    logger.info("💾 MAC in cache points to different drone (\(cachedId)), using original ID: \(droneId)")
+                    logger.info("MAC conflict: \(mac) cached to \(cachedId) but drone \(droneId) exists - treating as separate drones")
+                    targetId = droneId
                 }
-            } else if let existing = findEncounterByMAC(mac, context: context), existing.id == droneId {
-                logger.info("💾 Found MAC in database: \(mac) -> \(existing.id)")
-                targetId = existing.id
-                macToIdCache[mac] = existing.id
+            } else if let existing = findEncounterByMAC(mac, context: context) {
+                if existing.id == droneId {
+                    logger.info("Found MAC in database: \(mac) -> \(existing.id)")
+                    targetId = existing.id
+                    macToIdCache[mac] = existing.id
+                } else {
+                    logger.info("MAC conflict: \(mac) exists for \(existing.id) but processing \(droneId) - treating as separate drones")
+                    targetId = droneId
+                }
+            } else {
+                // First time seeing this MAC, cache it
+                macToIdCache[mac] = droneId
+                logger.info("New MAC cached: \(mac) -> \(droneId)")
             }
         }
         
         if targetId != droneId {
-            logger.info("💾 Consolidating \(droneId) -> \(targetId)")
+            logger.info("Consolidating \(droneId) -> \(targetId)")
         }
         
         let encounter = fetchOrCreateEncounter(id: targetId, message: message, context: context)
@@ -222,14 +253,14 @@ class SwiftDataStorageManager: ObservableObject {
                 if distance > 0.1 || timeGap > 2 {
                     encounter.flightPoints.append(newPoint)
                     didAddPoint = true
-                    print("✈️ FLIGHT PATH: Added point #\(encounter.flightPoints.count) for \(droneId) - Distance: \(String(format: "%.2f", distance))m, TimeGap: \(String(format: "%.1f", timeGap))s")
+                    print("DEBUG:  FLIGHT PATH: Added point #\(encounter.flightPoints.count) for \(droneId) - Distance: \(String(format: "%.2f", distance))m, TimeGap: \(String(format: "%.1f", timeGap))s")
                 } else {
                     print("⏭️ FLIGHT PATH: Skipped point for \(droneId) - Distance: \(String(format: "%.2f", distance))m, TimeGap: \(String(format: "%.1f", timeGap))s (too close)")
                 }
             } else {
                 encounter.flightPoints.append(newPoint)
                 didAddPoint = true
-                print("✈️ FLIGHT PATH: Added FIRST point for \(droneId)")
+                print("DEBUG:  FLIGHT PATH: Added FIRST point for \(droneId)")
             }
         }
         
@@ -330,7 +361,7 @@ class SwiftDataStorageManager: ObservableObject {
             Task { @MainActor in
                 if let legacyEncounter = self.encounters[encounter.id] {
                     DroneStorageManager.shared.updateEncounterInCache(legacyEncounter)
-//                    print("🔄 Updated DroneStorageManager cache for \(encounter.id) - Flight path now has \(legacyEncounter.flightPath.count) points")
+//                    print("DEBUG:  Updated DroneStorageManager cache for \(encounter.id) - Flight path now has \(legacyEncounter.flightPath.count) points")
                 }
             }
         }
@@ -415,7 +446,7 @@ class SwiftDataStorageManager: ObservableObject {
             // Clear in-memory cache immediately without refetching deleted objects
             self.encounters.removeAll()
             
-            logger.info("🔄 updateInMemoryCache: Updated cache with 0 encounters")
+            logger.info("DEBUG:  updateInMemoryCache: Updated cache with 0 encounters")
             logger.info("   - Drone encounters: 0, IDs: []")
             logger.info("Successfully deleted all encounters")
             
@@ -439,7 +470,7 @@ class SwiftDataStorageManager: ObservableObject {
                 }
                 
                 self.encounters = convertedEncounters
-                logger.info("🔄 updateInMemoryCache: Updated cache with \(self.encounters.count) encounters after error")
+                logger.info("DEBUG:  updateInMemoryCache: Updated cache with \(self.encounters.count) encounters after error")
             } catch {
                 // If refetch also fails, just clear everything
                 self.encounters.removeAll()
@@ -566,7 +597,7 @@ class SwiftDataStorageManager: ObservableObject {
         
         var repairedCount = 0
         
-        logger.info("🔧 Checking \(allEncounters.count) encounters for missing cached stats...")
+        logger.info("DEBUG:  Checking \(allEncounters.count) encounters for missing cached stats...")
         
         for encounter in allEncounters {
             // Safe check - just look at cached counts first
@@ -676,11 +707,11 @@ class SwiftDataStorageManager: ObservableObject {
     
     private func fetchOrCreateEncounter(id: String, message: CoTViewModel.CoTMessage?, context: ModelContext) -> StoredDroneEncounter {
         if let existing = fetchEncounter(id: id) {
-            logger.info("💾 Found existing encounter for ID: \(id)")
+            logger.info("Found existing encounter for ID: \(id)")
             return existing
         }
         
-        logger.info("💾 Creating NEW encounter for ID: \(id)")
+        logger.info("Creating NEW encounter for ID: \(id)")
         let new = StoredDroneEncounter(
             id: id,
             firstSeen: Date(),
@@ -691,7 +722,7 @@ class SwiftDataStorageManager: ObservableObject {
             macAddresses: []
         )
         context.insert(new)
-        logger.info("💾 ✅ Successfully created and inserted new encounter: \(id)")
+        logger.info("Successfully created and inserted new encounter: \(id)")
         return new
     }
     
@@ -786,7 +817,7 @@ class SwiftDataStorageManager: ObservableObject {
         }
         
         self.encounters = convertedEncounters
-        logger.info("🔄 updateInMemoryCache: Updated cache with \(self.encounters.count) encounters")
+        logger.info("DEBUG:  updateInMemoryCache: Updated cache with \(self.encounters.count) encounters")
         let droneEncounters = self.encounters.filter { !$0.key.hasPrefix("aircraft-") }
         logger.info("   - Drone encounters: \(droneEncounters.count), IDs: \(Array(droneEncounters.keys.prefix(10)))")
     }
@@ -807,7 +838,7 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         encounters[encounter.id] = encounter.toLegacyLightweight()
-        logger.info("🔄 updateInMemoryCacheForEncounterFast: Updated encounter \(encounter.id)")
+        logger.info("DEBUG:  updateInMemoryCacheForEncounterFast: Updated encounter \(encounter.id)")
         
         Task { @MainActor in
             DroneStorageManager.shared.objectWillChange.send()

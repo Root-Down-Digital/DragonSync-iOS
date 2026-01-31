@@ -10,7 +10,4 @@
    <FileRef
       location = "group:PRIVACY.md">
    </FileRef>
-   <FileRef
-      location = "group:FlightPathSmoother.swift">
-   </FileRef>
 </Workspace>

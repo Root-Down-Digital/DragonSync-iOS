@@ -303,9 +303,12 @@ class ZMQHandler: ObservableObject {
                                     
                                     if socket === self.telemetrySocket {
                                         // Try to convert any telemetry message to XML
-                                        if let xmlMessage = self.convertTelemetryToXML(jsonString) {
+                                        let xmlMessages = self.convertTelemetryToXMLArray(jsonString)
+                                        if !xmlMessages.isEmpty {
                                             DispatchQueue.main.async {
-                                                onTelemetry(xmlMessage)
+                                                for xmlMessage in xmlMessages {
+                                                    onTelemetry(xmlMessage)
+                                                }
                                             }
                                         }
                                         // If conversion fails, message is silently skipped (likely invalid/incomplete)
@@ -408,9 +411,13 @@ class ZMQHandler: ObservableObject {
     var timestamp = 0
     
     func convertTelemetryToXML(_ jsonString: String) -> String? {
-        guard let data = jsonString.data(using: .utf8) else { return nil }
+        let results = convertTelemetryToXMLArray(jsonString)
+        return results.first
+    }
+    
+    func convertTelemetryToXMLArray(_ jsonString: String) -> [String] {
+        guard let data = jsonString.data(using: .utf8) else { return [] }
         
-        // Determine format from raw string and runtime/index presence
         if jsonString.contains("fpv") {
             messageFormat = .fpv
         } else if jsonString.contains("\"index\":") &&
@@ -424,33 +431,47 @@ class ZMQHandler: ObservableObject {
             messageFormat = .sdr
         }
         
-        // Try to parse as array first (BLE messages)
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            // Only log if we get a valid result (filtering happens in processJsonArray)
-            if let result = processJsonArray(jsonArray) {
-                print("→ Processed BLE message successfully")
-                return result
+            let results = processJsonArrayToMultiple(jsonArray)
+            if !results.isEmpty {
+                print("→ Processed BLE array into \(results.count) separate drone messages")
             }
-            return nil
+            return results
         }
         
-        // Fallback to dictionary parsing (WiFi/SDR messages)
         guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            // Silently fail - likely corrupt or empty data
-            return nil
+            return []
         }
         
-        // Check for raw FPV serial messages (from fpv_mdn_receiver.py)
+        let hasIndexRuntime = jsonObject["index"] != nil && jsonObject["runtime"] != nil
+        let hasBasicId = jsonObject["Basic ID"] != nil
+        
+        if hasBasicId && hasIndexRuntime {
+            print("DEBUG: Detected WiFi JSON with Basic ID, converting to XML...")
+            if let result = processJsonObject(jsonObject) {
+                print("→ Successfully converted WiFi message to XML")
+                return [result]
+            } else {
+                print("⚠️ Failed to convert WiFi message to XML")
+                return []
+            }
+        }
+        
+        if hasBasicId || jsonObject["FPV Detection"] != nil || jsonObject["AUX_ADV_IND"] != nil {
+            print("DEBUG: Detected JSON object format, passing through raw")
+            return [jsonString]
+        }
+        
         if let result = processRawFPVMessage(jsonObject) {
             print("→ Processed raw FPV serial message successfully")
-            return result
+            return [result]
         }
         
         if let result = processJsonObject(jsonObject) {
             print("→ Processed WiFi/SDR message successfully")
-            return result
+            return [result]
         }
-        return nil
+        return []
     }
     
     func processJsonObject(_ jsonObject: [String: Any]) -> String? {
@@ -668,6 +689,10 @@ class ZMQHandler: ObservableObject {
             ridInfo += " (\(source))"
         }
         
+        // Determine transmission type based on message format
+        // WiFi drones have index/runtime, others don't
+        let transmissionType = (mIndex > 0 && mRuntime > 0) ? "WiFi" : "BLE"
+        
         // Generate XML
         let now = ISO8601DateFormatter().string(from: Date())
         let stale = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
@@ -677,7 +702,7 @@ class ZMQHandler: ObservableObject {
             <point lat="\(lat)" lon="\(lon)" hae="\(alt)" ce="9999999" le="999999"/>
             <detail>
                 <track course="\(direction)" speed="\(speed)"/>
-                <remarks>MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)</remarks>
+                <remarks>Transmission Type: \(transmissionType), MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)</remarks>
                 <contact endpoint="" phone="" callsign="drone-\(droneId)"/>
                 <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
                 <color argb="-256"/>
@@ -870,6 +895,65 @@ class ZMQHandler: ObservableObject {
         if let runtime = runtime { consolidatedObject["runtime"] = runtime }
         
         return processJsonObject(consolidatedObject)
+    }
+    
+    func processJsonArrayToMultiple(_ jsonArray: [[String: Any]]) -> [String] {
+        var dronesBySerial: [String: (basicId: [String: Any], location: [String: Any]?, system: [String: Any]?, selfID: [String: Any]?, operatorId: [String: Any]?, auth: [String: Any]?, index: Int?, runtime: Int?)] = [:]
+        
+        for obj in jsonArray {
+            if let basicIdMsg = obj["Basic ID"] as? [String: Any],
+               let id = basicIdMsg["id"] as? String,
+               !id.isEmpty {
+                
+                var entry = dronesBySerial[id] ?? (basicId: basicIdMsg, location: nil, system: nil, selfID: nil, operatorId: nil, auth: nil, index: nil, runtime: nil)
+                
+                entry.basicId = basicIdMsg
+                
+                if let locationMsg = obj["Location/Vector Message"] as? [String: Any] {
+                    entry.location = locationMsg
+                }
+                if let systemMsg = obj["System Message"] as? [String: Any] {
+                    entry.system = systemMsg
+                }
+                if let selfIDMsg = obj["Self-ID Message"] as? [String: Any] {
+                    entry.selfID = selfIDMsg
+                }
+                if let operatorIDMsg = obj["Operator ID Message"] as? [String: Any] {
+                    entry.operatorId = operatorIDMsg
+                }
+                if let authMsg = obj["Auth Message"] as? [String: Any] {
+                    entry.auth = authMsg
+                }
+                if let indexVal = obj["index"] as? Int {
+                    entry.index = indexVal
+                }
+                if let runtimeVal = obj["runtime"] as? Int {
+                    entry.runtime = runtimeVal
+                }
+                
+                dronesBySerial[id] = entry
+            }
+        }
+        
+        var xmlMessages: [String] = []
+        
+        for (_, entry) in dronesBySerial {
+            var consolidatedObject: [String: Any] = [:]
+            consolidatedObject["Basic ID"] = entry.basicId
+            if let location = entry.location { consolidatedObject["Location/Vector Message"] = location }
+            if let system = entry.system { consolidatedObject["System Message"] = system }
+            if let selfID = entry.selfID { consolidatedObject["Self-ID Message"] = selfID }
+            if let operatorId = entry.operatorId { consolidatedObject["Operator ID Message"] = operatorId }
+            if let auth = entry.auth { consolidatedObject["Auth Message"] = auth }
+            if let index = entry.index { consolidatedObject["index"] = index }
+            if let runtime = entry.runtime { consolidatedObject["runtime"] = runtime }
+            
+            if let xml = processJsonObject(consolidatedObject) {
+                xmlMessages.append(xml)
+            }
+        }
+        
+        return xmlMessages
     }
     
     // Helper functions to safely extract values

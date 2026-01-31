@@ -45,7 +45,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         guard !isUpdatingLocation else { return }
         
-        print("📍 LocationManager: Starting location updates")
+        print("DEBUG:  LocationManager: Starting location updates")
         locationManager.startUpdatingLocation()
         isUpdatingLocation = true
     }
@@ -53,7 +53,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     func stopLocationUpdates() {
         guard isUpdatingLocation else { return } // Only stop if running
         
-        print("📍 LocationManager: Stopping location updates")
+        print("DEBUG:  LocationManager: Stopping location updates")
         locationManager.stopUpdatingLocation()
         isUpdatingLocation = false
     }
@@ -71,7 +71,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             switch status {
             case .authorizedWhenInUse, .authorizedAlways:
                 // Don't auto-start - let the app control when location is needed
-                print("📍 LocationManager: Location authorized but not auto-starting")
+                print("DEBUG:  LocationManager: Location authorized but not auto-starting")
             case .denied, .restricted:
                 userLocation = nil
                 stopLocationUpdates()

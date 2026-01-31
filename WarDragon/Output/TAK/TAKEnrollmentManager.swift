@@ -26,7 +26,6 @@ class TAKEnrollmentManager: ObservableObject {
     private let deviceUIDKey = "com.wardragon.tak.device.uid"
     
     /// Get or create a persistent device UID for TAK Server enrollment
-    /// This MUST remain consistent across app launches
     private func getOrCreateDeviceUID() -> String {
         if let existingUID = UserDefaults.standard.string(forKey: deviceUIDKey) {
             logger.info("Using existing device UID: \(existingUID)")

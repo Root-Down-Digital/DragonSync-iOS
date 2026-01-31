@@ -725,7 +725,6 @@ public final class DroneSignatureGenerator {
         let lat = Double(message["lat"] as? String ?? "0.0")!
         let lon = Double(message["lon"] as? String ?? "0.0")!
         
-        // Only calculate expected signal if we have both valid coordinates and monitor location
         if lat != 0.0 && lon != 0.0 {
             if let monitorLoc = monitorLocation {
                 let droneLocation = CLLocation(latitude: lat, longitude: lon)
@@ -741,7 +740,6 @@ public final class DroneSignatureGenerator {
             }
         }
         
-        // Check multiple sources for RSSI
         if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any],
            let rssi = auxAdvInd["rssi"] as? Double {
             signalStrength = rssi
@@ -757,7 +755,7 @@ public final class DroneSignatureGenerator {
         }
         
         if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any] {
-            type = .ble  // use BT for WiFI too
+            type = .ble
             messageType = .bt45
             metadata = auxAdvInd
             channel = auxAdvInd["chan"] as? Int
@@ -771,17 +769,21 @@ public final class DroneSignatureGenerator {
         } else if message["DroneID"] != nil {
             type = .wifi
             messageType = .wifi
-        } else if message["Basic ID"] != nil {
-            type = .esp32 // or BT
-            messageType = .esp32
+        } else if let basicId = message["Basic ID"] as? [String: Any] {
+            if basicId["protocol_version"] != nil || message["Location/Vector Message"] != nil {
+                type = .wifi
+                messageType = .wifi
+            } else {
+                type = .esp32
+                messageType = .esp32
+            }
         } else if message["frequency"] != nil {
             type = .fpv
-        }else {
+        } else {
             type = .unknown
             messageType = .bt45
         }
         
-        // Calculate expected signal strength if possible
         if let location = message["Location/Vector Message"] as? [String: Any],
            let lat = location["latitude"] as? Double,
            let lon = location["longitude"] as? Double,
@@ -794,7 +796,6 @@ public final class DroneSignatureGenerator {
                   let lon = point["lon"] as? String,
                   let latDouble = Double(lat),
                   let lonDouble = Double(lon) {
-            // Handle XML point format
             let distanceFromOrigin = sqrt(latDouble * latDouble + lonDouble * lonDouble) * 111000
             expectedSignalStrength = calculateExpectedRSSI(distance: distanceFromOrigin)
         }

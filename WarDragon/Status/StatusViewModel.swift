@@ -160,7 +160,7 @@ class StatusViewModel: ObservableObject {
         // Stop location updates if we haven't received a message recently
         if !isSystemOnline {
             locationManager.stopLocationUpdates()
-            print("📍 StatusViewModel: Stopped location updates (system offline)")
+            print("DEBUG:  StatusViewModel: Stopped location updates (system offline)")
         }
     }
     

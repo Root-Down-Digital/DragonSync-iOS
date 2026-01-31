@@ -78,7 +78,7 @@ class DataMigrationManager {
                let legacyEncounters = try? JSONDecoder().decode([String: DroneEncounter].self, from: data),
                !legacyEncounters.isEmpty && count == 0 {
                 logger.warning("Migration marked complete but SwiftData is empty while UserDefaults has \(legacyEncounters.count) encounters")
-                logger.warning("🔄 Data inconsistency detected - will attempt to re-migrate WITHOUT creating new backup")
+                logger.warning("DEBUG:  Data inconsistency detected - will attempt to re-migrate WITHOUT creating new backup")
             } else {
                 if count > 0 {
                     logger.info("Data verification passed - SwiftData has \(count) encounters")

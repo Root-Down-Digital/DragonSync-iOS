@@ -262,7 +262,7 @@ struct MessageRow: View {
                         .font(.system(.title3, design: .monospaced))
                         .foregroundColor(.primary)
                         .onAppear {
-                            print("📋 Displaying drone: ID=\(message.id), UID=\(message.uid)")
+                            print("Displaying drone: ID=\(message.id), UID=\(message.uid)")
                         }
                 }
                 
@@ -700,7 +700,7 @@ struct MessageRow: View {
             .task(id: message.id) {
                 droneEncounter = DroneStorageManager.shared.encounters[message.uid]
                 droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
-                print("📱 MessageRow loaded for \(message.uid) (message.id: \(message.id))")
+                print("MessageRow loaded for \(message.uid) (message.id: \(message.id))")
                 print("   - Has encounter: \(droneEncounter != nil)")
                 print("   - Has signature: \(droneSignature != nil)")
             }

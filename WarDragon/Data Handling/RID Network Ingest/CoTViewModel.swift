@@ -2358,9 +2358,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             await updateHomeLocation(for: extractedId, message: message)
             return
         }
-        
-        // IMPORTANT: Filter out aircraft messages - these should NOT be treated as drones
-        // Aircraft messages have UIDs like "aircraft-HEXCODE" or contain "adsb" in them
+
         if message.uid.hasPrefix("aircraft-") || 
            message.uid.contains("adsb") ||
            message.idType == "ADS-B Aircraft" ||
@@ -2473,7 +2471,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     private func extractNumericId(from uid: String) -> String {
-        if let match = uid.firstMatch(of: /.*-(\d+)/) {
+        if let match = uid.firstMatch(of: /.*-([a-zA-Z0-9]+)/) {
             return String(match.1)
         }
         return uid
@@ -2631,6 +2629,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         if !isValidMAC(checkedMac) {
             newSourceType = .sdr
+        } else if currentMessageFormat == .wifi {
+            newSourceType = .wifi
         } else if message.index != nil && message.index != "" && message.index != "0" ||
                     message.runtime != nil && message.runtime != "" && message.runtime != "0" {
             newSourceType = .wifi
@@ -2711,9 +2711,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         Task { @MainActor in
             if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
                 self.droneSignatures[index] = signature
-                print("📍 Updated existing signature for \(signature.primaryId.id)")
+                print("DEBUG:  Updated existing signature for \(signature.primaryId.id)")
             } else {
-                print("📍 Added new signature for \(signature.primaryId.id)")
+                print("DEBUG:  Added new signature for \(signature.primaryId.id)")
                 self.droneSignatures.append(signature)
             }
         }
@@ -2733,12 +2733,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 existing.flightPath.last?.altitude != signature.position.altitude
                 
                 if hasNewPosition {
-                    print("📍 Added new position to existing encounter: \(signature.primaryId.id)")
+                    print("DEBUG:  Added new position to existing encounter: \(signature.primaryId.id)")
                 } else {
-                    print("📍 Updated existing encounter data: \(signature.primaryId.id)")
+                    print("DEBUG:  Updated existing encounter data: \(signature.primaryId.id)")
                 }
             } else {
-                print("📍 Created new encounter: \(signature.primaryId.id)")
+                print("DEBUG:  Created new encounter: \(signature.primaryId.id)")
             }
         }
     }
@@ -3278,7 +3278,7 @@ extension CoTViewModel.CoTMessage {
             pilotLat: "0.0",
             pilotLon: "0.0",
             description: description,
-            selfIDText: "✈️ \(description) - Alt: \(aircraft.altitudeFeet ?? 0)ft",
+            selfIDText: "DEBUG:  \(description) - Alt: \(aircraft.altitudeFeet ?? 0)ft",
             uaType: DroneSignature.IdInfo.UAType.aeroplane,
             idType: idType,
             rawMessage: rawMessage

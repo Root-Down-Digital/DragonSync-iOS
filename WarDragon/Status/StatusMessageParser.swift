@@ -45,7 +45,7 @@ struct StatusMessageParser {
             
             // Parse GPS data
             let gpsData = parseGPSData(from: json)
-            logger.debug("📍 GPS parsed: lat=\(gpsData.latitude), lon=\(gpsData.longitude)")
+            logger.debug("DEBUG:  GPS parsed: lat=\(gpsData.latitude), lon=\(gpsData.longitude)")
             
             // Parse system stats
             let systemStats = parseSystemStats(from: json)
@@ -53,7 +53,7 @@ struct StatusMessageParser {
             
             // Parse ANT stats
             let antStats = parseANTStats(from: json)
-            logger.debug("📡 ANT stats parsed: Pluto=\(antStats.plutoTemp)°C, Zynq=\(antStats.zynqTemp)°C")
+            logger.debug("DEBUG:  ANT stats parsed: Pluto=\(antStats.plutoTemp)°C, Zynq=\(antStats.zynqTemp)°C")
             
             let message = StatusViewModel.StatusMessage(
                 uid: uid,
@@ -170,7 +170,7 @@ struct StatusMessageParser {
             zynqTemp = json["zynq_temp"] as? Double ?? json["zynqTemp"] as? Double ?? 0
         }
         
-        logger.debug("🔧 Parsed ANT temps - Pluto: \(plutoTemp), Zynq: \(zynqTemp)")
+        logger.debug("DEBUG:  Parsed ANT temps - Pluto: \(plutoTemp), Zynq: \(zynqTemp)")
         
         return StatusViewModel.StatusMessage.ANTStats(
             plutoTemp: plutoTemp,
