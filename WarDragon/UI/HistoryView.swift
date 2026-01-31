@@ -10,6 +10,7 @@ import UIKit
 import SwiftUI
 import SwiftData
 import MapKit
+import CoreLocation
 
 struct StoredEncountersView: View {
     @Query(
@@ -567,8 +568,10 @@ struct StoredEncountersView: View {
             return Map(position: $mapCameraPosition) {
                 Group {
                     if showFlightPath && droneFlightPoints.count > 1 {
-                        MapPolyline(coordinates: droneFlightPoints.map { $0.coordinate })
-                            .stroke(.blue, lineWidth: 3)
+                        // Smooth the path for better visual appearance
+                        let smoothedPath = FlightPathSmoother.smoothPath(droneFlightPoints.map { $0.coordinate }, smoothness: 4)
+                        MapPolyline(coordinates: smoothedPath)
+                            .stroke(.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
                     
                     if let start = droneFlightPoints.first {
@@ -612,8 +615,10 @@ struct StoredEncountersView: View {
                     // Draw pilot trail if there's movement
                     let pilotCoordinates = pilotItems.map { $0.coordinate }
                     if pilotCoordinates.count > 1 {
-                        MapPolyline(coordinates: pilotCoordinates)
-                            .stroke(.orange, lineWidth: 2)
+                        // Smooth the pilot path for better visual appearance
+                        let smoothedPilotPath = FlightPathSmoother.smoothPath(pilotCoordinates, smoothness: 4)
+                        MapPolyline(coordinates: smoothedPilotPath)
+                            .stroke(.orange, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     }
                     
                     // Only show latest pilot position
@@ -785,8 +790,10 @@ struct StoredEncountersView: View {
                 
                 let recentPoints = Array(points.suffix(segmentSize))
                 if recentPoints.count > 1 {
-                    MapPolyline(coordinates: recentPoints.map { $0.coordinate })
-                        .stroke(.red, lineWidth: 2)
+                    // Smooth recent path segment
+                    let smoothedRecent = FlightPathSmoother.smoothPath(recentPoints.map { $0.coordinate }, smoothness: 4)
+                    MapPolyline(coordinates: smoothedRecent)
+                        .stroke(.red, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 }
                 
                 if points.count > segmentSize * 2 {
@@ -794,8 +801,10 @@ struct StoredEncountersView: View {
                     let endIndex = points.count - segmentSize
                     let middlePoints = Array(points[startIndex..<endIndex])
                     if middlePoints.count > 1 {
-                        MapPolyline(coordinates: middlePoints.map { $0.coordinate })
-                            .stroke(.orange, lineWidth: 2)
+                        // Smooth middle path segment
+                        let smoothedMiddle = FlightPathSmoother.smoothPath(middlePoints.map { $0.coordinate }, smoothness: 4)
+                        MapPolyline(coordinates: smoothedMiddle)
+                            .stroke(.orange, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     }
                 }
             }

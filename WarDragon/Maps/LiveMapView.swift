@@ -7,6 +7,7 @@
 
 import SwiftUI
 import MapKit
+import CoreLocation
 
 struct LiveMapView: View {
     @ObservedObject var cotViewModel: CoTViewModel
@@ -341,8 +342,10 @@ struct LiveMapView: View {
                         let validPath = getValidFlightPathWithCurrent(for: drone)
                         
                         if validPath.count > 1 {
-                            MapPolyline(coordinates: validPath)
-                                .stroke(Color.blue, lineWidth: 2)
+                            // Smooth the path for better visual appearance
+                            let smoothedPath = FlightPathSmoother.smoothPath(validPath, smoothness: 4)
+                            MapPolyline(coordinates: smoothedPath)
+                                .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                         }
                     }
                 }
@@ -353,8 +356,10 @@ struct LiveMapView: View {
                         let coordinates = getAircraftFlightPathWithCurrent(for: aircraft)
                         
                         if coordinates.count > 1 {
-                            MapPolyline(coordinates: coordinates)
-                                .stroke(Color.green, lineWidth: 2)
+                            // Smooth the path for better visual appearance
+                            let smoothedPath = FlightPathSmoother.smoothPath(coordinates, smoothness: 4)
+                            MapPolyline(coordinates: smoothedPath)
+                                .stroke(Color.green, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                         }
                     }
                 }

@@ -12,13 +12,70 @@ struct DetectionsStatsView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     let detectionMode: ContentView.DetectionMode
     @State private var updateTimer: Timer?
+    @State private var selectedTimeRange: TimeRange = .sixMinutes
+    
+    enum TimeRange: String, CaseIterable, Identifiable {
+        case sixMinutes = "6 min"
+        case thirtyMinutes = "30 min"
+        case oneHour = "1 hr"
+        case threeHours = "3 hrs"
+        case sixHours = "6 hrs"
+        case twelveHours = "12 hrs"
+        case twentyFourHours = "24 hrs"
+        
+        var id: String { rawValue }
+        
+        var timeInterval: TimeInterval {
+            switch self {
+            case .thirtyMinutes: return 30 * 60
+            case .oneHour: return 60 * 60
+            case .threeHours: return 3 * 60 * 60
+            case .sixHours: return 6 * 60 * 60
+            case .twelveHours: return 12 * 60 * 60
+            case .twentyFourHours: return 24 * 60 * 60
+            case .sixMinutes: return 6 * 60
+            }
+        }
+        
+        var bucketCount: Int {
+            switch self {
+            case .thirtyMinutes: return 15  // 2-minute buckets
+            case .oneHour: return 12        // 5-minute buckets
+            case .threeHours: return 18     // 10-minute buckets
+            case .sixHours: return 18       // 20-minute buckets
+            case .twelveHours: return 24    // 30-minute buckets
+            case .twentyFourHours: return 24 // 1-hour buckets
+            case .sixMinutes: return 12     // 30-second buckets
+            }
+        }
+        
+        var xAxisStride: Calendar.Component {
+            switch self {
+            case .thirtyMinutes, .sixMinutes: return .minute
+            case .oneHour, .threeHours: return .minute
+            case .sixHours, .twelveHours, .twentyFourHours: return .hour
+            }
+        }
+        
+        var xAxisStrideCount: Int {
+            switch self {
+            case .sixMinutes: return 2      // Every 2 minutes
+            case .thirtyMinutes: return 5   // Every 5 minutes
+            case .oneHour: return 10        // Every 10 minutes
+            case .threeHours: return 30     // Every 30 minutes
+            case .sixHours: return 1        // Every 1 hour
+            case .twelveHours: return 2     // Every 2 hours
+            case .twentyFourHours: return 4 // Every 4 hours
+            }
+        }
+    }
     
     // Real-time timeline data - computed from current detections
-    // This shows detection activity over the past 6 minutes in 30-second buckets
+    // Time range and bucket size determined by selectedTimeRange
     private var timelineData: [TimelineDataPoint] {
         let now = Date()
-        let timeWindow: TimeInterval = 360 // 6 minutes
-        let bucketCount = 12 // 30-second buckets
+        let timeWindow = selectedTimeRange.timeInterval
+        let bucketCount = selectedTimeRange.bucketCount
         let bucketDuration = timeWindow / Double(bucketCount)
         
         // Create time buckets going back 6 minutes
@@ -63,11 +120,11 @@ struct DetectionsStatsView: View {
     }
     
     // Signal strength/altitude trend data - computed from current detections
-    // This shows average signal strength or altitude over the past 6 minutes
+    // Time range matches the timeline chart
     private var signalTrendData: [SignalTrendPoint] {
         let now = Date()
-        let timeWindow: TimeInterval = 360 // 6 minutes
-        let bucketCount = 12 // 30-second buckets
+        let timeWindow = selectedTimeRange.timeInterval
+        let bucketCount = selectedTimeRange.bucketCount
         let bucketDuration = timeWindow / Double(bucketCount)
         
         // Create time buckets going back 6 minutes
@@ -128,6 +185,13 @@ struct DetectionsStatsView: View {
     
     var body: some View {
         VStack(spacing: 8) {
+            // Time range picker
+            timeRangePicker
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(8)
+            
             HStack(spacing: 8) {
                 timelineChart
                     .padding(.horizontal, 12)
@@ -155,6 +219,57 @@ struct DetectionsStatsView: View {
         }
         .onDisappear {
             stopTimer()
+        }
+    }
+    
+    // MARK: - Time Range Picker
+    
+    private var timeRangePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("TIME RANGE")
+                .font(.system(.caption2, design: .monospaced))
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(TimeRange.allCases) { range in
+                        Button(action: {
+                            selectedTimeRange = range
+                        }) {
+                            Text(range.rawValue)
+                                .font(.system(.caption, design: .monospaced))
+                                .fontWeight(selectedTimeRange == range ? .bold : .regular)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(selectedTimeRange == range ? Color.blue : Color(UIColor.tertiarySystemGroupedBackground))
+                                )
+                                .foregroundColor(selectedTimeRange == range ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+    
+    // Helper for axis marks
+    private var axisMarkValues: AxisMarkValues {
+        if selectedTimeRange.xAxisStride == .hour {
+            return .stride(by: .hour, count: selectedTimeRange.xAxisStrideCount)
+        } else {
+            return .stride(by: .minute, count: selectedTimeRange.xAxisStrideCount)
+        }
+    }
+    
+    // Helper for date format based on time range
+    private var dateFormat: Date.FormatStyle {
+        if selectedTimeRange.timeInterval >= 3600 { // 1 hour or more
+            return .dateTime.hour().minute()
+        } else {
+            return .dateTime.hour().minute()
         }
     }
     
@@ -201,23 +316,36 @@ struct DetectionsStatsView: View {
                         x: .value("Time", point.timestamp),
                         y: .value("Avg Alt", point.averageAltitude)
                     )
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.cyan, .blue],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
                     
                     AreaMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Avg Alt", point.averageAltitude)
                     )
-                    .foregroundStyle(.cyan.opacity(0.1))
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                     .interpolationMethod(.catmullRom)
                 }
                 .chartYAxisLabel("Altitude (ft)", alignment: .leading)
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .minute, count: 2)) { value in
-                        AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
+                    AxisMarks(values: axisMarkValues) { value in
+                        AxisValueLabel(format: dateFormat, anchor: .top)
                             .font(.system(size: 9))
                     }
-                    AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                    AxisMarks(values: axisMarkValues) { _ in
                         AxisGridLine()
                     }
                 }
@@ -229,35 +357,71 @@ struct DetectionsStatsView: View {
                 }
                 .frame(height: 80)
             } else {
-                // For drones/both mode, show RSSI trend
+                // For drones/both mode, show RSSI trend with cool styling
                 Chart(signalTrendData) { point in
+                    // Main signal line with gradient
                     LineMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Avg RSSI", point.averageRSSI)
                     )
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.red, .orange, .yellow, .green],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
                     
+                    // Area fill with gradient
                     AreaMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Avg RSSI", point.averageRSSI)
                     )
-                    .foregroundStyle(.orange.opacity(0.1))
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [
+                                .red.opacity(0.3),
+                                .orange.opacity(0.2),
+                                .yellow.opacity(0.15),
+                                .green.opacity(0.1)
+                            ],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
                     .interpolationMethod(.catmullRom)
                     
                     // Warning threshold line (stronger signal = closer)
                     RuleMark(y: .value("Warning", -60))
-                        .foregroundStyle(.red.opacity(0.3))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                        .foregroundStyle(.red.opacity(0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                        .annotation(position: .top, alignment: .trailing) {
+                            Text("CLOSE")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundColor(.red)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule()
+                                        .fill(.red.opacity(0.2))
+                                )
+                        }
+                    
+                    // Good signal threshold
+                    RuleMark(y: .value("Good", -80))
+                        .foregroundStyle(.yellow.opacity(0.3))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 }
                 .chartYScale(domain: -128...(-20))
                 .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .minute, count: 2)) { value in
-                        AxisValueLabel(format: .dateTime.hour().minute(), anchor: .top)
+                    AxisMarks(values: axisMarkValues) { value in
+                        AxisValueLabel(format: dateFormat, anchor: .top)
                             .font(.system(size: 9))
                     }
-                    AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                    AxisMarks(values: axisMarkValues) { _ in
                         AxisGridLine()
                     }
                 }
@@ -287,14 +451,27 @@ struct DetectionsStatsView: View {
                         x: .value("Time", point.timestamp),
                         y: .value("Drones", point.droneCount)
                     )
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
                     
                     AreaMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Drones", point.droneCount)
                     )
-                    .foregroundStyle(.blue.opacity(0.1))
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.blue.opacity(0.3), .purple.opacity(0.1)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                     .interpolationMethod(.catmullRom)
                 }
                 
@@ -303,24 +480,37 @@ struct DetectionsStatsView: View {
                         x: .value("Time", point.timestamp),
                         y: .value("Aircraft", point.aircraftCount)
                     )
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.cyan, .mint],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.catmullRom)
                     
                     AreaMark(
                         x: .value("Time", point.timestamp),
                         y: .value("Aircraft", point.aircraftCount)
                     )
-                    .foregroundStyle(.cyan.opacity(0.1))
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [.cyan.opacity(0.3), .mint.opacity(0.1)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                     .interpolationMethod(.catmullRom)
                 }
             }
             .frame(height: 80)
             .chartXAxis {
-                AxisMarks(values: .stride(by: .minute, count: 2)) { value in
-                    AxisValueLabel(format: .dateTime.hour().minute())
+                AxisMarks(values: axisMarkValues) { value in
+                    AxisValueLabel(format: dateFormat)
                         .font(.system(size: 9))
                 }
-                AxisMarks(values: .stride(by: .minute, count: 2)) { _ in
+                AxisMarks(values: axisMarkValues) { _ in
                     AxisGridLine()
                 }
             }

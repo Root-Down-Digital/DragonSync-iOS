@@ -5,9 +5,9 @@
 //  Created by Luke on 11/18/24.
 //
 
-
 import SwiftUI
 import MapKit
+import CoreLocation
 
 struct DroneDetailView: View {
     let message: CoTViewModel.CoTMessage
@@ -232,8 +232,10 @@ struct DroneDetailView: View {
                         .map { $0.coordinate } ?? flightPath
                     
                     if showFlightPath && cleanFlightPath.count > 1 {
-                        MapPolyline(coordinates: cleanFlightPath)
-                            .stroke(.purple, lineWidth: 3)
+                        // Smooth the path for better visual appearance
+                        let smoothedPath = FlightPathSmoother.smoothPath(cleanFlightPath, smoothness: 4)
+                        MapPolyline(coordinates: smoothedPath)
+                            .stroke(.purple, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
 
                     ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
