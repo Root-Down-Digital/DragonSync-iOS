@@ -2790,19 +2790,20 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     
                     // Wrap in MainActor to prevent background thread publishing
                     Task { @MainActor in
+                        let rssiValue = message.rssi ?? 0
                         if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
                             self.alertRings[index] = AlertRing(
                                 droneId: message.uid,
                                 centerCoordinate: location,
                                 radius: distance,
-                                rssi: message.rssi!
+                                rssi: rssiValue
                             )
                         } else {
                             self.alertRings.append(AlertRing(
                                 droneId: message.uid,
                                 centerCoordinate: location,
                                 radius: distance,
-                                rssi: message.rssi!
+                                rssi: rssiValue
                             ))
                         }
                     }

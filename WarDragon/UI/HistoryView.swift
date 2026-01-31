@@ -307,12 +307,23 @@ struct StoredEncountersView: View {
                     
                     // Use track course if available, otherwise fall back to direction or heading
                     let heading: Double = {
+                        // Helper to parse heading values
+                        func parseHeading(_ key: String) -> Double? {
+                            guard let raw = metadata[key]?
+                                .replacingOccurrences(of: "°", with: "")
+                                .trimmingCharacters(in: .whitespacesAndNewlines),
+                                  let value = Double(raw)
+                            else { return nil }
+                            return (value.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+                        }
+                        
                         if let trackCourse = metadata["trackCourse"], let course = Double(trackCourse) {
                             return course
                         } else if let direction = metadata["direction"], let dir = Double(direction) {
                             return dir
                         } else {
-                            return encounter.headingDeg
+                            // Safely calculate heading from metadata without accessing encounter.headingDeg
+                            return parseHeading("course") ?? parseHeading("bearing") ?? parseHeading("direction") ?? 0
                         }
                     }()
                     
