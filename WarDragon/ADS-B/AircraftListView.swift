@@ -105,14 +105,14 @@ struct AircraftListView: View {
     
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "airplane.circle")
+            Image(systemName: "airplane.departure")
                 .font(.system(size: 60))
                 .foregroundColor(.secondary)
             
             Text("No Aircraft Tracked")
                 .font(.headline)
             
-            Text("Enable ADS-B in Settings to track aircraft in your area")
+            Text("Enable ADS-B or OpenSky in Settings to track aircraft")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

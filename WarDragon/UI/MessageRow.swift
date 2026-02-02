@@ -616,10 +616,24 @@ struct MessageRow: View {
                     Text("Position: \(message.lat), \(message.lon)")
                 }
                 if message.alt != "0.0" {
-                    if let altValue = Double(message.alt) {
-                        Text("Altitude: \(String(format: "%.1f", altValue))m")
+                    if let formattedAlt = message.formattedAltitude {
+                        if let formattedHeight = message.formattedHeight {
+                            Text("Altitude: \(formattedAlt) • AGL: \(formattedHeight)")
+                        } else {
+                            Text("Altitude: \(formattedAlt)")
+                        }
+                    } else if let altValue = Double(message.alt) {
+                        if let formattedHeight = message.formattedHeight {
+                            Text("Altitude: \(String(format: "%.1f", altValue))m • AGL: \(formattedHeight)")
+                        } else {
+                            Text("Altitude: \(String(format: "%.1f", altValue))m")
+                        }
                     } else {
-                        Text("Altitude: \(message.alt)m")
+                        if let formattedHeight = message.formattedHeight {
+                            Text("Altitude: \(message.alt)m • AGL: \(formattedHeight)")
+                        } else {
+                            Text("Altitude: \(message.alt)m")
+                        }
                     }
                 }
                 if message.speed != "0.0" {

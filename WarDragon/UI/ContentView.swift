@@ -30,7 +30,6 @@ struct ContentView: View {
     @State private var lastViewedDroneCount = 0
     @State private var lastViewedAircraftCount = 0
     
-    // Navigation paths for each tab
     @State private var dashboardPath = NavigationPath()
     @State private var detectionsPath = NavigationPath()
     @State private var statusPath = NavigationPath()
@@ -57,14 +56,12 @@ struct ContentView: View {
             historyTab
         }
         .onChange(of: settings.isListening) { oldValue, newValue in
-            // Debounce rapid toggles
             guard oldValue != newValue else { return }
             handleListeningChange()
         }
         .onChange(of: selectedTab) { oldValue, newValue in
             handleTabChange(from: oldValue, to: newValue)
             
-            // Pop to root when tapping the same tab again
             if oldValue == newValue {
                 popToRoot(for: newValue)
             }
@@ -559,27 +556,47 @@ struct ContentView: View {
     // MARK: - Subviews
     
     private var droneListContent: some View {
-        ScrollViewReader { proxy in
-            List(cotViewModel.parsedMessages) { item in
-                NavigationLink {
-                    DroneDetailView(
-                        message: item,
-                        flightPath: getValidFlightPath(for: item.uid),
-                        cotViewModel: cotViewModel
-                    )
-                } label: {
-                    MessageRow(message: item, cotViewModel: cotViewModel)
+        Group {
+            if cotViewModel.parsedMessages.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 60))
+                        .foregroundColor(.secondary)
+                    
+                    Text("No Drones Detected")
+                        .font(.headline)
+                    
+                    Text("Drone detections will appear here when Remote ID signals are received")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
-            }
-            .listStyle(.inset)
-            .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
-                if oldMessages.count < newMessages.count {
-                    if let latest = newMessages.last {
-                        if !oldMessages.contains(where: { $0.id == latest.id }) {
-                            latestMessage = latest
-                            showAlert = false
-                            withAnimation {
-                                proxy.scrollTo(latest.id, anchor: .bottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    List(cotViewModel.parsedMessages) { item in
+                        NavigationLink {
+                            DroneDetailView(
+                                message: item,
+                                flightPath: getValidFlightPath(for: item.uid),
+                                cotViewModel: cotViewModel
+                            )
+                        } label: {
+                            MessageRow(message: item, cotViewModel: cotViewModel)
+                        }
+                    }
+                    .listStyle(.inset)
+                    .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
+                        if oldMessages.count < newMessages.count {
+                            if let latest = newMessages.last {
+                                if !oldMessages.contains(where: { $0.id == latest.id }) {
+                                    latestMessage = latest
+                                    showAlert = false
+                                    withAnimation {
+                                        proxy.scrollTo(latest.id, anchor: .bottom)
+                                    }
+                                }
                             }
                         }
                     }

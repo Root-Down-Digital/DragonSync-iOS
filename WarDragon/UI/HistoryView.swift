@@ -1200,10 +1200,21 @@ struct StoredEncountersView: View {
                 Text(title)
                     .font(.appCaption)
                 
-                if let minValue = data.min(), let maxValue = data.max(), data.count > 1 {
+                if let dataMin = data.min(), let dataMax = data.max(), data.count > 1 {
                     VStack(spacing: 4) {
+                        // Use fixed range for RSSI to show better differentiation
+                        let (minValue, maxValue): (Double, Double) = {
+                            if title == "RSSI" {
+                                // Fixed range for RSSI: -100 dBm (weak) to -30 dBm (strong)
+                                return (-100.0, -30.0)
+                            } else {
+                                // Auto-scale for other metrics
+                                return (dataMin, dataMax)
+                            }
+                        }()
+                        
                         HStack {
-                            Text("Max: \(String(format: "%.1f", maxValue))")
+                            Text("Max: \(String(format: "%.1f", dataMax))")
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary)
                             Spacer()
@@ -1215,15 +1226,18 @@ struct StoredEncountersView: View {
                                 let difference = maxValue - minValue
                                 let scale = difference != 0 ? geometry.size.height / CGFloat(difference) : 0
                                 
+                                // Clamp values to the visible range for RSSI
+                                let clampedFirstValue = max(minValue, min(maxValue, data[0]))
                                 path.move(to: CGPoint(
                                     x: 0,
-                                    y: geometry.size.height - (data[0] - minValue) * scale
+                                    y: geometry.size.height - (clampedFirstValue - minValue) * scale
                                 ))
                                 
                                 for i in 1..<data.count {
+                                    let clampedValue = max(minValue, min(maxValue, data[i]))
                                     path.addLine(to: CGPoint(
                                         x: CGFloat(i) * step,
-                                        y: geometry.size.height - (data[i] - minValue) * scale
+                                        y: geometry.size.height - (clampedValue - minValue) * scale
                                     ))
                                 }
                             }
@@ -1231,7 +1245,7 @@ struct StoredEncountersView: View {
                         }
                         
                         HStack {
-                            Text("Min: \(String(format: "%.1f", minValue))")
+                            Text("Min: \(String(format: "%.1f", dataMin))")
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary)
                             Spacer()
