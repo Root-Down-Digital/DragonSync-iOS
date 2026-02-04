@@ -230,34 +230,30 @@ struct StoredEncountersView: View {
     struct EncounterRow: View {
         let encounter: StoredDroneEncounter
         
-        // Check if object is valid/not deleted
         private var isValid: Bool {
             encounter.modelContext != nil
         }
         
-        // Use cached values from the model - NO direct relationship access
         private var cachedMaxAltitude: Double {
             guard isValid else { return 0 }
-            return encounter.maxAltitude  // Uses cached value or computes safely
+            return encounter.maxAltitude
         }
         
         private var cachedMaxSpeed: Double {
             guard isValid else { return 0 }
-            return encounter.maxSpeed  // Uses cached value or computes safely
+            return encounter.maxSpeed
         }
         
         private var cachedAverageRSSI: Double {
             guard isValid else { return 0 }
-            return encounter.averageRSSI  // Uses cached value or computes safely
+            return encounter.averageRSSI
         }
         
         private var flightPointCount: Int {
             guard isValid else { return 0 }
-            // ALWAYS use cached count - NEVER access relationships
             return encounter.cachedFlightPointCount
         }
         
-        // Safe accessor for metadata that won't crash on deleted objects
         private var caaRegistration: String? {
             guard isValid else { return nil }
             return encounter.metadata["caaRegistration"]
@@ -305,9 +301,7 @@ struct StoredEncountersView: View {
                     
                     Spacer()
                     
-                    // Use track course if available, otherwise fall back to direction or heading
                     let heading: Double = {
-                        // Helper to parse heading values
                         func parseHeading(_ key: String) -> Double? {
                             guard let raw = metadata[key]?
                                 .replacingOccurrences(of: "°", with: "")
@@ -322,7 +316,6 @@ struct StoredEncountersView: View {
                         } else if let direction = metadata["direction"], let dir = Double(direction) {
                             return dir
                         } else {
-                            // Safely calculate heading from metadata without accessing encounter.headingDeg
                             return parseHeading("course") ?? parseHeading("bearing") ?? parseHeading("direction") ?? 0
                         }
                     }()
@@ -433,6 +426,20 @@ struct StoredEncountersView: View {
         }
         
         var body: some View {
+            // Guard against deleted/faulted encounters
+            if encounter.modelContext == nil {
+                ContentUnavailableView(
+                    "Encounter Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("This encounter may have been deleted.")
+                )
+            } else {
+                encounterDetailContent
+            }
+        }
+        
+        @ViewBuilder
+        private var encounterDetailContent: some View {
             ScrollView {
                 VStack(spacing: 16) {
                     // Custom name and trust status section
@@ -555,12 +562,21 @@ struct StoredEncountersView: View {
             }
             .alert("Delete Encounter", isPresented: $showingDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
-                    modelContext.delete(encounter)
                     dismiss()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
+                        modelContext.delete(encounter)
+                        try? modelContext.save()
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Are you sure you want to delete this encounter? This action cannot be undone.")
+            }
+            .onChange(of: encounter.modelContext) { oldValue, newValue in
+                if newValue == nil {
+                    dismiss()
+                }
             }
         }
         
