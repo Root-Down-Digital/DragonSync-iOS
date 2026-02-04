@@ -8,6 +8,7 @@
 import Foundation
 import SwiftData
 import OSLog
+import SQLite3
 
 @MainActor
 class DataMigrationManager {
@@ -876,36 +877,111 @@ class DataMigrationManager {
         )
     }
     
-    /// Delete all SwiftData (for complete reset)
     func deleteAllSwiftData(modelContext: ModelContext) throws {
         logger.warning("Deleting all SwiftData...")
         
-        // Fetch all drone encounters fresh from context to ensure valid references
         let droneDescriptor = FetchDescriptor<StoredDroneEncounter>()
         let droneEncounters = try modelContext.fetch(droneDescriptor)
         
-        logger.info("🗑️ Deleting \(droneEncounters.count) drone encounters...")
+        logger.info("Deleting \(droneEncounters.count) drone encounters...")
         
-        // Delete all drone encounters (cascade will handle relationships)
         for encounter in droneEncounters {
             modelContext.delete(encounter)
         }
         
-        // Fetch all aircraft encounters fresh from context
         let aircraftDescriptor = FetchDescriptor<StoredADSBEncounter>()
         let aircraftEncounters = try modelContext.fetch(aircraftDescriptor)
         
-        logger.info("🗑️ Deleting \(aircraftEncounters.count) aircraft encounters...")
+        logger.info("Deleting \(aircraftEncounters.count) aircraft encounters...")
         
-        // Delete all aircraft encounters
         for aircraft in aircraftEncounters {
             modelContext.delete(aircraft)
         }
         
-        // Save all deletions
+        try modelContext.save()
+        
+        let orphanedPointsDescriptor = FetchDescriptor<StoredFlightPoint>()
+        let orphanedPoints = try modelContext.fetch(orphanedPointsDescriptor)
+        
+        if !orphanedPoints.isEmpty {
+            logger.warning("Found \(orphanedPoints.count) orphaned flight points, cleaning up...")
+            for point in orphanedPoints {
+                modelContext.delete(point)
+            }
+        }
+        
+        let orphanedSignaturesDescriptor = FetchDescriptor<StoredSignature>()
+        let orphanedSignatures = try modelContext.fetch(orphanedSignaturesDescriptor)
+        
+        if !orphanedSignatures.isEmpty {
+            logger.warning("Found \(orphanedSignatures.count) orphaned signatures, cleaning up...")
+            for signature in orphanedSignatures {
+                modelContext.delete(signature)
+            }
+        }
+        
         try modelContext.save()
         
         logger.info("Successfully deleted \(droneEncounters.count) drone encounters and \(aircraftEncounters.count) aircraft from SwiftData")
+        if !orphanedPoints.isEmpty || !orphanedSignatures.isEmpty {
+            logger.info("Cleaned up \(orphanedPoints.count) orphaned flight points and \(orphanedSignatures.count) orphaned signatures")
+        }
+    }
+    
+    func compactDatabase(modelContext: ModelContext) throws {
+        logger.info("Compacting database to reclaim disk space...")
+        
+        try modelContext.save()
+        
+        let fileManager = FileManager.default
+        let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let storeURL = appSupportURL.appendingPathComponent("default.store")
+        
+        let sizeBefore: Int64
+        if fileManager.fileExists(atPath: storeURL.path) {
+            let attributes = try? fileManager.attributesOfItem(atPath: storeURL.path)
+            sizeBefore = attributes?[.size] as? Int64 ?? 0
+        } else {
+            sizeBefore = 0
+        }
+        
+        var db: OpaquePointer?
+        
+        guard sqlite3_open(storeURL.path, &db) == SQLITE_OK else {
+            let errorMessage = String(cString: sqlite3_errmsg(db))
+            sqlite3_close(db)
+            throw NSError(domain: "DatabaseError", code: -1, 
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to open database: \(errorMessage)"])
+        }
+        
+        defer {
+            sqlite3_close(db)
+        }
+        
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(db, "VACUUM;", nil, nil, &errorPointer)
+        
+        if result != SQLITE_OK {
+            let errorMessage = errorPointer != nil ? String(cString: errorPointer!) : "Unknown error"
+            sqlite3_free(errorPointer)
+            throw NSError(domain: "DatabaseError", code: Int(result),
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to compact database: \(errorMessage)"])
+        }
+        
+        let sizeAfter: Int64
+        if fileManager.fileExists(atPath: storeURL.path) {
+            let attributes = try? fileManager.attributesOfItem(atPath: storeURL.path)
+            sizeAfter = attributes?[.size] as? Int64 ?? 0
+        } else {
+            sizeAfter = 0
+        }
+        
+        let bytesReclaimed = sizeBefore - sizeAfter
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let reclaimedString = formatter.string(fromByteCount: bytesReclaimed)
+        
+        logger.info("Database compaction complete. Reclaimed \(reclaimedString) of disk space.")
     }
 }
 

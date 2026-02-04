@@ -41,6 +41,26 @@ struct DatabaseManagementView: View {
                     FlightPointsRow(count: stats.flightPointCount)
                     SignaturesRow(count: stats.signatureCount)
                     AircraftCountRow(count: stats.aircraftCount)
+                    
+                    // Show compact button if database is large but records are minimal
+                    if stats.databaseSizeBytes > 10_000_000 && stats.encounterCount == 0 {
+                        Button {
+                            Task {
+                                await compactDatabase()
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.down.circle")
+                                    .foregroundColor(.orange)
+                                Text("Compact Database")
+                                Spacer()
+                                if isLoading {
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .disabled(isLoading)
+                    }
                 } else {
                     HStack {
                         ProgressView()
@@ -51,8 +71,13 @@ struct DatabaseManagementView: View {
             } header: {
                 Label("Database Statistics", systemImage: "chart.bar.fill")
             } footer: {
-                Text("Database size shows disk space used. After deleting records, the file size remains the same as SQLite reserves space for performance.")
-                    .font(.appCaption)
+                if let stats = stats, stats.databaseSizeBytes > 10_000_000 && stats.encounterCount == 0 {
+                    Text("Database file is large despite having no records. Use 'Compact Database' to reclaim disk space. SQLite reserves space for performance, but you can shrink it when needed.")
+                        .font(.appCaption)
+                } else {
+                    Text("Database size shows disk space used. After deleting records, the file size remains the same as SQLite reserves space for performance.")
+                        .font(.appCaption)
+                }
             }
             
             // Migration Status Section
@@ -433,19 +458,25 @@ struct DatabaseManagementView: View {
         do {
             try migrationManager.deleteAllSwiftData(modelContext: modelContext)
             
-            // Refresh stats to show 0 records
             await loadStats()
             
-            // Build success message explaining the database size behavior
-            var message = "✓ All records deleted successfully\n\n"
+            var message = "All records deleted successfully\n\n"
             
-            if let droneCount = stats?.encounterCount, droneCount == 0,
-               let aircraftCount = stats?.aircraftCount, aircraftCount == 0 {
-                message += "Records: 0 drone encounters, 0 aircraft\n\n"
+            if let stats = stats {
+                message += "Drone encounters: \(stats.encounterCount)\n"
+                message += "Aircraft encounters: \(stats.aircraftCount)\n"
+                message += "Flight points: \(stats.flightPointCount)\n"
+                message += "Signatures: \(stats.signatureCount)\n\n"
+                
+                if stats.flightPointCount > 0 || stats.signatureCount > 0 {
+                    message += "Warning: Found orphaned records that weren't properly deleted. "
+                    message += "This shouldn't happen - cascade delete may have failed.\n\n"
+                }
             }
             
             message += "Note: Database file size will not change immediately. "
-            message += "SQLite reserves the space for future records to improve performance."
+            message += "SQLite reserves the space for future records to improve performance. "
+            message += "Use 'Compact Database' to reclaim disk space."
             
             successMessage = message
             showSuccess = true
@@ -515,6 +546,37 @@ struct DatabaseManagementView: View {
         
         successMessage = message
         showSuccess = true
+    }
+    
+    private func compactDatabase() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            let statsBefore = stats
+            let sizeBefore = statsBefore?.databaseSizeBytes ?? 0
+            
+            try migrationManager.compactDatabase(modelContext: modelContext)
+            
+            await loadStats()
+            
+            let sizeAfter = stats?.databaseSizeBytes ?? 0
+            let bytesReclaimed = sizeBefore - sizeAfter
+            
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            let reclaimedString = formatter.string(fromByteCount: bytesReclaimed)
+            
+            var message = "Database compacted successfully\n\n"
+            message += "Space reclaimed: \(reclaimedString)\n"
+            message += "New size: \(stats?.formattedSize ?? "Unknown")"
+            
+            successMessage = message
+            showSuccess = true
+        } catch {
+            errorMessage = "Failed to compact database: \(error.localizedDescription)"
+            showError = true
+        }
     }
 }
 
