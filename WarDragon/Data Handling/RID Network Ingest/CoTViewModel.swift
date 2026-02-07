@@ -1146,8 +1146,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     private func startMulticastListening() {
         let parameters = NWParameters.udp
-        
-        // Critical: Allow reuse to prevent "Address already in use" errors
         parameters.allowLocalEndpointReuse = true
         parameters.acceptLocalOnly = false
         

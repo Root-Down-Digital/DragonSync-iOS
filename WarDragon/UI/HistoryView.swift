@@ -160,25 +160,76 @@ struct StoredEncountersView: View {
             }
             
             // MARK: - Drone Encounters Section
-            Section {
-                ForEach(sortedEncounters) { encounter in
-                    NavigationLink(destination: EncounterDetailView(encounter: encounter)
-                        .environmentObject(cotViewModel)) {
-                            EncounterRow(encounter: encounter)
+            // Group encounters by type
+            let fpvEncounters = sortedEncounters.filter { $0.id.hasPrefix("fpv-") || $0.metadata["isFPVDetection"] == "true" }
+            let regularEncounters = sortedEncounters.filter { !$0.id.hasPrefix("fpv-") && $0.metadata["isFPVDetection"] != "true" }
+            
+            // FPV Detections Section
+            if !fpvEncounters.isEmpty {
+                Section {
+                    ForEach(fpvEncounters) { encounter in
+                        NavigationLink(destination: EncounterDetailView(encounter: encounter)
+                            .environmentObject(cotViewModel)) {
+                                EncounterRow(encounter: encounter)
+                            }
+                            .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
+                    }
+                    .onDelete { indexSet in
+                        // Disable animations during delete to prevent accessing deleted objects
+                        withAnimation(nil) {
+                            for index in indexSet {
+                                let encounterToDelete = fpvEncounters[index]
+                                modelContext.delete(encounterToDelete)
+                                // Clean up cache
+                                cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                            }
+                            // Force immediate save to prevent faulting issues
+                            try? modelContext.save()
                         }
-                        .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
+                    }
+                } header: {
+                    HStack {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.orange)
+                        Text("FPV Detections")
+                        Spacer()
+                        Text("\(fpvEncounters.count)")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .onDelete { indexSet in
-                    // Disable animations during delete to prevent accessing deleted objects
-                    withAnimation(nil) {
-                        for index in indexSet {
-                            let encounterToDelete = sortedEncounters[index]
-                            modelContext.delete(encounterToDelete)
-                            // Clean up cache
-                            cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+            }
+            
+            // Regular Drone Encounters Section
+            if !regularEncounters.isEmpty {
+                Section {
+                    ForEach(regularEncounters) { encounter in
+                        NavigationLink(destination: EncounterDetailView(encounter: encounter)
+                            .environmentObject(cotViewModel)) {
+                                EncounterRow(encounter: encounter)
+                            }
+                            .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
+                    }
+                    .onDelete { indexSet in
+                        // Disable animations during delete to prevent accessing deleted objects
+                        withAnimation(nil) {
+                            for index in indexSet {
+                                let encounterToDelete = regularEncounters[index]
+                                modelContext.delete(encounterToDelete)
+                                // Clean up cache
+                                cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                            }
+                            // Force immediate save to prevent faulting issues
+                            try? modelContext.save()
                         }
-                        // Force immediate save to prevent faulting issues
-                        try? modelContext.save()
+                    }
+                } header: {
+                    HStack {
+                        Image(systemName: "airplane")
+                            .foregroundStyle(.blue)
+                        Text("Remote ID Drones")
+                        Spacer()
+                        Text("\(regularEncounters.count)")
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -234,6 +285,11 @@ struct StoredEncountersView: View {
             encounter.modelContext != nil
         }
         
+        private var isFPVDetection: Bool {
+            guard isValid else { return false }
+            return encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true"
+        }
+        
         private var cachedMaxAltitude: Double {
             guard isValid else { return 0 }
             return encounter.maxAltitude
@@ -269,6 +325,17 @@ struct StoredEncountersView: View {
             return encounter.metadata
         }
         
+        // FPV-specific properties
+        private var fpvFrequency: String? {
+            guard isValid, isFPVDetection else { return nil }
+            return encounter.metadata["fpvFrequency"] ?? encounter.metadata["frequency"]
+        }
+        
+        private var fpvSource: String? {
+            guard isValid, isFPVDetection else { return nil }
+            return encounter.metadata["fpvSource"]
+        }
+        
         var body: some View {
             if !isValid {
                 EmptyView()
@@ -280,17 +347,35 @@ struct StoredEncountersView: View {
         private var actualBody: some View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
+                    // Show FPV badge for FPV detections
+                    if isFPVDetection {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .foregroundStyle(.orange)
+                            .font(.title3)
+                    }
+                    
                     if !encounter.customName.isEmpty {
                         Text(encounter.customName)
                             .font(.appHeadline)
                             .foregroundColor(.primary)
                         
-                        Text(ensureDronePrefix(encounter.id))
+                        Text(isFPVDetection ? encounter.id : ensureDronePrefix(encounter.id))
                             .font(.appCaption)
                             .foregroundColor(.secondary)
                     } else {
-                        Text(ensureDronePrefix(encounter.id))
-                            .font(.appHeadline)
+                        if isFPVDetection {
+                            // For FPV, show frequency prominently
+                            if let freq = fpvFrequency {
+                                Text("FPV \(freq) MHz")
+                                    .font(.appHeadline)
+                            } else {
+                                Text(encounter.id)
+                                    .font(.appHeadline)
+                            }
+                        } else {
+                            Text(ensureDronePrefix(encounter.id))
+                                .font(.appHeadline)
+                        }
                     }
                     
                     if let caaReg = caaRegistration {
@@ -301,89 +386,53 @@ struct StoredEncountersView: View {
                     
                     Spacer()
                     
-                    let heading: Double = {
-                        func parseHeading(_ key: String) -> Double? {
-                            guard let raw = metadata[key]?
-                                .replacingOccurrences(of: "°", with: "")
-                                .trimmingCharacters(in: .whitespacesAndNewlines),
-                                  let value = Double(raw)
-                            else { return nil }
-                            return (value.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
-                        }
+                    // Only show heading icon for non-FPV drones
+                    if !isFPVDetection {
+                        let heading: Double = {
+                            func parseHeading(_ key: String) -> Double? {
+                                guard let raw = metadata[key]?
+                                    .replacingOccurrences(of: "°", with: "")
+                                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                                      let value = Double(raw)
+                                else { return nil }
+                                return (value.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+                            }
+                            
+                            if let trackCourse = metadata["trackCourse"], let course = Double(trackCourse) {
+                                return course
+                            } else if let direction = metadata["direction"], let dir = Double(direction) {
+                                return dir
+                            } else {
+                                return parseHeading("course") ?? parseHeading("bearing") ?? parseHeading("direction") ?? 0
+                            }
+                        }()
                         
-                        if let trackCourse = metadata["trackCourse"], let course = Double(trackCourse) {
-                            return course
-                        } else if let direction = metadata["direction"], let dir = Double(direction) {
-                            return dir
-                        } else {
-                            return parseHeading("course") ?? parseHeading("bearing") ?? parseHeading("direction") ?? 0
-                        }
-                    }()
-                    
-                    Image(systemName: "airplane")
-                        .foregroundStyle(.blue)
-                        .rotationEffect(.degrees(heading - 90))
+                        Image(systemName: "airplane")
+                            .foregroundStyle(.blue)
+                            .rotationEffect(.degrees(heading - 90))
+                    }
                 }
                 
-                if let mac = metadata["mac"] {
-                    Text("MAC: \(mac)")
-                        .font(.appCaption)
+                // FPV-specific metadata
+                if isFPVDetection {
+                    if let source = fpvSource {
+                        Text("Source: \(source)")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    // Regular drone MAC address
+                    if let mac = metadata["mac"] {
+                        Text("MAC: \(mac)")
+                            .font(.appCaption)
+                    }
                 }
                 
-                HStack(spacing: 4) {
-                    VStack(spacing: 2) {
-                        Image(systemName: "map")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text("\(flightPointCount)")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text("points")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    VStack(spacing: 2) {
-                        Image(systemName: "arrow.up")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text(String(format: "%.0f", cachedMaxAltitude))
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text("m")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    VStack(spacing: 2) {
-                        Image(systemName: "speedometer")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text(String(format: "%.0f", cachedMaxSpeed))
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text("m/s")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    if cachedAverageRSSI != 0 {
-                        VStack(spacing: 2) {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .font(.appCaption)
-                                .foregroundStyle(.secondary)
-                            Text(String(format: "%.0f", cachedAverageRSSI))
-                                .font(.appCaption)
-                                .foregroundStyle(.secondary)
-                            Text("dB")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
+                // Stats row - different for FPV vs regular drones
+                if isFPVDetection {
+                    fpvStatsRow
+                } else {
+                    regularDroneStatsRow
                 }
                 
                 Text("Duration: \(formatDuration(encounter.totalFlightTime))")
@@ -391,6 +440,117 @@ struct StoredEncountersView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
+        }
+        
+        // FPV-specific stats display
+        private var fpvStatsRow: some View {
+            HStack(spacing: 4) {
+                VStack(spacing: 2) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f", cachedAverageRSSI))
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("dBm")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                VStack(spacing: 2) {
+                    Image(systemName: "waveform")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    if let freq = fpvFrequency {
+                        Text(freq)
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("N/A")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("MHz")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                VStack(spacing: 2) {
+                    Image(systemName: "map")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    let totalDetections = Int(metadata["totalDetections"] ?? "0") ?? 0
+                    let displayCount = totalDetections > 0 ? totalDetections : flightPointCount
+                    Text("\(displayCount)")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("detections")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        
+        // Regular drone stats display
+        private var regularDroneStatsRow: some View {
+            HStack(spacing: 4) {
+                VStack(spacing: 2) {
+                    Image(systemName: "map")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("\(flightPointCount)")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("points")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                VStack(spacing: 2) {
+                    Image(systemName: "arrow.up")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f", cachedMaxAltitude))
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("m")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                VStack(spacing: 2) {
+                    Image(systemName: "speedometer")
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.0f", cachedMaxSpeed))
+                        .font(.appCaption)
+                        .foregroundStyle(.secondary)
+                    Text("m/s")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                if cachedAverageRSSI != 0 {
+                    VStack(spacing: 2) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "%.0f", cachedAverageRSSI))
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("dB")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
         }
         
         private func formatDuration(_ time: TimeInterval) -> String {
@@ -415,11 +575,10 @@ struct StoredEncountersView: View {
         @State private var selectedMapType: MapStyle = .standard
         @State private var mapCameraPosition: MapCameraPosition = .automatic
         @EnvironmentObject var cotViewModel: CoTViewModel
-        
-        // CRITICAL: Load relationship data into @State to avoid SwiftData faulting crashes
         @State private var flightPoints: [StoredFlightPoint] = []
         @State private var signatures: [StoredSignature] = []
         @State private var isDataLoaded = false
+        @State private var isFPVDetection = false
         
         enum MapStyle {
             case standard, satellite, hybrid
@@ -446,27 +605,50 @@ struct StoredEncountersView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
+                                // Show FPV badge for FPV detections
+                                if isFPVDetection {
+                                    Image(systemName: "dot.radiowaves.left.and.right")
+                                        .foregroundColor(.orange)
+                                        .font(.system(size: 24))
+                                }
+                                
                                 if !encounter.customName.isEmpty {
                                     Text(encounter.customName)
                                         .font(.system(.title2, design: .monospaced))
                                         .foregroundColor(.primary)
                                 } else {
-                                    Text("Unnamed Drone")
-                                        .font(.system(.title2, design: .monospaced))
-                                        .foregroundColor(.secondary)
+                                    if isFPVDetection {
+                                        // Extract frequency from ID or metadata
+                                        if let freq = encounter.metadata["fpvFrequency"] ?? encounter.metadata["frequency"] {
+                                            Text("FPV \(freq) MHz")
+                                                .font(.system(.title2, design: .monospaced))
+                                                .foregroundColor(.primary)
+                                        } else {
+                                            Text("FPV Detection")
+                                                .font(.system(.title2, design: .monospaced))
+                                                .foregroundColor(.primary)
+                                        }
+                                    } else {
+                                        Text("Unnamed Drone")
+                                            .font(.system(.title2, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 
                                 Spacer()
                                 
-                                if let mac = encounter.metadata["mac"],
-                                   !encounter.id.isEmpty {
-                                    let remoteId = encounter.id.replacingOccurrences(of: "drone-", with: "")
-                                    FAALookupButton(mac: mac, remoteId: remoteId)
+                                // Only show FAA lookup for regular drones
+                                if !isFPVDetection {
+                                    if let mac = encounter.metadata["mac"],
+                                       !encounter.id.isEmpty {
+                                        let remoteId = encounter.id.replacingOccurrences(of: "drone-", with: "")
+                                        FAALookupButton(mac: mac, remoteId: remoteId)
+                                    }
+                                    
+                                    Image(systemName: encounter.trustStatus.icon)
+                                        .foregroundColor(encounter.trustStatus.color)
+                                        .font(.system(size: 24))
                                 }
-                                
-                                Image(systemName: encounter.trustStatus.icon)
-                                    .foregroundColor(encounter.trustStatus.color)
-                                    .font(.system(size: 24))
                                 
                                 Button(action: { showingInfoEditor = true }) {
                                     Image(systemName: "pencil.circle")
@@ -486,8 +668,8 @@ struct StoredEncountersView: View {
                     
                     //MARK - View Sections
                     
-                    // Map - only show if we have flight data and data is loaded
-                    if isDataLoaded && encounter.cachedFlightPointCount > 0 {
+                    // Map - only show if we have flight data and data is loaded (or if FPV with alert ring)
+                    if isDataLoaded && (encounter.cachedFlightPointCount > 0 || isFPVDetection) {
                         mapSection
                     }
                     
@@ -908,13 +1090,11 @@ struct StoredEncountersView: View {
             .background(Color(UIColor.secondarySystemBackground))
             .cornerRadius(12)
         }
-        
-        // CRITICAL: Load relationship data safely in the view lifecycle
+
         private func loadRelationshipData() {
-            // Access relationships here where SwiftData context is available
-            // This prevents faulting crashes in computed properties
             flightPoints = encounter.flightPoints
             signatures = encounter.signatures
+            isFPVDetection = encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true"
             isDataLoaded = true
         }
         

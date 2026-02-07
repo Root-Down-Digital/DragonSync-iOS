@@ -231,28 +231,47 @@ class DroneMessageGenerator:
     def generate_fpv_detection_message(self):
         """Generate an FPV detection message compatible with fpv_mdn_receiver.py output
         
-        Format matches actual hardware output:
-        - Frequency: 5.6-5.9 GHz range (FPV video frequencies)
-        - RSSI: 1200-1400 range (actual observed values from hardware)
+        Format matches actual hardware output from fpvparser.py:
+        - Frequency: 5.6-5.9 GHz range (FPV video frequencies in MHz)
+        - RSSI: 1200-1400 range (actual observed raw values from hardware)
         - Source: inst-node format (e.g., "01-97e8")
+        - Distance: Uses empirical RSSI-based calculation matching fpvparser.py
         """
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         
-        # Realistic FPV frequencies (5.6-5.9 GHz band used by FPV drones)
+        # Realistic FPV frequencies in MHz (5.6-5.9 GHz band used by FPV drones)
         # Common channels: 5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885
         frequency = random.choice([5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885])
         
         # FPV video bandwidth (typically 20-40 MHz)
         bandwidth = f"{random.choice([20, 40])}MHz"
         
-        # Realistic RSSI values from actual hardware (around 1200-1400)
+        # Realistic RSSI values from actual hardware (raw ADC values around 1200-1400)
         rssi = random.randint(1200, 1400)
         
         # Source node in inst-node format (matches hardware output)
         source_inst = f"{random.randint(1, 5):02d}"
-        source_node = f"{random.randint(1000, 9999):04x}"  # Use hex like hardware does
+        source_node = f"{random.randint(1000, 9999):04x}"  # Use hex like hardware does (e.g., "97e8")
         detection_source = f"{source_inst}-{source_node}"
+        
+        # Calculate distance using empirical formula from fpvparser.py
+        # Higher RSSI = stronger signal = closer distance
+        if rssi >= 2000:
+            distance = 10.0
+        elif rssi >= 1800:
+            distance = 25.0
+        elif rssi >= 1600:
+            distance = 50.0
+        elif rssi >= 1400:
+            distance = 100.0
+        elif rssi >= 1200:
+            # Linear interpolation: rssi 1400 -> 100m, rssi 1200 -> 200m
+            distance = 300 - (rssi - 1200) * 0.5
+        elif rssi >= 1000:
+            distance = 500.0
+        else:
+            distance = 1000.0
         
         # Initialize or reuse existing detection
         if not hasattr(self, 'current_fpv_detection'):
@@ -270,20 +289,28 @@ class DroneMessageGenerator:
             source_node = self.current_fpv_detection['source_node']
             detection_source = self.current_fpv_detection['detection_source']
             rssi = self.current_fpv_detection['rssi']
+            # Recalculate distance with current RSSI
+            if rssi >= 1400:
+                distance = 100.0
+            elif rssi >= 1200:
+                distance = 300 - (rssi - 1200) * 0.5
+            else:
+                distance = 200.0
             
-        # Format matches fpv_mdn_receiver.py output
+        # Format matches fpv_mdn_receiver.py detection_messages output
+        # This is what's published to ZMQ after "detection_messages = [{"FPV Detection": ...}]"
         detection_message = [
             {
                 "FPV Detection": {
                     "timestamp": timestamp,
-                    "manufacturer": source_inst,
-                    "device_type": f"FPV{frequency/1000:.1f}GHz",  # Show as GHz like "FPV5.6GHz"
-                    "frequency": frequency,
+                    "manufacturer": source_inst,  # Instance ID from hardware
+                    "device_type": f"FPV{frequency}MHz",  # e.g., "FPV5621MHz"
+                    "frequency": frequency,  # Raw frequency in MHz
                     "bandwidth": bandwidth,
-                    "signal_strength": rssi,
-                    "detection_source": detection_source,
+                    "signal_strength": rssi,  # Raw RSSI value (1200-1400 range)
+                    "detection_source": detection_source,  # e.g., "01-97e8"
                     "status": "NEW CONTACT LOCK",
-                    "estimated_distance": random.uniform(2.0e-44, 3.0e-44)  # Match observed values
+                    "estimated_distance": distance  # Distance in meters based on RSSI
                 }
             }
         ]
@@ -294,6 +321,7 @@ class DroneMessageGenerator:
         """Generate an FPV update message in the format of LOCK UPDATE messages
         
         This matches the actual AUX_ADV_IND format from fpv_mdn_receiver.py
+        Format is used for ongoing signal strength updates after initial detection
         """
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -305,19 +333,37 @@ class DroneMessageGenerator:
         detection_source = self.current_fpv_detection['detection_source']
         frequency = self.current_fpv_detection['frequency']
         
-        # Simulate RSSI fluctuation (±2-3 dBm is realistic)
-        rssi_variation = random.uniform(-2.5, 2.5)
+        # Simulate realistic RSSI fluctuation (±20-30 units is typical for FPV hardware)
+        rssi_variation = random.uniform(-30, 30)
         rssi = self.current_fpv_detection['rssi'] + rssi_variation
+        # Clamp to reasonable range (1000-1600)
+        rssi = max(1000, min(1600, rssi))
         self.current_fpv_detection['rssi'] = rssi
+        
+        # Recalculate distance based on new RSSI (matching fpvparser.py formula)
+        if rssi >= 2000:
+            distance = 10.0
+        elif rssi >= 1800:
+            distance = 25.0
+        elif rssi >= 1600:
+            distance = 50.0
+        elif rssi >= 1400:
+            distance = 100.0
+        elif rssi >= 1200:
+            distance = 300 - (rssi - 1200) * 0.5
+        elif rssi >= 1000:
+            distance = 500.0
+        else:
+            distance = 1000.0
         
         # Increment time counter (matches hardware behavior)
         self.current_fpv_detection['time'] += 10  # Hardware updates every ~10 seconds
         
-        # Format matches actual fpv_mdn_receiver.py output
+        # Format matches actual fpv_mdn_receiver.py zmq_formatted_msg output
         update_message = {
             "AUX_ADV_IND": {
-                "rssi": rssi, 
-                "aa": 2391391958,  # Fixed advertising address (matches hardware)
+                "rssi": rssi,  # Raw ADC value (not dBm)
+                "aa": 2391391958,  # Fixed advertising address (matches hardware: 0x8e89bed6)
                 "time": timestamp
             }, 
             "aext": {
@@ -328,8 +374,8 @@ class DroneMessageGenerator:
                 "lat": 0.0,  # FPV detector doesn't have location data
                 "lon": 0.0
             },
-            "distance": random.uniform(2.0e-44, 3.0e-44),  # Estimated distance (matches observed values)
-            "frequency": frequency  # Keep original frequency
+            "distance": distance,  # Estimated distance in meters
+            "frequency": frequency  # Keep original frequency in MHz
         }
         
         return json.dumps(update_message)

@@ -98,12 +98,12 @@ class DataMigrationManager {
             
             // Migrate ADS-B encounters
             try await migrateADSBEncounters(modelContext: modelContext)
-            
-            // CRITICAL: Mark migration as complete BEFORE returning
-            // This ensures we don't re-run migration even if there was no data
+
             UserDefaults.standard.set(true, forKey: migrationCompletedKey)
             UserDefaults.standard.set(currentMigrationVersion, forKey: migrationVersionKey)
-            UserDefaults.standard.synchronize() // Force immediate save
+            
+            // Save
+            UserDefaults.standard.synchronize()
             
             logger.info("Migration completed successfully - will not run again")
         } catch {

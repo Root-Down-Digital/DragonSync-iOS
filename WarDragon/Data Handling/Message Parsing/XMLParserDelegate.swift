@@ -216,6 +216,21 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     }
 
     private func processJSONArray(_ messages: [[String: Any]]) {
+        // Check if this is an FPV Detection array first
+        if let firstMessage = messages.first, firstMessage["FPV Detection"] != nil {
+            print("DEBUG: Detected FPV Detection array format")
+            // Process each FPV detection in the array
+            for message in messages {
+                if let fpvDetection = message["FPV Detection"] as? [String: Any] {
+                    if let fpvMessage = processFPVDetection(fpvDetection) {
+                        cotMessage = fpvMessage
+                        return // Return first valid FPV detection
+                    }
+                }
+            }
+            return
+        }
+        
         var dronesBySerial: [String: [String: Any]] = [:]
         
         // Detect format: if first message has multiple message types, it's consolidated
