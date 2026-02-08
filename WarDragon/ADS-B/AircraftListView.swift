@@ -6,12 +6,14 @@
 //
 
 import SwiftUI
+import MapKit
 
 struct AircraftListView: View {
     @ObservedObject var cotViewModel: CoTViewModel
     @State private var searchText = ""
     @State private var sortBy: SortOption = .distance
     @State private var showFilters = false
+    @State private var showUnifiedMap = false
     
     enum SortOption: String, CaseIterable {
         case distance = "Distance"
@@ -47,23 +49,32 @@ struct AircraftListView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Main list
             if cotViewModel.aircraftTracks.isEmpty {
                 emptyStateView
             } else {
-                List(filteredAircraft) { aircraft in
-                    AircraftRow(aircraft: aircraft)
+                List {
+                    if cotViewModel.aircraftTracks.count >= 2 {
+                        Section {
+                            aircraftMapPreview
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Color.clear)
+                        }
+                    }
+                    
+                    Section {
+                        ForEach(filteredAircraft) { aircraft in
+                            AircraftRow(aircraft: aircraft, isCompact: cotViewModel.aircraftTracks.count >= 2)
+                        }
+                    }
                 }
                 .listStyle(.plain)
                 .searchable(text: $searchText, prompt: "Search by callsign or ICAO")
                 .refreshable {
-                    // Refresh is handled automatically by the ADS-B polling
                 }
             }
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                // Sort button with icon reflecting current sort
                 Menu {
                     ForEach(SortOption.allCases, id: \.self) { option in
                         Button {
@@ -86,7 +97,6 @@ struct AircraftListView: View {
                 }
                 .help("Sort aircraft")
                 
-                // Clear button
                 Button(action: {
                     withAnimation {
                         cotViewModel.clearAircraftTracks()
@@ -99,6 +109,18 @@ struct AircraftListView: View {
                 .disabled(cotViewModel.aircraftTracks.isEmpty)
             }
         }
+        .navigationDestination(isPresented: $showUnifiedMap) {
+            UnifiedAircraftMapView(cotViewModel: cotViewModel)
+        }
+    }
+    
+    private var aircraftMapPreview: some View {
+        Button {
+            showUnifiedMap = true
+        } label: {
+            LiveAircraftMapPreview(cotViewModel: cotViewModel)
+        }
+        .buttonStyle(.plain)
     }
     
     // MARK: - Subviews
@@ -166,3 +188,401 @@ struct AircraftListView: View {
             .navigationTitle("Aircraft")
     }
 }
+private struct LiveAircraftMapPreview: View {
+    @ObservedObject var cotViewModel: CoTViewModel
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Map(bounds: MapCameraBounds(centerCoordinateBounds: mapRegion)) {
+                ForEach(cotViewModel.aircraftTracks) { aircraft in
+                    if let coordinate = aircraft.coordinate {
+                        Annotation(aircraft.callsign, coordinate: coordinate) {
+                            aircraftAnnotationIcon(for: aircraft)
+                        }
+                    }
+                }
+            }
+            .mapStyle(.standard)
+            .frame(height: 250)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "airplane")
+                            .foregroundStyle(.cyan)
+                            .font(.caption)
+                        Text("\(cotViewModel.aircraftTracks.count)")
+                            .font(.system(.caption, design: .monospaced))
+                            .fontWeight(.semibold)
+                    }
+                    
+                    if cotViewModel.aircraftTracks.filter({ $0.isEmergency }).count > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                            Text("\(cotViewModel.aircraftTracks.filter({ $0.isEmergency }).count)")
+                                .font(.system(.caption, design: .monospaced))
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+                .padding(8)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottom) {
+                HStack {
+                    Image(systemName: "map")
+                        .font(.caption)
+                    Text("Live aircraft positions")
+                        .font(.caption)
+                }
+                .foregroundColor(.secondary)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .padding(.bottom, 8)
+                .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+    
+    private func aircraftAnnotationIcon(for aircraft: Aircraft) -> some View {
+        let iconName = aircraft.isOnGround ? "airplane.arrival" : "airplane"
+        let iconColor: Color = aircraft.isEmergency ? .red : .cyan
+        let rotation = Double(aircraft.track ?? 0) - 90
+        
+        return Image(systemName: iconName)
+            .foregroundStyle(iconColor)
+            .font(.title3)
+            .rotationEffect(.degrees(rotation))
+            .background(
+                Circle()
+                    .fill(.white)
+                    .frame(width: 24, height: 24)
+            )
+    }
+    
+    private var mapRegion: MKCoordinateRegion {
+        let allCoords = cotViewModel.aircraftTracks.compactMap { $0.coordinate }
+        
+        guard !allCoords.isEmpty else {
+            return MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            )
+        }
+        
+        if allCoords.count == 1 {
+            return MKCoordinateRegion(
+                center: allCoords[0],
+                span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+            )
+        }
+        
+        let latitudes = allCoords.map(\.latitude)
+        let longitudes = allCoords.map(\.longitude)
+        let minLat = latitudes.min()!
+        let maxLat = latitudes.max()!
+        let minLon = longitudes.min()!
+        let maxLon = longitudes.max()!
+        
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.5, 0.1),
+            longitudeDelta: max((maxLon - minLon) * 1.5, 0.1)
+        )
+        
+        return MKCoordinateRegion(center: center, span: span)
+    }
+}
+
+// MARK: - Unified Aircraft Map View
+/// Full-screen map view for all aircraft with flight paths
+private struct UnifiedAircraftMapView: View {
+    @ObservedObject var cotViewModel: CoTViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var mapCameraPosition: MapCameraPosition
+    @State private var showFlightPaths = true
+    @State private var selectedMapStyle: MapStyleOption = .standard
+    @State private var userHasMovedMap = false
+    
+    enum MapStyleOption {
+        case standard
+        case hybrid
+        case satellite
+        
+        var mapStyle: MapStyle {
+            switch self {
+            case .standard: return .standard
+            case .hybrid: return .hybrid
+            case .satellite: return .imagery
+            }
+        }
+    }
+    
+    init(cotViewModel: CoTViewModel) {
+        self.cotViewModel = cotViewModel
+        
+        let allCoords = cotViewModel.aircraftTracks.compactMap { $0.coordinate }
+        
+        if allCoords.count > 1 {
+            let latitudes = allCoords.map(\.latitude)
+            let longitudes = allCoords.map(\.longitude)
+            let minLat = latitudes.min()!
+            let maxLat = latitudes.max()!
+            let minLon = longitudes.min()!
+            let maxLon = longitudes.max()!
+            
+            let center = CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            )
+            
+            let span = MKCoordinateSpan(
+                latitudeDelta: max((maxLat - minLat) * 1.5, 0.01),
+                longitudeDelta: max((maxLon - minLon) * 1.5, 0.01)
+            )
+            
+            let region = MKCoordinateRegion(center: center, span: span)
+            _mapCameraPosition = State(initialValue: .region(region))
+        } else if let firstCoord = allCoords.first {
+            let region = MKCoordinateRegion(
+                center: firstCoord,
+                span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+            )
+            _mapCameraPosition = State(initialValue: .region(region))
+        } else {
+            _mapCameraPosition = State(initialValue: .region(
+                MKCoordinateRegion(
+                    center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                    span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                )
+            ))
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            Map(position: $mapCameraPosition, interactionModes: .all) {
+                // Aircraft flight paths
+                if showFlightPaths {
+                    ForEach(cotViewModel.aircraftTracks, id: \.hex) { aircraft in
+                        let coordinates = getAircraftFlightPath(for: aircraft)
+                        
+                        if coordinates.count > 1 {
+                            MapPolyline(coordinates: coordinates)
+                                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                }
+                
+                // Aircraft markers
+                ForEach(cotViewModel.aircraftTracks, id: \.hex) { aircraft in
+                    if let coordinate = aircraft.coordinate {
+                        Annotation(aircraft.displayName, coordinate: coordinate) {
+                            VStack(spacing: 2) {
+                                ZStack {
+                                    Image(systemName: aircraftIcon(for: aircraft))
+                                        .resizable()
+                                        .frame(width: 24, height: 24)
+                                        .foregroundStyle(aircraft.isEmergency ? .red : .cyan)
+                                        .rotationEffect(.degrees((aircraft.track ?? 0) - 90))
+                                        .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                }
+                                
+                                Text(aircraft.displayName)
+                                    .font(.caption2)
+                                    .bold()
+                                    .foregroundColor(.primary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.cyan.opacity(0.2))
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(4)
+                                
+                                if let alt = aircraft.altitudeFeet {
+                                    Text("\(alt)ft")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(.ultraThinMaterial)
+                                        .cornerRadius(4)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .mapStyle(selectedMapStyle.mapStyle)
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { _ in
+                        userHasMovedMap = true
+                    }
+            )
+            .gesture(
+                MagnificationGesture(minimumScaleDelta: 0.01)
+                    .onChanged { _ in
+                        userHasMovedMap = true
+                    }
+            )
+            
+            // Overlay controls
+            VStack {
+                HStack {
+                    Spacer()
+                    
+                    // Flight Path Toggle
+                    Button {
+                        showFlightPaths.toggle()
+                    } label: {
+                        Label(showFlightPaths ? "Paths" : "Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
+                    // Map Style Picker
+                    Menu {
+                        Button {
+                            selectedMapStyle = .standard
+                        } label: {
+                            Label("Standard", systemImage: selectedMapStyle == .standard ? "checkmark" : "map")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .hybrid
+                        } label: {
+                            Label("Hybrid", systemImage: selectedMapStyle == .hybrid ? "checkmark" : "map.fill")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .satellite
+                        } label: {
+                            Label("Satellite", systemImage: selectedMapStyle == .satellite ? "checkmark" : "globe.americas.fill")
+                        }
+                    } label: {
+                        Label("Map", systemImage: "map")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
+                    // Fit to View button
+                    Button(action: resetMapView) {
+                        Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    .padding(.trailing)
+                }
+                
+                Spacer()
+                
+                // Aircraft count badge - tapping dismisses and returns to list
+                Button(action: {
+                    dismiss()
+                }) {
+                    VStack(spacing: 4) {
+                        Text("\(cotViewModel.aircraftTracks.count) Aircraft")
+                            .font(.footnote)
+                            .foregroundColor(.cyan)
+                    }
+                    .padding()
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(20)
+                }
+                .padding(.bottom)
+            }
+        }
+        .navigationTitle("Aircraft Map")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    
+    private func aircraftIcon(for aircraft: Aircraft) -> String {
+        if aircraft.isOnGround {
+            return "airplane.arrival"
+        } else if let vr = aircraft.verticalRate {
+            if vr > 500 {
+                return "airplane.departure"
+            } else if vr < -500 {
+                return "airplane.arrival"
+            }
+        }
+        return "airplane"
+    }
+    
+    private func getAircraftFlightPath(for aircraft: Aircraft) -> [CLLocationCoordinate2D] {
+        var coordinates = aircraft.positionHistory.map { $0.coordinate }
+        
+        // Ensure path ends at current position for seamless alignment
+        if let currentCoord = aircraft.coordinate {
+            if coordinates.isEmpty {
+                coordinates = [currentCoord]
+            } else {
+                // Replace last coordinate with current to ensure perfect alignment
+                coordinates[coordinates.count - 1] = currentCoord
+            }
+        }
+        
+        return coordinates
+    }
+    
+    private func resetMapView() {
+        userHasMovedMap = false
+        
+        let allCoords = cotViewModel.aircraftTracks.compactMap { $0.coordinate }
+        
+        guard !allCoords.isEmpty else { return }
+        
+        let latitudes = allCoords.map(\.latitude)
+        let longitudes = allCoords.map(\.longitude)
+        let minLat = latitudes.min()!
+        let maxLat = latitudes.max()!
+        let minLon = longitudes.min()!
+        let maxLon = longitudes.max()!
+        
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.2, 0.05),
+            longitudeDelta: max((maxLon - minLon) * 1.2, 0.05)
+        )
+        
+        let region = MKCoordinateRegion(center: center, span: span)
+        
+        withAnimation {
+            mapCameraPosition = .region(region)
+        }
+    }
+}
+
+

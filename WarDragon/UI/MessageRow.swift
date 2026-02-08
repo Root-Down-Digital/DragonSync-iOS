@@ -10,13 +10,20 @@ import MapKit
 
 struct MessageRow: View {
     let message: CoTViewModel.CoTMessage
-    let cotViewModel: CoTViewModel  // Changed from @ObservedObject - we don't need to observe
-    @State private var droneEncounter: DroneEncounter?  // Cache locally instead of observing whole storage
-    @State private var droneSignature: DroneSignature?   // Cache locally
+    let cotViewModel: CoTViewModel
+    let isCompact: Bool
+    @State private var droneEncounter: DroneEncounter?
+    @State private var droneSignature: DroneSignature?
     @State private var activeSheet: SheetType?
     @State private var showingSaveConfirmation = false
     @State private var showingInfoEditor = false
     @State private var showingDeleteConfirmation = false
+    
+    init(message: CoTViewModel.CoTMessage, cotViewModel: CoTViewModel, isCompact: Bool = false) {
+        self.message = message
+        self.cotViewModel = cotViewModel
+        self.isCompact = isCompact
+    }
     
     enum SheetType: Identifiable {
         case liveMap
@@ -509,87 +516,89 @@ struct MessageRow: View {
                 .frame(height: 80)
             }
         } else {
-            let encounter = DroneStorageManager.shared.encounters[message.uid]
-            
-            let flightCoords: [CLLocationCoordinate2D] = {
-                var coords = encounter?.flightPath.map { $0.coordinate } ?? []
+            Group {
+                let encounter = DroneStorageManager.shared.encounters[message.uid]
                 
-                // Ensure current position is included in the path
-                if let currentCoord = message.coordinate,
-                   !coords.contains(where: { coord in
-                       abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
-                       abs(coord.longitude - currentCoord.longitude) < 0.00001
-                   }) {
-                    coords.append(currentCoord)
-                }
+                let flightCoords: [CLLocationCoordinate2D] = {
+                    var coords = encounter?.flightPath.map { $0.coordinate } ?? []
+                    
+                    // Ensure current position is included in the path
+                    if let currentCoord = message.coordinate,
+                       !coords.contains(where: { coord in
+                           abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
+                           abs(coord.longitude - currentCoord.longitude) < 0.00001
+                       }) {
+                        coords.append(currentCoord)
+                    }
+                    
+                    return coords
+                }()
                 
-                return coords
-            }()
-            
-            let pilotCoordinate: CLLocationCoordinate2D? = {
-                guard let pilotLatStr = encounter?.metadata["pilotLat"],
-                      let pilotLonStr = encounter?.metadata["pilotLon"],
-                      let pilotLat = Double(pilotLatStr),
-                      let pilotLon = Double(pilotLonStr),
-                      pilotLat != 0 || pilotLon != 0 else {
-                    return nil
-                }
-                return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
-            }()
-            
-            let takeoffCoordinate: CLLocationCoordinate2D? = {
-                guard let homeLatStr = encounter?.metadata["homeLat"],
-                      let homeLonStr = encounter?.metadata["homeLon"],
-                      let homeLat = Double(homeLatStr),
-                      let homeLon = Double(homeLonStr),
-                      homeLat != 0 || homeLon != 0 else {
-                    return nil
-                }
-                return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
-            }()
-            
-            Map(position: .constant(.camera(MapCamera(
-                centerCoordinate: message.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
-                distance: 500
-            )))) {
-                if let coordinate = message.coordinate {
-                    Annotation(message.uid, coordinate: coordinate) {
-                        Image(systemName: "airplane")
-                            .resizable()
-                            .frame(width: 20, height: 20)
-                            .rotationEffect(.degrees(message.headingDeg - 90))
-                            .foregroundStyle(.blue)
+                let pilotCoordinate: CLLocationCoordinate2D? = {
+                    guard let pilotLatStr = encounter?.metadata["pilotLat"],
+                          let pilotLonStr = encounter?.metadata["pilotLon"],
+                          let pilotLat = Double(pilotLatStr),
+                          let pilotLon = Double(pilotLonStr),
+                          pilotLat != 0 || pilotLon != 0 else {
+                        return nil
+                    }
+                    return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+                }()
+                
+                let takeoffCoordinate: CLLocationCoordinate2D? = {
+                    guard let homeLatStr = encounter?.metadata["homeLat"],
+                          let homeLonStr = encounter?.metadata["homeLon"],
+                          let homeLat = Double(homeLatStr),
+                          let homeLon = Double(homeLonStr),
+                          homeLat != 0 || homeLon != 0 else {
+                        return nil
+                    }
+                    return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+                }()
+                
+                Map(position: .constant(.camera(MapCamera(
+                    centerCoordinate: message.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                    distance: 500
+                )))) {
+                    if let coordinate = message.coordinate {
+                        Annotation(message.uid, coordinate: coordinate) {
+                            Image(systemName: "airplane")
+                                .resizable()
+                                .frame(width: 20, height: 20)
+                                .rotationEffect(.degrees(message.headingDeg - 90))
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    
+                    if flightCoords.count > 1 {
+                        MapPolyline(coordinates: flightCoords)
+                            .stroke(.purple, lineWidth: 2)
+                    }
+                    
+                    if let pilotCoordinate = pilotCoordinate {
+                        Annotation("Pilot", coordinate: pilotCoordinate) {
+                            Image(systemName: "person.fill")
+                                .foregroundStyle(.orange)
+                                .background(Circle().fill(.white))
+                        }
+                    }
+                    
+                    if let takeoffCoordinate = takeoffCoordinate {
+                        Annotation("Takeoff", coordinate: takeoffCoordinate) {
+                            Image(systemName: "house.fill")
+                                .foregroundStyle(.green)
+                                .background(Circle().fill(.white))
+                        }
                     }
                 }
-                
-                if flightCoords.count > 1 {
-                    MapPolyline(coordinates: flightCoords)
-                        .stroke(.purple, lineWidth: 2)
-                }
-                
-                if let pilotCoordinate = pilotCoordinate {
-                    Annotation("Pilot", coordinate: pilotCoordinate) {
-                        Image(systemName: "person.fill")
-                            .foregroundStyle(.orange)
-                            .background(Circle().fill(.white))
-                    }
-                }
-                
-                if let takeoffCoordinate = takeoffCoordinate {
-                    Annotation("Takeoff", coordinate: takeoffCoordinate) {
-                        Image(systemName: "house.fill")
-                            .foregroundStyle(.green)
-                            .background(Circle().fill(.white))
-                    }
-                }
+                .mapStyle(.standard)
+                .frame(height: 150)
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.gray, lineWidth: 1)
+                )
             }
-            .mapStyle(.standard)
-            .frame(height: 150)
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray, lineWidth: 1)
-            )
         }
     }
     
@@ -689,88 +698,201 @@ struct MessageRow: View {
     // MARK: - Main View
     
     var body: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                Button(action: {
-                    activeSheet = .detailView
-                }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        headerView()
-                        typeInfoView()
-                        signalSourcesView()
-                        macRandomizationView()
-                        mapSectionView()
-                        detailsView()
-                        spoofDetectionView()
+        if isCompact {
+            compactView
+        } else {
+            expandedView
+        }
+    }
+    
+    private var compactView: some View {
+        Button(action: {
+            activeSheet = .detailView
+        }) {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(message.statusColor)
+                    .frame(width: 10, height: 10)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(message.id)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.medium)
+                            .foregroundColor(.primary)
+                        
+                        if let customName = currentEncounter?.customName, !customName.isEmpty {
+                            Text("(\(customName))")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
                     }
-                }
-                .cornerRadius(8)
-                .padding(.vertical, 8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color.primary, lineWidth: 3)
-                        .padding(-8)
-                )
-            }
-            .task(id: message.id) {
-                droneEncounter = DroneStorageManager.shared.encounters[message.uid]
-                droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
-                print("MessageRow loaded for \(message.uid) (message.id: \(message.id))")
-                print("   - Has encounter: \(droneEncounter != nil)")
-                print("   - Has signature: \(droneSignature != nil)")
-            }
-            .contextMenu {
-                Button(action: {
-                    removeDroneFromTracking()
-                }) {
-                    Label("Stop Tracking", systemImage: "eye.slash")
-                }
-                
-                Button(role: .destructive, action: {
-                    showingDeleteConfirmation = true
-                }) {
-                    Label("Delete from History", systemImage: "trash")
-                }
-            }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) {
-                    removeDroneFromTracking()
-                    deleteDroneFromStorage()
-//                    showingDeleteConfirmation = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-                
-                Button {
-                    removeDroneFromTracking()
-                } label: {
-                    Label("Stop", systemImage: "eye.slash")
-                }
-                .tint(.orange)
-            }
-        .sheet(item: $activeSheet) { sheetType in
-            switch sheetType {
-            case .liveMap:
-                NavigationView {
-                    LiveMapView(cotViewModel: cotViewModel, initialMessage: message)
-                        .navigationTitle("Live Drone Map")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button("Done") {
-                                    activeSheet = nil
-                                }
+                    
+                    HStack(spacing: 8) {
+                        if let rssi = getRSSI() {
+                            HStack(spacing: 4) {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                    .font(.caption2)
+                                    .foregroundColor(rssiColor(rssi))
+                                Text("\(Int(rssi)) dBm")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(rssiColor(rssi))
                             }
                         }
+                        
+                        if message.alt != "0.0", let alt = Double(message.alt) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.circle")
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                                Text("\(Int(alt))m")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        if message.speed != "0.0", let speed = Double(message.speed) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "speedometer")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
+                                Text(String(format: "%.1f m/s", speed))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
                 }
-            case .detailView:
-                NavigationView {
-                    DroneDetailView(
-                        message: message,
-                        flightPath: DroneStorageManager.shared
-                            .encounters[message.uid]?.flightPath
-                            .map { $0.coordinate } ?? [],
-                        cotViewModel: cotViewModel
-                    )
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 4) {
+                    Image(systemName: (currentEncounter?.trustStatus ?? .unknown).icon)
+                        .foregroundColor((currentEncounter?.trustStatus ?? .unknown).color)
+                        .font(.system(size: 16))
+                    
+                    Text(message.lastUpdated.formatted(.relative(presentation: .numeric)))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            contextMenuItems
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            swipeActionItems
+        }
+        .task(id: message.id) {
+            droneEncounter = DroneStorageManager.shared.encounters[message.uid]
+            droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        }
+        .sheet(item: $activeSheet) { sheetType in
+            sheetContent(for: sheetType)
+        }
+        .sheet(isPresented: $showingInfoEditor) {
+            infoEditorSheet
+        }
+        .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
+            deleteConfirmationButtons
+        } message: {
+            deleteConfirmationMessage
+        }
+    }
+    
+    private var expandedView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: {
+                activeSheet = .detailView
+            }) {
+                VStack(alignment: .leading, spacing: 4) {
+                    headerView()
+                    typeInfoView()
+                    signalSourcesView()
+                    macRandomizationView()
+                    mapSectionView()
+                    detailsView()
+                    spoofDetectionView()
+                }
+            }
+            .cornerRadius(8)
+            .padding(.vertical, 8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.primary, lineWidth: 3)
+                    .padding(-8)
+            )
+        }
+        .task(id: message.id) {
+            droneEncounter = DroneStorageManager.shared.encounters[message.uid]
+            droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        }
+        .contextMenu {
+            contextMenuItems
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            swipeActionItems
+        }
+        .sheet(item: $activeSheet) { sheetType in
+            sheetContent(for: sheetType)
+        }
+        .sheet(isPresented: $showingInfoEditor) {
+            infoEditorSheet
+        }
+        .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
+            deleteConfirmationButtons
+        } message: {
+            deleteConfirmationMessage
+        }
+    }
+    
+    @ViewBuilder
+    private var contextMenuItems: some View {
+        Button(action: {
+            removeDroneFromTracking()
+        }) {
+            Label("Stop Tracking", systemImage: "eye.slash")
+        }
+        
+        Button(role: .destructive, action: {
+            showingDeleteConfirmation = true
+        }) {
+            Label("Delete from History", systemImage: "trash")
+        }
+    }
+    
+    @ViewBuilder
+    private var swipeActionItems: some View {
+        Button(role: .destructive) {
+            removeDroneFromTracking()
+            deleteDroneFromStorage()
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        
+        Button {
+            removeDroneFromTracking()
+        } label: {
+            Label("Stop", systemImage: "eye.slash")
+        }
+        .tint(.orange)
+    }
+    
+    @ViewBuilder
+    private func sheetContent(for sheetType: SheetType) -> some View {
+        switch sheetType {
+        case .liveMap:
+            NavigationStack {
+                LiveMapView(cotViewModel: cotViewModel, initialMessage: message)
+                    .navigationTitle("Live Drone Map")
+                    .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button("Done") {
@@ -778,32 +900,53 @@ struct MessageRow: View {
                             }
                         }
                     }
+            }
+        case .detailView:
+            NavigationStack {
+                DroneDetailView(
+                    message: message,
+                    flightPath: DroneStorageManager.shared
+                        .encounters[message.uid]?.flightPath
+                        .map { $0.coordinate } ?? [],
+                    cotViewModel: cotViewModel
+                )
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            activeSheet = nil
+                        }
+                    }
                 }
             }
         }
-        .sheet(isPresented: $showingInfoEditor) {
-            NavigationView {
-                DroneInfoEditor(droneId: message.uid)
-                    .navigationTitle("Edit Drone Info")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Done") {
-                                showingInfoEditor = false
-                            }
+    }
+    
+    private var infoEditorSheet: some View {
+        NavigationStack {
+            DroneInfoEditor(droneId: message.uid)
+                .navigationTitle("Edit Drone Info")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            showingInfoEditor = false
                         }
                     }
-            }
-            .presentationDetents([.medium])
+                }
         }
-        .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                removeDroneFromTracking()
-                deleteDroneFromStorage()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to delete this drone from tracking and history? This action cannot be undone.")
+        .presentationDetents([.medium])
+    }
+    
+    @ViewBuilder
+    private var deleteConfirmationButtons: some View {
+        Button("Delete", role: .destructive) {
+            removeDroneFromTracking()
+            deleteDroneFromStorage()
         }
+        Button("Cancel", role: .cancel) {}
+    }
+    
+    private var deleteConfirmationMessage: some View {
+        Text("Are you sure you want to delete this drone from tracking and history? This action cannot be undone.")
     }
 }

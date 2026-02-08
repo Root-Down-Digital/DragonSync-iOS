@@ -9,6 +9,7 @@ import SwiftData
 import Network
 import UserNotifications
 import CoreLocation
+import MapKit
 import Charts
 
 struct ContentView: View {
@@ -197,8 +198,8 @@ struct ContentView: View {
             } message: {
                 Text("This will permanently delete all stored drone encounters and detection history. This action cannot be undone.")
             }
-            .sheet(isPresented: $showUnifiedMap) {
-                unifiedMapSheet
+            .navigationDestination(isPresented: $showUnifiedMap) {
+                unifiedMapDestination
             }
         }
         .tabItem {
@@ -316,6 +317,14 @@ struct ContentView: View {
     
     private var bothDetectionsList: some View {
         List {
+            if (hasDrones && cotViewModel.parsedMessages.count >= 2) || (hasAircraft && cotViewModel.aircraftTracks.count >= 2) || (hasDrones && hasAircraft) {
+                Section {
+                    unifiedMapView(showAircraft: true)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            }
+            
             if hasDrones {
                 Section("Drones (\(cotViewModel.parsedMessages.count))") {
                     ForEach(cotViewModel.parsedMessages) { item in
@@ -326,7 +335,11 @@ struct ContentView: View {
                                 cotViewModel: cotViewModel
                             )
                         } label: {
-                            MessageRow(message: item, cotViewModel: cotViewModel)
+                            MessageRow(
+                                message: item,
+                                cotViewModel: cotViewModel,
+                                isCompact: cotViewModel.parsedMessages.count >= 2 || hasAircraft
+                            )
                         }
                     }
                 }
@@ -427,23 +440,14 @@ struct ContentView: View {
         }
     }
     
-    private var unifiedMapSheet: some View {
-        NavigationStack {
-            LiveMapView(
-                cotViewModel: cotViewModel,
-                initialMessage: getInitialMessageForMap(),
-                filterMode: convertToFilterMode(detectionMode)
-            )
-            .navigationTitle(mapNavigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        showUnifiedMap = false
-                    }
-                }
-            }
-        }
+    private var unifiedMapDestination: some View {
+        LiveMapView(
+            cotViewModel: cotViewModel,
+            initialMessage: getInitialMessageForMap(),
+            filterMode: convertToFilterMode(detectionMode)
+        )
+        .navigationTitle(mapNavigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     private func convertToFilterMode(_ mode: DetectionMode) -> LiveMapView.FilterMode {
@@ -575,15 +579,31 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
-                    List(cotViewModel.parsedMessages) { item in
-                        NavigationLink {
-                            DroneDetailView(
-                                message: item,
-                                flightPath: getValidFlightPath(for: item.uid),
-                                cotViewModel: cotViewModel
-                            )
-                        } label: {
-                            MessageRow(message: item, cotViewModel: cotViewModel)
+                    List {
+                        if cotViewModel.parsedMessages.count >= 2 {
+                            Section {
+                                unifiedMapView(showAircraft: false)
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
+                        
+                        Section {
+                            ForEach(cotViewModel.parsedMessages) { item in
+                                NavigationLink {
+                                    DroneDetailView(
+                                        message: item,
+                                        flightPath: getValidFlightPath(for: item.uid),
+                                        cotViewModel: cotViewModel
+                                    )
+                                } label: {
+                                    MessageRow(
+                                        message: item,
+                                        cotViewModel: cotViewModel,
+                                        isCompact: cotViewModel.parsedMessages.count >= 2
+                                    )
+                                }
+                            }
                         }
                     }
                     .listStyle(.inset)
@@ -603,6 +623,15 @@ struct ContentView: View {
                 }
             }
         }
+    }
+    
+    private func unifiedMapView(showAircraft: Bool = true) -> some View {
+        Button(action: {
+            showUnifiedMap = true
+        }) {
+            LiveMapPreview(cotViewModel: cotViewModel, droneCount: cotViewModel.parsedMessages.count, showAircraft: showAircraft)
+        }
+        .buttonStyle(.plain)
     }
     
     // MARK: - Helper Methods
@@ -858,7 +887,232 @@ struct ContentView: View {
     }
     
 }
-// MARK: - Stat Badge Component
+
+private struct LiveMapPreview: View {
+    @ObservedObject var cotViewModel: CoTViewModel
+    let droneCount: Int
+    let showAircraft: Bool // New parameter to control whether to show aircraft
+    
+    init(cotViewModel: CoTViewModel, droneCount: Int, showAircraft: Bool = true) {
+        self.cotViewModel = cotViewModel
+        self.droneCount = droneCount
+        self.showAircraft = showAircraft
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Map(bounds: MapCameraBounds(centerCoordinateBounds: mapRegion)) {
+                // Drone flight paths
+                ForEach(cotViewModel.parsedMessages) { message in
+                    let flightPath = getDroneFlightPath(for: message.uid)
+                    if flightPath.count > 1 {
+                        MapPolyline(coordinates: flightPath)
+                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    }
+                }
+                
+                // Aircraft flight paths - only if showAircraft is true
+                if showAircraft {
+                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                        let flightPath = getAircraftFlightPath(for: aircraft)
+                        if flightPath.count > 1 {
+                            MapPolyline(coordinates: flightPath)
+                                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                }
+                
+                // Drone markers
+                ForEach(cotViewModel.parsedMessages) { message in
+                    if let coordinate = message.coordinate {
+                        Annotation(message.id, coordinate: coordinate) {
+                            droneAnnotationIcon(for: message)
+                        }
+                    }
+                }
+                
+                // Aircraft markers - only if showAircraft is true
+                if showAircraft {
+                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                        if let coordinate = aircraft.coordinate {
+                            Annotation(aircraft.callsign, coordinate: coordinate) {
+                                aircraftAnnotationIcon(for: aircraft)
+                            }
+                        }
+                    }
+                }
+            }
+            .mapStyle(.standard)
+            .frame(height: 250)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "airplane.circle.fill")
+                            .foregroundStyle(.blue)
+                            .font(.caption)
+                        Text("\(cotViewModel.parsedMessages.count)")
+                            .font(.system(.caption, design: .monospaced))
+                            .fontWeight(.semibold)
+                    }
+                    
+                    if showAircraft && cotViewModel.aircraftTracks.count > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "airplane")
+                                .foregroundStyle(.cyan)
+                                .font(.caption)
+                            Text("\(cotViewModel.aircraftTracks.count)")
+                                .font(.system(.caption, design: .monospaced))
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+                .padding(8)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(8)
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottom) {
+                HStack {
+                    Image(systemName: "map")
+                        .font(.caption)
+                    Text("Tap to view full map")
+                        .font(.caption)
+                }
+                .foregroundColor(.secondary)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .padding(.bottom, 8)
+                .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+    
+    private func getDroneFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
+        // Get flight path from DroneStorageManager
+        guard let encounter = DroneStorageManager.shared.encounters[uid] else {
+            return []
+        }
+        
+        var coordinates = encounter.flightPath.map { $0.coordinate }
+        
+        // Ensure path ends at current position if we have one
+        if let currentMessage = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
+           let currentCoord = currentMessage.coordinate,
+           currentCoord.latitude != 0 && currentCoord.longitude != 0 {
+            
+            if coordinates.isEmpty {
+                coordinates = [currentCoord]
+            } else {
+                // Replace last coordinate with current for seamless alignment
+                coordinates[coordinates.count - 1] = currentCoord
+            }
+        }
+        
+        return coordinates
+    }
+    
+    private func getAircraftFlightPath(for aircraft: Aircraft) -> [CLLocationCoordinate2D] {
+        var coordinates = aircraft.positionHistory.map { $0.coordinate }
+        
+        // Ensure path ends at current position for seamless alignment
+        if let currentCoord = aircraft.coordinate {
+            if coordinates.isEmpty {
+                coordinates = [currentCoord]
+            } else {
+                // Replace last coordinate with current to ensure perfect alignment
+                coordinates[coordinates.count - 1] = currentCoord
+            }
+        }
+        
+        return coordinates
+    }
+    
+    private func droneAnnotationIcon(for message: CoTViewModel.CoTMessage) -> some View {
+        let rotation = message.headingDeg - 90
+        
+        return Image(systemName: "airplane.circle.fill")
+            .foregroundStyle(.blue)
+            .font(.title3)
+            .rotationEffect(.degrees(rotation))
+            .background(
+                Circle()
+                    .fill(.white)
+                    .frame(width: 24, height: 24)
+            )
+    }
+    
+    private func aircraftAnnotationIcon(for aircraft: Aircraft) -> some View {
+        let rotation = Double(aircraft.track ?? 0) - 90
+        
+        return Image(systemName: "airplane")
+            .foregroundStyle(.cyan)
+            .font(.title3)
+            .rotationEffect(.degrees(rotation))
+            .background(
+                Circle()
+                    .fill(.white)
+                    .frame(width: 24, height: 24)
+            )
+    }
+    
+    private var mapRegion: MKCoordinateRegion {
+        var allCoords: [CLLocationCoordinate2D] = []
+        
+        // Always add drone coordinates
+        allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
+            guard let coord = message.coordinate else { return nil }
+            let hasValidCoord = coord.latitude != 0 || coord.longitude != 0
+            return hasValidCoord ? coord : nil
+        }
+        
+        // Only add aircraft coordinates if showAircraft is true
+        if showAircraft {
+            allCoords += cotViewModel.aircraftTracks.compactMap { $0.coordinate }
+        }
+        
+        guard !allCoords.isEmpty else {
+            return MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            )
+        }
+        
+        if allCoords.count == 1 {
+            return MKCoordinateRegion(
+                center: allCoords[0],
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            )
+        }
+        
+        let latitudes = allCoords.map(\.latitude)
+        let longitudes = allCoords.map(\.longitude)
+        let minLat = latitudes.min()!
+        let maxLat = latitudes.max()!
+        let minLon = longitudes.min()!
+        let maxLon = longitudes.max()!
+        
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.5, 0.01),
+            longitudeDelta: max((maxLon - minLon) * 1.5, 0.01)
+        )
+        
+        return MKCoordinateRegion(center: center, span: span)
+    }
+}
 
 private struct StatBadge: View {
     let icon: String

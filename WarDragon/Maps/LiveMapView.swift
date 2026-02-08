@@ -11,6 +11,7 @@ import CoreLocation
 
 struct LiveMapView: View {
     @ObservedObject var cotViewModel: CoTViewModel
+    @Environment(\.dismiss) private var dismiss
     @State public var mapCameraPosition: MapCameraPosition
     @State private var showDroneDetail = false
     @State private var selectedDrone: CoTViewModel.CoTMessage?
@@ -561,14 +562,9 @@ struct LiveMapView: View {
                 Spacer()
                 let droneCount = uniqueDrones.count
                 let aircraftCount = cotViewModel.aircraftTracks.count
-                // Detection count button - tapping dismisses the map and returns to Detections tab
+                // Detection count button - tapping dismisses the map and returns to previous screen
                 Button(action: { 
-                    // Dismiss this view to return to the calling screen (Detections tab)
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let window = windowScene.windows.first,
-                       let presentingVC = window.rootViewController?.presentedViewController {
-                        presentingVC.dismiss(animated: true)
-                    }
+                    dismiss()
                 }) {
                     VStack(spacing: 4) {
                         // Show counts based on filter mode
