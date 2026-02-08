@@ -138,7 +138,7 @@ struct Aircraft: Identifiable, Codable, Equatable {
     }
     
     var isStale: Bool {
-        dataAge > 30  // No updates in 30 seconds
+        dataAge > 120  // No updates in 2 minutes (120 seconds)
     }
     
     enum SignalQuality {

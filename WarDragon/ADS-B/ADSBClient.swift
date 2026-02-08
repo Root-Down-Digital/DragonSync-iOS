@@ -279,15 +279,14 @@ class ADSBClient: ObservableObject {
                 }
             }
             
-            // Cleanup aircraft history that are beyond retention time
+            // Keep aircraft in history that haven't been seen for up to 2 minutes, persist after as stale
             let retentionSeconds = configuration.flightPathRetentionMinutes * 60
             let cutoffDate = Date().addingTimeInterval(-retentionSeconds)
             aircraftHistory = aircraftHistory.filter { _, aircraft in
                 aircraft.lastSeen > cutoffDate
             }
-            
-            // Filter aircraft based on configuration (use updatedAircraft with history instead of readsbResponse.aircraft)
-            var filteredAircraft = updatedAircraft.filter { $0.coordinate != nil }
+
+            var filteredAircraft = Array(aircraftHistory.values).filter { $0.coordinate != nil }
             
             // Distance filtering if enabled and user location is available
             if let maxDistance = configuration.maxDistance,

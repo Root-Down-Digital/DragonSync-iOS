@@ -64,6 +64,17 @@ struct AircraftListView: View {
                     Section {
                         ForEach(filteredAircraft) { aircraft in
                             AircraftRow(aircraft: aircraft, isCompact: cotViewModel.aircraftTracks.count >= 2)
+                                .opacity(aircraft.isStale ? 0.6 : 1.0)
+                        }
+                    } header: {
+                        HStack {
+                            Text("\(filteredAircraft.count) Aircraft")
+                            Spacer()
+                            if staleAircraftCount > 0 {
+                                Text("\(activeAircraftCount) active · \(staleAircraftCount) stale")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -146,7 +157,11 @@ struct AircraftListView: View {
     // MARK: - Computed Properties
     
     private var activeAircraftCount: Int {
-        cotViewModel.aircraftTracks.filter { !$0.isStale }.count
+        filteredAircraft.filter { !$0.isStale }.count
+    }
+    
+    private var staleAircraftCount: Int {
+        filteredAircraft.filter { $0.isStale }.count
     }
     
     private var highestAircraft: Int? {
@@ -258,8 +273,9 @@ private struct LiveAircraftMapPreview: View {
     
     private func aircraftAnnotationIcon(for aircraft: Aircraft) -> some View {
         let iconName = aircraft.isOnGround ? "airplane.arrival" : "airplane"
-        let iconColor: Color = aircraft.isEmergency ? .red : .cyan
+        let iconColor: Color = aircraft.isEmergency ? .red : (aircraft.isStale ? .gray : .cyan)
         let rotation = Double(aircraft.track ?? 0) - 90
+        let opacity = aircraft.isStale ? 0.5 : 1.0
         
         return Image(systemName: iconName)
             .foregroundStyle(iconColor)
@@ -270,6 +286,7 @@ private struct LiveAircraftMapPreview: View {
                     .fill(.white)
                     .frame(width: 24, height: 24)
             )
+            .opacity(opacity)
     }
     
     private var mapRegion: MKCoordinateRegion {
@@ -385,7 +402,10 @@ private struct UnifiedAircraftMapView: View {
                         
                         if coordinates.count > 1 {
                             MapPolyline(coordinates: coordinates)
-                                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                                .stroke(aircraft.isStale ? Color.gray : Color.cyan, 
+                                       style: StrokeStyle(lineWidth: aircraft.isStale ? 1.5 : 2, 
+                                                         lineCap: .round, 
+                                                         lineJoin: .round))
                         }
                     }
                 }
@@ -399,9 +419,10 @@ private struct UnifiedAircraftMapView: View {
                                     Image(systemName: aircraftIcon(for: aircraft))
                                         .resizable()
                                         .frame(width: 24, height: 24)
-                                        .foregroundStyle(aircraft.isEmergency ? .red : .cyan)
+                                        .foregroundStyle(aircraft.isEmergency ? .red : (aircraft.isStale ? .gray : .cyan))
                                         .rotationEffect(.degrees((aircraft.track ?? 0) - 90))
                                         .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                        .opacity(aircraft.isStale ? 0.5 : 1.0)
                                 }
                                 
                                 Text(aircraft.displayName)
@@ -410,14 +431,26 @@ private struct UnifiedAircraftMapView: View {
                                     .foregroundColor(.primary)
                                     .padding(.horizontal, 4)
                                     .padding(.vertical, 2)
-                                    .background(.cyan.opacity(0.2))
+                                    .background(aircraft.isStale ? .gray.opacity(0.2) : .cyan.opacity(0.2))
                                     .background(.ultraThinMaterial)
                                     .cornerRadius(4)
+                                    .opacity(aircraft.isStale ? 0.7 : 1.0)
                                 
                                 if let alt = aircraft.altitudeFeet {
                                     Text("\(alt)ft")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(.ultraThinMaterial)
+                                        .cornerRadius(4)
+                                        .opacity(aircraft.isStale ? 0.7 : 1.0)
+                                }
+                                
+                                if aircraft.isStale {
+                                    Text("Stale")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 2)
                                         .background(.ultraThinMaterial)
