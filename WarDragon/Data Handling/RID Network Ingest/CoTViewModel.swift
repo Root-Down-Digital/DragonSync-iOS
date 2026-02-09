@@ -270,6 +270,19 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         var isSpoofed: Bool = false
         var spoofingDetails: DroneSignatureGenerator.SpoofDetectionResult?
         
+        var customName: String = ""
+        var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus = .unknown
+        
+        var displayName: String {
+            if !customName.isEmpty {
+                return customName
+            }
+            if !description.isEmpty && description != uid {
+                return description
+            }
+            return uid.replacingOccurrences(of: "drone-", with: "")
+        }
+        
         var index: String?
         var runtime: String?
         
@@ -760,11 +773,24 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     if Settings.shared.adsbEnabled {
                         await self.setupADSBClient()
                     } else {
-                        // Clean up properly when disabling
+                        // Clean up ONLY aircraft data when disabling ADS-B
+                        // Do NOT touch parsedMessages (drone detections)
+                        print("ADS-B disabled - clearing aircraft tracks only, preserving \(self.parsedMessages.count) drone detections")
+                        
                         self.adsbCancellables.removeAll()
                         self.adsbClient?.stop()
                         self.adsbClient = nil
+                        
+                        // Only clear aircraft-related data
                         self.aircraftTracks.removeAll()
+                        
+                        // Remove aircraft alert rings only (preserve drone alert rings)
+                        self.alertRings.removeAll { $0.droneId.hasPrefix("aircraft-") }
+                        
+                        // IMPORTANT: Explicitly DO NOT clear parsedMessages
+                        // parsedMessages contains drone detections and should remain unchanged
+                        
+                        print("ADS-B cleanup complete - \(self.parsedMessages.count) drone detections preserved")
                     }
                 }
             }
@@ -2914,19 +2940,37 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     private func updateParsedMessages(updatedMessage: CoTMessage, signature: DroneSignature) {
-        // Find existing message by MAC or UID
-        if let existingIndex = self.parsedMessages.firstIndex(where: { $0.mac == updatedMessage.mac || $0.uid == updatedMessage.uid }) {
+        var messageToProcess = updatedMessage
+        
+        Task { @MainActor in
+            if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: updatedMessage.uid) {
+                if !storedEncounter.customName.isEmpty {
+                    messageToProcess.customName = storedEncounter.customName
+                }
+                messageToProcess.trustStatus = storedEncounter.trustStatus
+                storedEncounter.addCurrentSession()
+                try? SwiftDataStorageManager.shared.modelContext?.save()
+            }
+            
+            self.applyStoredDataAndUpdate(messageToProcess, signature)
+        }
+    }
+    
+    @MainActor
+    private func applyStoredDataAndUpdate(_ messageToProcess: CoTMessage, _ signature: DroneSignature) {
+        if let existingIndex = self.parsedMessages.firstIndex(where: { $0.mac == messageToProcess.mac || $0.uid == messageToProcess.uid }) {
             var existingMessage = self.parsedMessages[existingIndex]
+            
+            existingMessage.customName = messageToProcess.customName
+            existingMessage.trustStatus = messageToProcess.trustStatus
             
             var consolidatedSources: [SignalSource.SignalType: SignalSource] = [:]
             
-            // Process existing sources first to maintain original order
             for source in existingMessage.signalSources {
                 consolidatedSources[source.type] = source
             }
             
-            // Only update with newer sources
-            for source in updatedMessage.signalSources {
+            for source in messageToProcess.signalSources {
                 if let existing = consolidatedSources[source.type] {
                     if source.timestamp > existing.timestamp {
                         consolidatedSources[source.type] = source
@@ -2936,7 +2980,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
             }
             
-            // Maintain the preferred order of WiFi > Bluetooth > SDR while preserving existing sources
             let typeOrder: [SignalSource.SignalType] = [.wifi, .bluetooth, .sdr]
             existingMessage.signalSources = Array(consolidatedSources.values)
                 .sorted { s1, s2 in
@@ -2947,73 +2990,62 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     return false
                 }
             
-            // Set primary MAC and RSSI based on the most recent source
             if let latestSource = existingMessage.signalSources.first {
                 existingMessage.mac = latestSource.mac
                 existingMessage.rssi = latestSource.rssi
             }
             
-            // Update metadata but avoid overwriting good values with defaults
-            if updatedMessage.lat != "0.0" { existingMessage.lat = updatedMessage.lat }
-            if updatedMessage.lon != "0.0" { existingMessage.lon = updatedMessage.lon }
-            if updatedMessage.speed != "0.0" { existingMessage.speed = updatedMessage.speed }
-            if updatedMessage.vspeed != "0.0" { existingMessage.vspeed = updatedMessage.vspeed }
-            if updatedMessage.alt != "0.0" { existingMessage.alt = updatedMessage.alt }
-            if let height = updatedMessage.height, height != "0.0" { existingMessage.height = height }
+            if messageToProcess.lat != "0.0" { existingMessage.lat = messageToProcess.lat }
+            if messageToProcess.lon != "0.0" { existingMessage.lon = messageToProcess.lon }
+            if messageToProcess.speed != "0.0" { existingMessage.speed = messageToProcess.speed }
+            if messageToProcess.vspeed != "0.0" { existingMessage.vspeed = messageToProcess.vspeed }
+            if messageToProcess.alt != "0.0" { existingMessage.alt = messageToProcess.alt }
+            if let height = messageToProcess.height, height != "0.0" { existingMessage.height = height }
             
-            // Update the timestamp
             existingMessage.lastUpdated = Date()
             
-            // Preserve operator info
-            if !updatedMessage.pilotLat.isEmpty && updatedMessage.pilotLat != "0.0" {
-                existingMessage.pilotLat = updatedMessage.pilotLat
-                existingMessage.pilotLon = updatedMessage.pilotLon
+            if !messageToProcess.pilotLat.isEmpty && messageToProcess.pilotLat != "0.0" {
+                existingMessage.pilotLat = messageToProcess.pilotLat
+                existingMessage.pilotLon = messageToProcess.pilotLon
             }
             
-            // Preserve operator ID unless we get a new valid one
-            if let newOpId = updatedMessage.operator_id, !newOpId.isEmpty {
+            if let newOpId = messageToProcess.operator_id, !newOpId.isEmpty {
                 existingMessage.operator_id = newOpId
             }
             
-            // Update ID type and CAA registration if present
-            if updatedMessage.idType.contains("CAA") {
-                existingMessage.caaRegistration = updatedMessage.caaRegistration
+            if messageToProcess.idType.contains("CAA") {
+                existingMessage.caaRegistration = messageToProcess.caaRegistration
                 existingMessage.idType = "CAA Assigned Registration ID"
             }
             
-            // Update Track
-            if updatedMessage.trackSpeed != "0.0" && updatedMessage.trackCourse != "0.0" {
-                existingMessage.trackSpeed = updatedMessage.trackSpeed
-                existingMessage.trackCourse = updatedMessage.trackCourse
+            if messageToProcess.trackSpeed != "0.0" && messageToProcess.trackCourse != "0.0" {
+                existingMessage.trackSpeed = messageToProcess.trackSpeed
+                existingMessage.trackCourse = messageToProcess.trackCourse
             }
             
-            // Update spoof detection
-            existingMessage.isSpoofed = updatedMessage.isSpoofed
-            existingMessage.spoofingDetails = updatedMessage.spoofingDetails
+            existingMessage.isSpoofed = messageToProcess.isSpoofed
+            existingMessage.spoofingDetails = messageToProcess.spoofingDetails
             
-            // Update the message - wrap in MainActor to prevent background thread publishing
             Task { @MainActor in
                 self.parsedMessages[existingIndex] = existingMessage
                 self.objectWillChange.send()
             }
             
         } else {
-            // New message - add it - wrap in MainActor to prevent background thread publishing
             Task { @MainActor in
-                self.parsedMessages.append(updatedMessage)
+                self.parsedMessages.append(messageToProcess)
                 self.enforceDetectionLimits()
             }
             
-            if !updatedMessage.idType.contains("CAA") {
-                self.sendNotification(for: updatedMessage)
+            if !messageToProcess.idType.contains("CAA") {
+                self.sendNotification(for: messageToProcess)
             }
             
-            // Publish to MQTT and TAK
-            self.publishDroneToMQTT(updatedMessage)
-            if let cotXML = self.generateCoTXML(from: updatedMessage) {
+            self.publishDroneToMQTT(messageToProcess)
+            if let cotXML = self.generateCoTXML(from: messageToProcess) {
                 self.publishCoTToTAK(cotXML)
             }
-            self.publishToLattice(updatedMessage)
+            self.publishToLattice(messageToProcess)
         }
     }
     
@@ -3681,7 +3713,9 @@ extension CoTViewModel {
         print("DEBUG: setupADSBClient called - enabled: \(config.enabled), URL: '\(config.readsbURL)', isValid: \(config.isValid)")
         
         guard config.enabled && config.isValid else {
-            print("DEBUG: ADS-B config not enabled or invalid, cleaning up")
+            print("DEBUG: ADS-B config not enabled or invalid, cleaning up aircraft only")
+            print("DEBUG: Preserving \(self.parsedMessages.count) drone detections")
+            
             // Cancel all subscriptions first to prevent memory leaks
             self.adsbCancellables.removeAll()
             
@@ -3689,8 +3723,13 @@ extension CoTViewModel {
             self.adsbClient?.stop()
             self.adsbClient = nil
             
-            // Clear tracked aircraft
+            // Clear ONLY aircraft-related data - DO NOT touch parsedMessages (drone detections)
             self.aircraftTracks.removeAll()
+            
+            // Remove aircraft alert rings only (preserve drone alert rings)
+            self.alertRings.removeAll { $0.droneId.hasPrefix("aircraft-") }
+            
+            print("DEBUG: ADS-B cleanup complete - \(self.parsedMessages.count) drone detections preserved")
             return
         }
         
@@ -3781,6 +3820,11 @@ extension CoTViewModel {
     func clearAircraftTracks() {
         // Clear from aircraftTracks array
         aircraftTracks.removeAll()
+        
+        // Remove aircraft alert rings only (preserve drone alert rings)
+        alertRings.removeAll { $0.droneId.hasPrefix("aircraft-") }
+        
+        print("Cleared all aircraft tracks - \(parsedMessages.count) drone detections preserved")
     }
     
     /// Clear all drone detections
@@ -3790,13 +3834,19 @@ extension CoTViewModel {
         droneSignatures.removeAll()
         macIdHistory.removeAll()
         macProcessing.removeAll()
-        alertRings.removeAll()
+        
+        // Remove drone alert rings only (preserve aircraft alert rings)
+        alertRings.removeAll { !$0.droneId.hasPrefix("aircraft-") }
+        
+        print("Cleared all drone detections - \(aircraftTracks.count) aircraft tracks preserved")
     }
     
     /// Clear all detections (drones + aircraft)
     func clearAllDetections() {
         clearDroneDetections()
         clearAircraftTracks()
+        
+        print("Cleared all detections (drones and aircraft)")
     }
     
     /// Update aircraft tracks from OpenSky Network
