@@ -492,6 +492,7 @@ struct DetectionsStatsView: View {
             // Quick stats grid - Equal-width responsive columns
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount), spacing: 8) {
                 if detectionMode == .drones {
+                    // DRONES MODE: Drones, FPV, MACs, Spoofed, Randomizing (5 cards)
                     QuickStatCard(
                         title: "Drones",
                         value: "\(activeDroneCount)",
@@ -500,10 +501,10 @@ struct DetectionsStatsView: View {
                     )
                     
                     QuickStatCard(
-                        title: "Total Seen",
-                        value: "\(totalDronesSeen)",
-                        icon: "clock.badge.checkmark",
-                        color: .indigo
+                        title: "FPV",
+                        value: "\(fpvCount)",
+                        icon: "dot.radiowaves.left.and.right",
+                        color: .orange
                     )
                     
                     QuickStatCard(
@@ -514,24 +515,25 @@ struct DetectionsStatsView: View {
                     )
                     
                     QuickStatCard(
-                        title: "FPV",
-                        value: "\(fpvCount)",
-                        icon: "dot.radiowaves.left.and.right",
-                        color: .orange
+                        title: "Spoofed",
+                        value: "\(spoofedCount)",
+                        icon: "xmark.shield.fill",
+                        color: spoofedCount > 0 ? .red : .gray
+                    )
+                    
+                    QuickStatCard(
+                        title: "Randomizing",
+                        value: "\(randomizingMacCount)",
+                        icon: "shuffle.circle.fill",
+                        color: randomizingMacCount > 0 ? .yellow : .gray
                     )
                 } else if detectionMode == .aircraft {
+                    // AIRCRAFT MODE: Aircraft, Max Alt, Emergency, Speed
                     QuickStatCard(
                         title: "Aircraft",
                         value: "\(cotViewModel.aircraftTracks.count)",
                         icon: "airplane.departure",
                         color: .cyan
-                    )
-                    
-                    QuickStatCard(
-                        title: "Total Seen",
-                        value: "\(totalAircraftSeen)",
-                        icon: "clock.badge.checkmark",
-                        color: .mint
                     )
                     
                     QuickStatCard(
@@ -542,13 +544,20 @@ struct DetectionsStatsView: View {
                     )
                     
                     QuickStatCard(
-                        title: "Alert",
+                        title: "Emergency",
                         value: "\(emergencyAircraftCount)",
                         icon: "exclamationmark.triangle.fill",
                         color: emergencyAircraftCount > 0 ? .red : .gray
                     )
+                    
+                    QuickStatCard(
+                        title: "Speed",
+                        value: maxSpeedDisplay,
+                        icon: "speedometer",
+                        color: .mint
+                    )
                 } else {
-                    // .both mode - show unified stats
+                    // BOTH MODE: Drones, Aircraft, Emergency, Spoofed
                     QuickStatCard(
                         title: "Drones",
                         value: "\(activeDroneCount)",
@@ -564,17 +573,17 @@ struct DetectionsStatsView: View {
                     )
                     
                     QuickStatCard(
-                        title: "Total Active",
-                        value: "\(activeDroneCount + cotViewModel.aircraftTracks.count)",
-                        icon: "chart.bar.fill",
-                        color: .purple
+                        title: "Emergency",
+                        value: "\(emergencyAircraftCount)",
+                        icon: "exclamationmark.triangle.fill",
+                        color: emergencyAircraftCount > 0 ? .red : .gray
                     )
                     
                     QuickStatCard(
-                        title: "All Seen",
-                        value: "\(totalDronesSeen + totalAircraftSeen)",
-                        icon: "clock.badge.checkmark",
-                        color: .indigo
+                        title: "Spoofed",
+                        value: "\(spoofedCount)",
+                        icon: "xmark.shield.fill",
+                        color: spoofedCount > 0 ? .orange : .gray
                     )
                 }
             }
@@ -585,11 +594,9 @@ struct DetectionsStatsView: View {
     private var gridColumnCount: Int {
         switch detectionMode {
         case .drones:
-            return 4  // Active, Total Seen, MACs, FPV
-        case .aircraft:
-            return 4  // Aircraft, Total Seen, Max Alt, Alert
-        case .both:
-            return 4  // Show 4 cards per row for both modes
+            return 5  // 5 cards: Drones, FPV, MACs, Spoofed, Randomizing
+        case .aircraft, .both:
+            return 4  // 4 cards
         }
     }
     
@@ -599,6 +606,15 @@ struct DetectionsStatsView: View {
             return "\(maxAlt/1000)k ft"
         } else {
             return "0 ft"
+        }
+    }
+    
+    // Helper to display max speed or placeholder
+    private var maxSpeedDisplay: String {
+        if let maxSpeed = maxAircraftSpeed {
+            return "\(maxSpeed) kts"
+        } else {
+            return "0 kts"
         }
     }
     
@@ -786,6 +802,16 @@ struct DetectionsStatsView: View {
     
     private var spoofedCount: Int {
         cotViewModel.parsedMessages.filter { $0.isSpoofed }.count
+    }
+    
+    private var randomizingMacCount: Int {
+        // Count drones with randomizing MACs
+        // A MAC is randomizing if the second character is 2, 6, A, or E (local bit set)
+        cotViewModel.parsedMessages.filter { message in
+            guard let mac = message.mac, mac.count >= 2 else { return false }
+            let secondChar = mac[mac.index(mac.startIndex, offsetBy: 1)]
+            return "26AE".contains(secondChar.uppercased())
+        }.count
     }
     
     private var maxAircraftSpeed: Int? {
