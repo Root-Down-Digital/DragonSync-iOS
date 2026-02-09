@@ -453,6 +453,7 @@ struct MessageRow: View {
     @ViewBuilder
     private func mapSectionView() -> some View {
         if message.isFPVDetection {
+            // Try to get alert ring first, otherwise use message coordinate
             if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
                 Map {
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
@@ -485,7 +486,37 @@ struct MessageRow: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.orange, lineWidth: 1)
                 )
+            } else if let coord = message.coordinate, coord.latitude != 0 || coord.longitude != 0 {
+                // FPV detection with coordinate (from user's location) but no alert ring
+                Map(position: .constant(.camera(MapCamera(
+                    centerCoordinate: coord,
+                    distance: 500
+                )))) {
+                    Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: coord) {
+                        VStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .foregroundColor(.orange)
+                                .font(.title2)
+                                .background(Circle().fill(.white).frame(width: 30, height: 30))
+                            Text("FPV Signal")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(4)
+                        }
+                    }
+                }
+                .mapStyle(.standard)
+                .frame(height: 150)
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.orange, lineWidth: 1)
+                )
             } else {
+                // No location data available for FPV
                 VStack(spacing: 8) {
                     HStack {
                         Image(systemName: "antenna.radiowaves.left.and.right")
@@ -516,51 +547,64 @@ struct MessageRow: View {
                 .frame(height: 80)
             }
         } else {
-            Group {
-                let encounter = DroneStorageManager.shared.encounters[message.uid]
+            let encounter = DroneStorageManager.shared.encounters[message.uid]
+            
+            let validCoordinate: CLLocationCoordinate2D? = {
+                guard let coord = message.coordinate else { return nil }
+                guard coord.latitude != 0 || coord.longitude != 0 else { return nil }
+                return coord
+            }()
+            
+            let flightCoords: [CLLocationCoordinate2D] = {
+                var coords = encounter?.flightPath.map { $0.coordinate } ?? []
                 
-                let flightCoords: [CLLocationCoordinate2D] = {
-                    var coords = encounter?.flightPath.map { $0.coordinate } ?? []
-                    
-                    // Ensure current position is included in the path
-                    if let currentCoord = message.coordinate,
-                       !coords.contains(where: { coord in
-                           abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
-                           abs(coord.longitude - currentCoord.longitude) < 0.00001
-                       }) {
-                        coords.append(currentCoord)
-                    }
-                    
-                    return coords
-                }()
+                if let currentCoord = validCoordinate,
+                   !coords.contains(where: { coord in
+                       abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
+                       abs(coord.longitude - currentCoord.longitude) < 0.00001
+                   }) {
+                    coords.append(currentCoord)
+                }
                 
-                let pilotCoordinate: CLLocationCoordinate2D? = {
-                    guard let pilotLatStr = encounter?.metadata["pilotLat"],
-                          let pilotLonStr = encounter?.metadata["pilotLon"],
-                          let pilotLat = Double(pilotLatStr),
-                          let pilotLon = Double(pilotLonStr),
-                          pilotLat != 0 || pilotLon != 0 else {
-                        return nil
-                    }
-                    return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
-                }()
-                
-                let takeoffCoordinate: CLLocationCoordinate2D? = {
-                    guard let homeLatStr = encounter?.metadata["homeLat"],
-                          let homeLonStr = encounter?.metadata["homeLon"],
-                          let homeLat = Double(homeLatStr),
-                          let homeLon = Double(homeLonStr),
-                          homeLat != 0 || homeLon != 0 else {
-                        return nil
-                    }
-                    return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
-                }()
-                
+                return coords
+            }()
+            
+            let pilotCoordinate: CLLocationCoordinate2D? = {
+                guard let pilotLatStr = encounter?.metadata["pilotLat"],
+                      let pilotLonStr = encounter?.metadata["pilotLon"],
+                      let pilotLat = Double(pilotLatStr),
+                      let pilotLon = Double(pilotLonStr),
+                      pilotLat != 0 || pilotLon != 0 else {
+                    return nil
+                }
+                return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+            }()
+            
+            let takeoffCoordinate: CLLocationCoordinate2D? = {
+                guard let homeLatStr = encounter?.metadata["homeLat"],
+                      let homeLonStr = encounter?.metadata["homeLon"],
+                      let homeLat = Double(homeLatStr),
+                      let homeLon = Double(homeLonStr),
+                      homeLat != 0 || homeLon != 0 else {
+                    return nil
+                }
+                return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+            }()
+            
+            let centerCoordinate = validCoordinate ?? pilotCoordinate ?? takeoffCoordinate
+            
+            if let center = centerCoordinate {
                 Map(position: .constant(.camera(MapCamera(
-                    centerCoordinate: message.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                    centerCoordinate: center,
                     distance: 500
                 )))) {
-                    if let coordinate = message.coordinate {
+                    // Flight path
+                    if flightCoords.count > 1 {
+                        MapPolyline(coordinates: flightCoords)
+                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    }
+                    
+                    if let coordinate = validCoordinate {
                         Annotation(message.uid, coordinate: coordinate) {
                             Image(systemName: "airplane")
                                 .resizable()
@@ -568,11 +612,6 @@ struct MessageRow: View {
                                 .rotationEffect(.degrees(message.headingDeg - 90))
                                 .foregroundStyle(.blue)
                         }
-                    }
-                    
-                    if flightCoords.count > 1 {
-                        MapPolyline(coordinates: flightCoords)
-                            .stroke(.purple, lineWidth: 2)
                     }
                     
                     if let pilotCoordinate = pilotCoordinate {
@@ -598,6 +637,35 @@ struct MessageRow: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.gray, lineWidth: 1)
                 )
+            } else {
+                VStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "airplane.circle")
+                            .foregroundColor(.blue)
+                            .font(.title2)
+                        
+                        VStack(alignment: .leading) {
+                            Text(message.id)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("No location data")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.blue.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                }
+                .frame(height: 80)
             }
         }
     }

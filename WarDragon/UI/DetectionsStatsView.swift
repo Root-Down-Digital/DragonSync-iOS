@@ -136,23 +136,11 @@ struct DetectionsStatsView: View {
         
         return buckets.map { bucket in
             var avgRSSI: Double = -100.0
-            var avgAltitude: Double = 0.0
+            let avgAltitude: Double = 0.0  // Changed to 'let' since it's never mutated
             
-            if detectionMode == .aircraft {
-                // For aircraft, calculate average altitude
-                let altitudes = cotViewModel.aircraftTracks.compactMap { track -> Double? in
-                    let timestamp = track.lastSeen
-                    guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
-                    guard let altitude = track.altitudeFeet else { return nil }
-                    return Double(altitude)
-                }
-                
-                if !altitudes.isEmpty {
-                    avgAltitude = altitudes.reduce(0, +) / Double(altitudes.count)
-                }
-            } else {
-                // For drones/both, calculate average RSSI
-                let rssiValues = cotViewModel.parsedMessages.compactMap { message -> Double? in
+            // For drones, calculate average RSSI
+            if detectionMode == .drones || detectionMode == .both {
+                let droneRSSI = cotViewModel.parsedMessages.compactMap { message -> Double? in
                     // Use observedAt timestamp
                     let timestamp: Date
                     if let observedAt = message.observedAt {
@@ -170,8 +158,29 @@ struct DetectionsStatsView: View {
                     return rssi
                 }
                 
-                if !rssiValues.isEmpty {
-                    avgRSSI = rssiValues.reduce(0, +) / Double(rssiValues.count)
+                if !droneRSSI.isEmpty {
+                    avgRSSI = droneRSSI.reduce(0, +) / Double(droneRSSI.count)
+                }
+            }
+            
+            // For aircraft, also calculate average RSSI (not altitude)
+            if detectionMode == .aircraft || detectionMode == .both {
+                let aircraftRSSI = cotViewModel.aircraftTracks.compactMap { track -> Double? in
+                    let timestamp = track.lastSeen
+                    guard timestamp >= bucket.start && timestamp < bucket.end else { return nil }
+                    guard let rssi = track.rssi else { return nil }
+                    return rssi
+                }
+                
+                if !aircraftRSSI.isEmpty {
+                    let aircraftAvg = aircraftRSSI.reduce(0, +) / Double(aircraftRSSI.count)
+                    
+                    // If we have both drones and aircraft, average them together
+                    if detectionMode == .both && avgRSSI != -100.0 {
+                        avgRSSI = (avgRSSI + aircraftAvg) / 2.0
+                    } else {
+                        avgRSSI = aircraftAvg
+                    }
                 }
             }
             
@@ -309,130 +318,70 @@ struct DetectionsStatsView: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.secondary)
             
-            if detectionMode == .aircraft {
-                // For aircraft mode, show altitude trend instead
-                Chart(signalTrendData) { point in
-                    LineMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Avg Alt", point.averageAltitude)
+            // Show RSSI trend for all modes (drones, aircraft, and both)
+            Chart(signalTrendData) { point in
+                // Main signal line with gradient
+                LineMark(
+                    x: .value("Time", point.timestamp),
+                    y: .value("Avg RSSI", point.averageRSSI)
+                )
+                .foregroundStyle(
+                    .linearGradient(
+                        colors: [.red, .orange, .yellow, .green],
+                        startPoint: .bottom,
+                        endPoint: .top
                     )
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [.cyan, .blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
+                )
+                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                .interpolationMethod(.catmullRom)
+                
+                // Area fill with gradient
+                AreaMark(
+                    x: .value("Time", point.timestamp),
+                    y: .value("Avg RSSI", point.averageRSSI)
+                )
+                .foregroundStyle(
+                    .linearGradient(
+                        colors: [
+                            .red.opacity(0.3),
+                            .orange.opacity(0.2),
+                            .yellow.opacity(0.15),
+                            .green.opacity(0.1)
+                        ],
+                        startPoint: .bottom,
+                        endPoint: .top
                     )
-                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.catmullRom)
-                    
-                    AreaMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Avg Alt", point.averageAltitude)
-                    )
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .interpolationMethod(.catmullRom)
-                }
-                .chartYAxisLabel("Altitude (ft)", alignment: .leading)
-                .chartXAxis {
-                    AxisMarks(values: axisMarkValues) { value in
-                        AxisValueLabel(format: dateFormat, anchor: .top)
-                            .font(.system(size: 9))
-                    }
-                    AxisMarks(values: axisMarkValues) { _ in
-                        AxisGridLine()
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) { _ in
-                        AxisValueLabel()
-                            .font(.caption2)
-                    }
-                }
-                .frame(height: 80)
-            } else {
-                // For drones/both mode, show RSSI trend with cool styling
-                Chart(signalTrendData) { point in
-                    // Main signal line with gradient
-                    LineMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Avg RSSI", point.averageRSSI)
-                    )
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [.red, .orange, .yellow, .green],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
-                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.catmullRom)
-                    
-                    // Area fill with gradient
-                    AreaMark(
-                        x: .value("Time", point.timestamp),
-                        y: .value("Avg RSSI", point.averageRSSI)
-                    )
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [
-                                .red.opacity(0.3),
-                                .orange.opacity(0.2),
-                                .yellow.opacity(0.15),
-                                .green.opacity(0.1)
-                            ],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
-                    .interpolationMethod(.catmullRom)
-                    
-                    // Warning threshold line (stronger signal = closer)
-                    RuleMark(y: .value("Warning", -60))
-                        .foregroundStyle(.red.opacity(0.5))
-                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
-                        .annotation(position: .top, alignment: .trailing) {
-                            Text("CLOSE")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .foregroundColor(.red)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule()
-                                        .fill(.red.opacity(0.2))
-                                )
-                        }
-                    
-                    // Good signal threshold
-                    RuleMark(y: .value("Good", -80))
-                        .foregroundStyle(.yellow.opacity(0.3))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                }
-                .chartYScale(domain: -128...(-20))
-                .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
-                .chartXAxis {
-                    AxisMarks(values: axisMarkValues) { value in
-                        AxisValueLabel(format: dateFormat, anchor: .top)
-                            .font(.system(size: 9))
-                    }
-                    AxisMarks(values: axisMarkValues) { _ in
-                        AxisGridLine()
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) { _ in
-                        AxisValueLabel()
-                            .font(.caption2)
-                    }
-                }
-                .frame(height: 80)
+                )
+                .interpolationMethod(.catmullRom)
+                
+                // Warning threshold line (stronger signal = closer)
+                RuleMark(y: .value("Warning", -60))
+                    .foregroundStyle(.red.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                
+                // Good signal threshold
+                RuleMark(y: .value("Good", -80))
+                    .foregroundStyle(.yellow.opacity(0.3))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
+            .chartYScale(domain: -128...(-20))
+            .chartYAxisLabel("RSSI (dBm)", alignment: .leading)
+            .chartXAxis {
+                AxisMarks(values: axisMarkValues) { value in
+                    AxisValueLabel(format: dateFormat, anchor: .top)
+                        .font(.system(size: 9))
+                }
+                AxisMarks(values: axisMarkValues) { _ in
+                    AxisGridLine()
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisValueLabel()
+                        .font(.caption2)
+                }
+            }
+            .frame(height: 80)
         }
     }
     
@@ -540,33 +489,38 @@ struct DetectionsStatsView: View {
                 Spacer()
             }
             
-            // Quick stats grid - COMPACT VERSION
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 8) {
+            // Quick stats grid - Equal-width responsive columns
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount), spacing: 8) {
                 if detectionMode == .drones || detectionMode == .both {
                     QuickStatCard(
-                        title: "Active",
+                        title: "Aircraft",
                         value: "\(activeDroneCount)",
                         icon: "airplane.circle.fill",
                         color: .blue
                     )
                     
                     QuickStatCard(
-                        title: "MACs",
-                        value: "\(uniqueMacCount)",
-                        icon: "number.circle.fill",
-                        color: .purple
+                        title: "Total Seen",
+                        value: "\(totalDronesSeen)",
+                        icon: "clock.badge.checkmark",
+                        color: .indigo
                     )
                     
-                    QuickStatCard(
-                        title: "FPV",
-                        value: "\(fpvCount)",
-                        icon: "antenna.radiowaves.left.and.right",
-                        color: .orange
-                    )
+                    if detectionMode == .drones {
+                        QuickStatCard(
+                            title: "MACs",
+                            value: "\(uniqueMacCount)",
+                            icon: "number.circle.fill",
+                            color: .purple
+                        )
+                        
+                        QuickStatCard(
+                            title: "FPV",
+                            value: "\(fpvCount)",
+                            icon: "antenna.radiowaves.left.and.right",
+                            color: .orange
+                        )
+                    }
                 }
                 
                 if detectionMode == .aircraft || detectionMode == .both {
@@ -577,14 +531,19 @@ struct DetectionsStatsView: View {
                         color: .cyan
                     )
                     
-                    if let maxAlt = maxAircraftAltitude {
-                        QuickStatCard(
-                            title: "Max Alt",
-                            value: "\(maxAlt/1000)k",
-                            icon: "arrow.up.circle.fill",
-                            color: .green
-                        )
-                    }
+                    QuickStatCard(
+                        title: "Total Seen",
+                        value: "\(totalAircraftSeen)",
+                        icon: "clock.badge.checkmark",
+                        color: .mint
+                    )
+                    
+                    QuickStatCard(
+                        title: "Max Alt",
+                        value: maxAltitudeDisplay,
+                        icon: "arrow.up.circle.fill",
+                        color: .green
+                    )
                     
                     QuickStatCard(
                         title: "Alert",
@@ -594,6 +553,27 @@ struct DetectionsStatsView: View {
                     )
                 }
             }
+        }
+    }
+    
+    // Calculate responsive column count based on mode
+    private var gridColumnCount: Int {
+        switch detectionMode {
+        case .drones:
+            return 4  // Active, Total Seen, MACs, FPV
+        case .aircraft:
+            return 4  // Aircraft, Total Seen, Max Alt, Alert
+        case .both:
+            return 4  // Show 4 cards per row for both modes
+        }
+    }
+    
+    // Helper to display max altitude or placeholder
+    private var maxAltitudeDisplay: String {
+        if let maxAlt = maxAircraftAltitude {
+            return "\(maxAlt/1000)k ft"
+        } else {
+            return "0 ft"
         }
     }
     
@@ -759,6 +739,16 @@ struct DetectionsStatsView: View {
     
     private var fpvCount: Int {
         cotViewModel.parsedMessages.filter { $0.isFPVDetection }.count
+    }
+    
+    private var totalDronesSeen: Int {
+        // Count all drone encounters (not aircraft) from storage
+        DroneStorageManager.shared.encounters.filter { !$0.key.hasPrefix("aircraft-") }.count
+    }
+    
+    private var totalAircraftSeen: Int {
+        // Count all aircraft encounters from storage
+        DroneStorageManager.shared.encounters.filter { $0.key.hasPrefix("aircraft-") }.count
     }
     
     private var maxAircraftAltitude: Int? {
@@ -936,7 +926,7 @@ private struct QuickStatCard: View {
                 .font(.system(.title3, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundColor(.primary)
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.5)
                 .lineLimit(1)
             
             // Label
@@ -944,10 +934,11 @@ private struct QuickStatCard: View {
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
         .background(

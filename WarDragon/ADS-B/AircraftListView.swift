@@ -209,6 +209,16 @@ private struct LiveAircraftMapPreview: View {
     var body: some View {
         VStack(spacing: 0) {
             Map(bounds: MapCameraBounds(centerCoordinateBounds: mapRegion)) {
+                // Flight paths
+                ForEach(cotViewModel.aircraftTracks) { aircraft in
+                    let flightPath = getAircraftFlightPath(for: aircraft)
+                    if flightPath.count > 1 {
+                        MapPolyline(coordinates: flightPath)
+                            .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    }
+                }
+                
+                // Aircraft markers
                 ForEach(cotViewModel.aircraftTracks) { aircraft in
                     if let coordinate = aircraft.coordinate {
                         Annotation(aircraft.callsign, coordinate: coordinate) {
@@ -287,6 +297,21 @@ private struct LiveAircraftMapPreview: View {
                     .frame(width: 24, height: 24)
             )
             .opacity(opacity)
+    }
+    
+    private func getAircraftFlightPath(for aircraft: Aircraft) -> [CLLocationCoordinate2D] {
+        var coordinates = aircraft.positionHistory.map { $0.coordinate }
+        
+        // Ensure path ends at current position
+        if let currentCoord = aircraft.coordinate {
+            if coordinates.isEmpty {
+                coordinates = [currentCoord]
+            } else {
+                coordinates[coordinates.count - 1] = currentCoord
+            }
+        }
+        
+        return coordinates
     }
     
     private var mapRegion: MKCoordinateRegion {
