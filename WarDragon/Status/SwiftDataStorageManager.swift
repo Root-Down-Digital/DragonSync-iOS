@@ -823,33 +823,18 @@ class SwiftDataStorageManager: ObservableObject {
     
     /// Log when drone was actively transmitting data
     private func logDroneActivity(encounter: StoredDroneEncounter, timestamp: Date) {
-        let formatter = ISO8601DateFormatter()
-        let existingLog = encounter.metadata["activityLog"] ?? ""
-        var entries = existingLog.components(separatedBy: ";").filter { !$0.isEmpty }
+        var logs = encounter.activityLog
         
-        if let lastEntryString = entries.last {
-            let parts = lastEntryString.components(separatedBy: "|")
-            if parts.count == 2,
-               formatter.date(from: parts[0]) != nil,
-               let endTime = formatter.date(from: parts[1]) {
-                
-                if timestamp.timeIntervalSince(endTime) < 120 {
-                    entries[entries.count - 1] = "\(parts[0])|\(formatter.string(from: timestamp))"
-                    encounter.metadata["activityLog"] = entries.joined(separator: ";")
-                    logger.info("Extended activity log for \(encounter.id) to \(formatter.string(from: timestamp))")
-                    return
-                }
-            }
-        }
-        
-        let newEntry = "\(formatter.string(from: timestamp))|\(formatter.string(from: timestamp))"
-        if entries.isEmpty {
-            encounter.metadata["activityLog"] = newEntry
+        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].endTime) < 120 {
+            logs[lastIndex].endTime = timestamp
+            logger.info("Extended activity log for \(encounter.id) to \(timestamp)")
         } else {
-            encounter.metadata["activityLog"] = existingLog + ";\(newEntry)"
+            let entry = ActivityLogEntry(startTime: timestamp, endTime: timestamp)
+            logs.append(entry)
+            logger.info("Added new activity log entry for \(encounter.id) at \(timestamp)")
         }
         
-        logger.info("Added new activity log entry for \(encounter.id) at \(formatter.string(from: timestamp))")
+        encounter.activityLog = logs
     }
     
     private func updateInMemoryCache() {
@@ -951,7 +936,6 @@ class SwiftDataStorageManager: ObservableObject {
             let descriptor = FetchDescriptor<StoredDroneEncounter>()
             let allEncounters = try context.fetch(descriptor)
             
-            // Filter to aircraft only
             let aircraftEncounters = allEncounters.filter { $0.id.hasPrefix("aircraft-") }
             
             logger.info("🗑️ Deleting \(aircraftEncounters.count) aircraft encounters...")
@@ -967,6 +951,44 @@ class SwiftDataStorageManager: ObservableObject {
             
         } catch {
             logger.error("Failed to delete aircraft encounters: \(error.localizedDescription)")
+        }
+    }
+    
+    func backfillActivityLogsForAllEncounters() {
+        guard UserDefaults.standard.bool(forKey: "activityLogBackfillCompleted") == false else {
+            return
+        }
+        
+        guard let context = modelContext else { return }
+        
+        do {
+            var descriptor = FetchDescriptor<StoredDroneEncounter>()
+            descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
+            
+            let allEncounters = try context.fetch(descriptor)
+            
+            let encountersNeedingBackfill = allEncounters.filter { encounter in
+                encounter.metadata["activityLog"] == nil || encounter.metadata["activityLog"]?.isEmpty == true
+            }
+            
+            guard !encountersNeedingBackfill.isEmpty else {
+                logger.info("No encounters need activity log backfill")
+                UserDefaults.standard.set(true, forKey: "activityLogBackfillCompleted")
+                return
+            }
+            
+            logger.info("Backfilling activity logs for \(encountersNeedingBackfill.count) encounters...")
+            
+            for encounter in encountersNeedingBackfill {
+                encounter.backfillActivityLog()
+            }
+            
+            try context.save()
+            UserDefaults.standard.set(true, forKey: "activityLogBackfillCompleted")
+            logger.info("Successfully backfilled activity logs for \(encountersNeedingBackfill.count) encounters")
+            
+        } catch {
+            logger.error("Failed to backfill activity logs: \(error.localizedDescription)")
         }
     }
 }

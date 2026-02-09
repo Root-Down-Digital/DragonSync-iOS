@@ -580,21 +580,48 @@ struct StoredEncountersView: View {
             case standard, satellite, hybrid
         }
         
+        init(encounter: StoredDroneEncounter) {
+            self.encounter = encounter
+        }
+        
         var body: some View {
-            // Guard against deleted/faulted encounters
             if encounter.modelContext == nil {
-                ContentUnavailableView(
+                return AnyView(ContentUnavailableView(
                     "Encounter Unavailable",
                     systemImage: "exclamationmark.triangle",
                     description: Text("This encounter may have been deleted.")
-                )
+                ))
             } else {
-                encounterDetailContent
+                return AnyView(encounterDetailContent)
             }
         }
         
         @ViewBuilder
         private var encounterDetailContent: some View {
+            if !isDataLoaded {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .progressViewStyle(CircularProgressViewStyle())
+                    Text("Loading encounter data...")
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+                .background(Color(UIColor.systemBackground))
+                .onAppear {
+                    Task {
+                        await loadRelationshipData()
+                    }
+                }
+            } else {
+                actualContent
+            }
+        }
+        
+        @ViewBuilder
+        private var actualContent: some View {
             ScrollView {
                 VStack(spacing: 16) {
                     // Custom name and trust status section
@@ -690,8 +717,9 @@ struct StoredEncountersView: View {
             }
             .navigationTitle("Encounter Details")
             .onAppear {
-                loadRelationshipData()
-                setupInitialMapPosition()
+                Task {
+                    await loadRelationshipData()
+                }
             }
             .sheet(isPresented: $showingInfoEditor) {
                 NavigationView {
@@ -1087,11 +1115,97 @@ struct StoredEncountersView: View {
             .cornerRadius(12)
         }
 
-        private func loadRelationshipData() {
-            flightPoints = encounter.flightPoints
-            signatures = encounter.signatures
-            isFPVDetection = encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true"
-            isDataLoaded = true
+        private func loadRelationshipData() async {
+            let encounterId = encounter.id
+            let metadata = encounter.metadata
+            let modelContext = self.modelContext
+            
+            guard let container = modelContext.container as ModelContainer? else {
+                await MainActor.run {
+                    self.isDataLoaded = true
+                }
+                return
+            }
+            
+            let backgroundContext = ModelContext(container)
+            
+            var descriptor = FetchDescriptor<StoredDroneEncounter>(
+                predicate: #Predicate { $0.id == encounterId }
+            )
+            descriptor.relationshipKeyPathsForPrefetching = [
+                \.flightPoints,
+                \.signatures
+            ]
+            
+            do {
+                let results = try backgroundContext.fetch(descriptor)
+                
+                guard let freshEncounter = results.first else {
+                    await MainActor.run {
+                        self.isDataLoaded = true
+                    }
+                    return
+                }
+                
+                freshEncounter.backfillActivityLog()
+                try? backgroundContext.save()
+                
+                let pointsData = freshEncounter.flightPoints.map { point in
+                    (latitude: point.latitude,
+                     longitude: point.longitude,
+                     altitude: point.altitude,
+                     timestamp: point.timestamp,
+                     homeLatitude: point.homeLatitude,
+                     homeLongitude: point.homeLongitude,
+                     isProximityPoint: point.isProximityPoint,
+                     proximityRssi: point.proximityRssi,
+                     proximityRadius: point.proximityRadius)
+                }
+
+                let signaturesData = freshEncounter.signatures.map { sig in
+                    (timestamp: sig.timestamp,
+                     rssi: sig.rssi,
+                     speed: sig.speed,
+                     height: sig.height,
+                     mac: sig.mac)
+                }
+                
+                let fpvDetection = encounterId.hasPrefix("fpv-") || metadata["isFPVDetection"] == "true"
+                
+                await MainActor.run {
+                    self.flightPoints = pointsData.map { data in
+                        StoredFlightPoint(
+                            latitude: data.latitude,
+                            longitude: data.longitude,
+                            altitude: data.altitude,
+                            timestamp: data.timestamp,
+                            homeLatitude: data.homeLatitude,
+                            homeLongitude: data.homeLongitude,
+                            isProximityPoint: data.isProximityPoint,
+                            proximityRssi: data.proximityRssi,
+                            proximityRadius: data.proximityRadius
+                        )
+                    }
+                    
+                    self.signatures = signaturesData.map { data in
+                        StoredSignature(
+                            timestamp: data.timestamp,
+                            rssi: data.rssi,
+                            speed: data.speed,
+                            height: data.height,
+                            mac: data.mac
+                        )
+                    }
+                    
+                    self.isFPVDetection = fpvDetection
+                    self.setupInitialMapPosition()
+                    self.isDataLoaded = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.isDataLoaded = true
+                }
+            }
         }
         
         private func setupInitialMapPosition() {

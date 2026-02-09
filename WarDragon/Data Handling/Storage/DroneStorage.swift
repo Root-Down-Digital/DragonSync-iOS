@@ -172,7 +172,6 @@ struct FlightPathPoint: Codable, Hashable {
     }
 }
 
-// Activity log entry - tracks when drone was actively transmitting
 struct ActivityLogEntry: Codable, Hashable {
     var startTime: Date
     var endTime: Date

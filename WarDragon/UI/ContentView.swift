@@ -104,19 +104,16 @@ struct ContentView: View {
             Text("ADS-B tracking has been automatically disabled because the connection to readsb failed repeatedly.\n\nPlease check that your readsb/dump1090 server is running and accessible, then re-enable ADS-B tracking in Settings.")
         }
         .onAppear {
-            // Inject ModelContext into storage managers
             SwiftDataStorageManager.shared.modelContext = modelContext
             statusViewModel.modelContext = modelContext
             
-            // Configure OpenSkyService with ModelContext
             OpenSkyService.shared.configure(with: modelContext)
             
-            // This ensures encounters loaded from database have valid cached values
             SwiftDataStorageManager.shared.repairCachedStats()
+            SwiftDataStorageManager.shared.backfillActivityLogsForAllEncounters()
             droneStorage.loadFromStorage()
             droneStorage.updateProximityPointsWithCorrectRadius()
             
-            // Load data from SwiftData
             statusViewModel.loadADSBEncounters()
             
             updateDetectionMode()

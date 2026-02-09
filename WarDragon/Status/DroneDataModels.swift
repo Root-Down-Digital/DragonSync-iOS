@@ -121,7 +121,15 @@ final class StoredDroneEncounter {
         get {
             let logString = metadata["activityLog"] ?? ""
             let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
-            return entries.compactMap { ActivityLogEntry.fromString($0) }
+            let parsedEntries = entries.compactMap { ActivityLogEntry.fromString($0) }
+            
+            if parsedEntries.isEmpty && (firstSeen != lastSeen || cachedFlightPointCount > 0 || cachedSignatureCount > 0) {
+                if firstSeen != lastSeen {
+                    return [ActivityLogEntry(startTime: firstSeen, endTime: lastSeen)]
+                }
+            }
+            
+            return parsedEntries
         }
         set {
             metadata["activityLog"] = newValue.map { $0.toString() }.joined(separator: ";")
@@ -144,16 +152,49 @@ final class StoredDroneEncounter {
     func logActivity(timestamp: Date) {
         var logs = activityLog
         
-        // If there's a recent entry within 2 minutes, extend it instead of creating new one
-        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].startTime) < 120 {
+        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].endTime) < 120 {
             logs[lastIndex].endTime = timestamp
         } else {
-            // Create new activity entry
             let entry = ActivityLogEntry(startTime: timestamp, endTime: timestamp)
             logs.append(entry)
         }
         
         activityLog = logs
+    }
+    
+    func backfillActivityLog() {
+        guard metadata["activityLog"] == nil || metadata["activityLog"]?.isEmpty == true else {
+            return
+        }
+        
+        let allTimestamps = flightPoints.map { $0.timestamp } + signatures.map { $0.timestamp }
+        guard !allTimestamps.isEmpty else {
+            if firstSeen != lastSeen {
+                activityLog = [ActivityLogEntry(startTime: firstSeen, endTime: lastSeen)]
+            }
+            return
+        }
+        
+        let sortedTimestamps = allTimestamps.sorted()
+        var synthesized: [ActivityLogEntry] = []
+        var currentStart = Date(timeIntervalSince1970: sortedTimestamps[0])
+        var currentEnd = currentStart
+        
+        for i in 1..<sortedTimestamps.count {
+            let timestamp = Date(timeIntervalSince1970: sortedTimestamps[i])
+            let gap = timestamp.timeIntervalSince(currentEnd)
+            
+            if gap > 120 {
+                synthesized.append(ActivityLogEntry(startTime: currentStart, endTime: currentEnd))
+                currentStart = timestamp
+                currentEnd = timestamp
+            } else {
+                currentEnd = timestamp
+            }
+        }
+        
+        synthesized.append(ActivityLogEntry(startTime: currentStart, endTime: currentEnd))
+        activityLog = synthesized
     }
 }
 
