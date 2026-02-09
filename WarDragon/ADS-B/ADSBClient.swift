@@ -137,6 +137,10 @@ class ADSBClient: ObservableObject {
     private var isInitialConnection = true
     private let initialConnectionGracePeriod = 10  // More lenient during first 10 attempts
     
+    // Race condition protection
+    private var isPolling = false  // Prevents concurrent poll operations
+    private let maxAircraftHistorySize = 500  // Limit history size to prevent unbounded growth
+    
     // MARK: - Initialization
     
     init(configuration: ADSBConfiguration) {
@@ -151,6 +155,9 @@ class ADSBClient: ObservableObject {
     deinit {
         // Must invalidate timer synchronously to prevent retain cycle
         pollTimer?.invalidate()
+        
+        // Clear aircraft history to release memory
+        aircraftHistory.removeAll()
     }
     
     // MARK: - Public Methods
@@ -164,10 +171,7 @@ class ADSBClient: ObservableObject {
         }
         
         // Stop any existing timer first to prevent duplicates
-        if let existingTimer = pollTimer {
-            existingTimer.invalidate()
-            pollTimer = nil
-        }
+        stopTimer()
         
         // Don't start if already connecting or connected
         guard state == .disconnected || state == .failed(ADSBError.connectionFailed) else {
@@ -178,6 +182,7 @@ class ADSBClient: ObservableObject {
         state = .connecting
         consecutiveErrors = 0
         isInitialConnection = true  // Reset flag when starting
+        isPolling = false  // Reset polling flag
         
         logger.info("Starting ADS-B polling (interval: \(self.configuration.pollInterval)s)")
         
@@ -206,23 +211,145 @@ class ADSBClient: ObservableObject {
         }
     }
     
-    /// Stop polling
-    func stop() {
-        // Invalidate timer on main thread to prevent retain cycles
-        if let timer = pollTimer {
-            timer.invalidate()
-            pollTimer = nil
-        }
-        
-        // Clear state
-        state = .disconnected
-        consecutiveErrors = 0
-        
-        logger.info("Stopped ADS-B polling")
+    /// Stop timer safely
+    private func stopTimer() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
     
-    /// Manually poll once
+    func stop() {
+        stopTimer()
+        
+        saveAircraftToStorage()
+        
+        // Don't clear aircraft/history when stopping - let them persist
+        // Only clear the timer and reset state
+        // aircraftHistory.removeAll()
+        // aircraft.removeAll()
+        
+        state = .disconnected
+        consecutiveErrors = 0
+        isPolling = false  // Reset polling flag
+        
+        logger.info("Stopped ADS-B polling (aircraft data preserved)")
+    }
+    
+    /// Clear all aircraft data (call this separately when needed)
+    func clearAircraft() {
+        aircraftHistory.removeAll()
+        aircraft.removeAll()
+        logger.info("Cleared all aircraft data")
+    }
+    
+    private func saveAircraftToStorage() {
+        guard !aircraft.isEmpty else { return }
+        
+        let aircraftToSave = Array(self.aircraft.prefix(100))
+        
+        Task.detached {
+            for aircraft in aircraftToSave {
+                let aircraftId = "aircraft-\(aircraft.hex)"
+                guard let coord = aircraft.coordinate else { continue }
+                
+                await MainActor.run {
+                    var stored = self.fetchOrCreateAircraftEncounter(id: aircraftId, aircraft: aircraft)
+                    
+                    let flightPoint = FlightPathPoint(
+                        latitude: coord.latitude,
+                        longitude: coord.longitude,
+                        altitude: aircraft.altitude ?? 0,
+                        timestamp: aircraft.lastSeen.timeIntervalSince1970,
+                        homeLatitude: nil,
+                        homeLongitude: nil,
+                        isProximityPoint: false,
+                        proximityRssi: nil,
+                        proximityRadius: nil
+                    )
+                    
+                    stored.lastSeen = aircraft.lastSeen
+                    
+                    if let lastPoint = stored.flightPath.last {
+                        let loc1 = CLLocation(latitude: lastPoint.latitude, longitude: lastPoint.longitude)
+                        let loc2 = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                        if loc1.distance(from: loc2) > 10 {
+                            stored.flightPath.append(flightPoint)
+                        }
+                    } else {
+                        stored.flightPath.append(flightPoint)
+                    }
+                    
+                    if stored.flightPath.count > 1000 {
+                        stored.flightPath = Array(stored.flightPath.suffix(500))
+                    }
+                    
+                    stored.metadata["callsign"] = aircraft.flight ?? ""
+                    stored.metadata["squawk"] = aircraft.squawk ?? ""
+                    stored.metadata["category"] = aircraft.category ?? ""
+                    stored.metadata["source"] = "ADS-B"
+                    
+                    if let rssi = aircraft.rssi, rssi != 0,
+                       let signature = SignatureData(
+                        timestamp: aircraft.lastSeen.timeIntervalSince1970,
+                        rssi: rssi,
+                        speed: aircraft.groundSpeed ?? 0,
+                        height: aircraft.altitude ?? 0,
+                        mac: nil
+                       ) {
+                        stored.signatures.append(signature)
+                        if stored.signatures.count > 500 {
+                            stored.signatures = Array(stored.signatures.suffix(250))
+                        }
+                    }
+                    
+                    SwiftDataStorageManager.shared.saveEncounterDirect(stored)
+                }
+            }
+            
+            await MainActor.run {
+                SwiftDataStorageManager.shared.forceSave()
+            }
+        }
+    }
+    
+    /// Fetch or create a DroneEncounter for an aircraft
+    private func fetchOrCreateAircraftEncounter(id: String, aircraft: Aircraft) -> DroneEncounter {
+        // Check if we already have this aircraft in storage
+        if let existing = SwiftDataStorageManager.shared.fetchFullEncounter(id: id) {
+            return existing
+        }
+        
+        // Create new encounter for this aircraft
+        let metadata: [String: String] = [
+            "callsign": aircraft.flight ?? "",
+            "squawk": aircraft.squawk ?? "",
+            "category": aircraft.category ?? "",
+            "source": "ADS-B"
+        ]
+        
+        return DroneEncounter(
+            id: id,
+            firstSeen: aircraft.lastSeen,
+            lastSeen: aircraft.lastSeen,
+            flightPath: [],
+            signatures: [],
+            metadata: metadata,
+            macHistory: []
+        )
+    }
+    
+    /// Calculate distance between two coordinates in meters
+    private func calculateDistanceMeters(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
+        let location1 = CLLocation(latitude: from.latitude, longitude: from.longitude)
+        let location2 = CLLocation(latitude: to.latitude, longitude: to.longitude)
+        return location1.distance(from: location2)
+    }
+    
     func poll() async {
+        guard !isPolling else { return }
+        
+        isPolling = true
+        defer { isPolling = false }
+        
         guard let url = configuration.aircraftDataURL else {
             logger.error("Invalid readsb URL")
             state = .failed(ADSBError.invalidURL)
@@ -240,102 +367,74 @@ class ADSBClient: ObservableObject {
                 throw ADSBError.httpError(httpResponse.statusCode)
             }
             
-            let decoder = JSONDecoder()
-            let readsbResponse = try decoder.decode(ReadsbResponse.self, from: data)
+            let readsbResponse = try JSONDecoder().decode(ReadsbResponse.self, from: data)
             
-            // Update aircraft history with new positions and build updated aircraft array
             var updatedAircraft: [Aircraft] = []
             for var aircraft in readsbResponse.aircraft {
-                // Get existing aircraft from history or create new entry
-                if var existingAircraft = aircraftHistory[aircraft.hex] {
-                    // Update position history
-                    existingAircraft.lat = aircraft.lat
-                    existingAircraft.lon = aircraft.lon
-                    existingAircraft.altitude = aircraft.altitude
-                    existingAircraft.track = aircraft.track
-                    existingAircraft.groundSpeed = aircraft.groundSpeed
-                    existingAircraft.verticalRate = aircraft.verticalRate
-                    existingAircraft.flight = aircraft.flight
-                    existingAircraft.squawk = aircraft.squawk
-                    existingAircraft.rssi = aircraft.rssi
-                    existingAircraft.lastSeen = Date()
-                    
-                    // Record position in history
-                    existingAircraft.recordPosition()
-                    
-                    // Cleanup old history based on retention time
-                    existingAircraft.cleanupOldHistory(retentionMinutes: configuration.flightPathRetentionMinutes)
-                    
-                    // Update in history
-                    aircraftHistory[aircraft.hex] = existingAircraft
-                    
-                    // Use the updated aircraft with full history
-                    updatedAircraft.append(existingAircraft)
+                if var existing = aircraftHistory[aircraft.hex] {
+                    existing.lat = aircraft.lat
+                    existing.lon = aircraft.lon
+                    existing.altitude = aircraft.altitude
+                    existing.track = aircraft.track
+                    existing.groundSpeed = aircraft.groundSpeed
+                    existing.verticalRate = aircraft.verticalRate
+                    existing.flight = aircraft.flight
+                    existing.squawk = aircraft.squawk
+                    existing.rssi = aircraft.rssi
+                    existing.lastSeen = Date()
+                    existing.recordPosition()
+                    existing.cleanupOldHistory(retentionMinutes: configuration.flightPathRetentionMinutes)
+                    aircraftHistory[aircraft.hex] = existing
+                    updatedAircraft.append(existing)
                 } else {
-                    // New aircraft - initialize with current position
                     aircraft.recordPosition()
                     aircraftHistory[aircraft.hex] = aircraft
                     updatedAircraft.append(aircraft)
                 }
             }
             
-            // Keep aircraft in history that haven't been seen for up to 2 minutes, persist after as stale
-            let retentionSeconds = configuration.flightPathRetentionMinutes * 60
-            let cutoffDate = Date().addingTimeInterval(-retentionSeconds)
-            aircraftHistory = aircraftHistory.filter { _, aircraft in
-                aircraft.lastSeen > cutoffDate
+            let cutoffDate = Date().addingTimeInterval(-configuration.flightPathRetentionMinutes * 60)
+            aircraftHistory = aircraftHistory.filter { $0.value.lastSeen > cutoffDate }
+            
+            if aircraftHistory.count > self.maxAircraftHistorySize {
+                let sorted = aircraftHistory.sorted { $0.value.lastSeen > $1.value.lastSeen }
+                aircraftHistory = Dictionary(uniqueKeysWithValues: Array(sorted.prefix(self.maxAircraftHistorySize)))
             }
 
-            var filteredAircraft = Array(aircraftHistory.values).filter { $0.coordinate != nil }
+            var filtered = Array(aircraftHistory.values).filter { $0.coordinate != nil }
             
-            // Distance filtering if enabled and user location is available
-            if let maxDistance = configuration.maxDistance,
-               maxDistance > 0,
+            if let maxDistance = configuration.maxDistance, maxDistance > 0,
                let userLocation = LocationManager.shared.userLocation {
-                filteredAircraft = filteredAircraft.filter { aircraft in
-                    guard let aircraftCoord = aircraft.coordinate else { return false }
-                    let aircraftLocation = CLLocation(latitude: aircraftCoord.latitude, longitude: aircraftCoord.longitude)
-                    let distance = userLocation.distance(from: aircraftLocation) / 1000.0 // Convert to km
-                    return distance <= maxDistance
+                filtered = filtered.filter {
+                    guard let coord = $0.coordinate else { return false }
+                    let dist = userLocation.distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude)) / 1000.0
+                    return dist <= maxDistance
                 }
             }
             
             if let minAlt = configuration.minAltitude {
-                filteredAircraft = filteredAircraft.filter { ($0.altitude ?? 0) >= minAlt }
+                filtered = filtered.filter { ($0.altitude ?? 0) >= minAlt }
             }
             
             if let maxAlt = configuration.maxAltitude {
-                filteredAircraft = filteredAircraft.filter { ($0.altitude ?? 0) <= maxAlt }
+                filtered = filtered.filter { ($0.altitude ?? 0) <= maxAlt }
             }
             
-            // Limit to closest N aircraft if user location is available
-            if let userLocation = LocationManager.shared.userLocation, configuration.maxAircraftCount > 0 {
-                // Calculate distance for each aircraft and sort by proximity
-                let aircraftWithDistance = filteredAircraft.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
+            if let userLocation = LocationManager.shared.userLocation, configuration.maxAircraftCount > 0, filtered.count > configuration.maxAircraftCount {
+                let withDist = filtered.compactMap { aircraft -> (aircraft: Aircraft, distance: Double)? in
                     guard let coord = aircraft.coordinate else { return nil }
-                    let aircraftLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-                    let distance = userLocation.distance(from: aircraftLocation)
-                    return (aircraft, distance)
+                    let dist = userLocation.distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude))
+                    return (aircraft, dist)
                 }
-                
-                // Sort by distance and take the closest N
-                filteredAircraft = aircraftWithDistance
-                    .sorted { $0.distance < $1.distance }
-                    .prefix(configuration.maxAircraftCount)
-                    .map { $0.aircraft }
+                filtered = withDist.sorted { $0.distance < $1.distance }.prefix(configuration.maxAircraftCount).map { $0.aircraft }
             }
             
-            // Aircraft already have position history from aircraftHistory - no need to re-attach
-            
-            // Update state
-            aircraft = filteredAircraft
+            aircraft = filtered
             totalMessages = readsbResponse.messages
             lastUpdate = Date()
             state = .connected
             consecutiveErrors = 0
-            isInitialConnection = false  // Successfully connected
-            
-            logger.debug("Polled \(filteredAircraft.count) aircraft (\(readsbResponse.messages) messages)")
+            isInitialConnection = false
             
         } catch {
             consecutiveErrors += 1
@@ -343,41 +442,23 @@ class ADSBClient: ObservableObject {
             
             let nsError = error as NSError
             
-            // Check if it's an App Transport Security error
             if nsError.code == -1022 {
-                logger.error("App Transport Security blocking connection to \(url.absoluteString)")
-                logger.error("Add NSAllowsLocalNetworking to Info.plist under NSAppTransportSecurity")
+                logger.error("App Transport Security blocking connection")
                 state = .failed(ADSBError.appTransportSecurity)
-                stop()  // Stop immediately on ATS error
+                stop()
                 return
-            }
-            // Check if it's a connection error (server not running)
-            else if nsError.code == -1004 || nsError.code == -1003 || nsError.code == -1001 {
-                // During initial connection (first N attempts), be less noisy with warnings
-                if isInitialConnection && consecutiveErrors <= initialConnectionGracePeriod {
-                    logger.debug("Initial connection attempt \(self.consecutiveErrors): server not ready yet")
-                } else {
-                    logger.warning("Connection failed (attempt \(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): readsb server may not be running at \(url.absoluteString)")
+            } else if nsError.code == -1004 || nsError.code == -1003 || nsError.code == -1001 {
+                if aircraftHistory.count > self.maxAircraftHistorySize / 2 {
+                    let sorted = aircraftHistory.sorted { $0.value.lastSeen > $1.value.lastSeen }
+                    aircraftHistory = Dictionary(uniqueKeysWithValues: Array(sorted.prefix(self.maxAircraftHistorySize / 2)))
                 }
-            } else {
-                logger.error("Poll failed (\(self.consecutiveErrors)/\(self.maxConsecutiveErrors)): \(error.localizedDescription) (code: \(nsError.code))")
             }
             
-            // Only stop after max consecutive errors
             if consecutiveErrors >= maxConsecutiveErrors {
                 state = .failed(error)
-                
-                // Notify that we're giving up - this allows the parent to disable ADS-B in settings
-                logger.error("Max consecutive errors reached, stopped polling. Check that readsb is running at: \(url.absoluteString)")
-                logger.warning("ADS-B will be automatically disabled in settings to prevent further connection attempts")
-                
                 stop()
-                
-                // Call the failure callback to notify the view model
                 onConnectionFailed?()
-                
             } else if consecutiveErrors == 1 {
-                // On first error, update state but keep polling
                 state = .failed(error)
             }
         }
