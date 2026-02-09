@@ -61,7 +61,11 @@ struct DroneEncounter: Codable, Identifiable, Hashable {
     // User defined name/trust status
     var customName: String {
         get { metadata["customName"] ?? "" }
-        set { metadata["customName"] = newValue }
+        set {
+            if !newValue.isEmpty {
+                metadata["customName"] = newValue
+            }
+        }
     }
 
     var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus {
@@ -73,6 +77,39 @@ struct DroneEncounter: Codable, Identifiable, Hashable {
             return .unknown
         }
         set { metadata["trustStatus"] = newValue.rawValue }
+    }
+    
+    var sessionHistory: [String] {
+        get {
+            let historyString = metadata["sessionHistory"] ?? ""
+            return historyString.components(separatedBy: ";").filter { !$0.isEmpty }
+        }
+        set {
+            metadata["sessionHistory"] = newValue.joined(separator: ";")
+        }
+    }
+    
+    // Activity log tracks when drone was actively transmitting data
+    var activityLog: [ActivityLogEntry] {
+        get {
+            let logString = metadata["activityLog"] ?? ""
+            let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
+            return entries.compactMap { ActivityLogEntry.fromString($0) }
+        }
+        set {
+            metadata["activityLog"] = newValue.map { $0.toString() }.joined(separator: ";")
+        }
+    }
+    
+    mutating func addCurrentSession() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH"
+        let sessionKey = formatter.string(from: Date())
+        var sessions = sessionHistory
+        if !sessions.contains(sessionKey) {
+            sessions.append(sessionKey)
+            sessionHistory = sessions
+        }
     }
     
     // Initialize with private flight path
@@ -135,6 +172,34 @@ struct FlightPathPoint: Codable, Hashable {
     }
 }
 
+// Activity log entry - tracks when drone was actively transmitting
+struct ActivityLogEntry: Codable, Hashable {
+    var startTime: Date
+    var endTime: Date
+    
+    var duration: TimeInterval {
+        endTime.timeIntervalSince(startTime)
+    }
+    
+    func toString() -> String {
+        let formatter = ISO8601DateFormatter()
+        return "\(formatter.string(from: startTime))|\(formatter.string(from: endTime))"
+    }
+    
+    static func fromString(_ string: String) -> ActivityLogEntry? {
+        let parts = string.components(separatedBy: "|")
+        guard parts.count == 2 else { return nil }
+        
+        let formatter = ISO8601DateFormatter()
+        guard let start = formatter.date(from: parts[0]),
+              let end = formatter.date(from: parts[1]) else {
+            return nil
+        }
+        
+        return ActivityLogEntry(startTime: start, endTime: end)
+    }
+}
+
 struct SignatureData: Codable, Hashable {
     let timestamp: TimeInterval
     let rssi: Double
@@ -167,7 +232,7 @@ extension DroneEncounter {
         "Max Altitude (m),Max Speed (m/s),Average RSSI (dBm)," +
         "Flight Duration (HH:MM:SS),Height (m),Manufacturer," +
         "MAC Count,MAC History,Pilot Latitude,Pilot Longitude," +
-        "Takeoff Latitude,Takeoff Longitude"
+        "Takeoff Latitude,Takeoff Longitude,Activity Periods,Total Active Time (HH:MM:SS)"
     }
     
     func toCSVRow() -> String {
@@ -238,7 +303,6 @@ extension DroneEncounter {
             row.append("")
         }
         
-        // Takeoff location (using homeLat/homeLon)
         if let takeoffLat = metadata["homeLat"], let takeoffLon = metadata["homeLon"] {
             row.append(takeoffLat)
             row.append(takeoffLon)
@@ -246,6 +310,15 @@ extension DroneEncounter {
             row.append("")
             row.append("")
         }
+        
+        let activityPeriods = activityLog.count
+        row.append("\(activityPeriods)")
+        
+        let totalActiveTime = activityLog.reduce(0) { $0 + $1.duration }
+        let activeHours = Int(totalActiveTime) / 3600
+        let activeMinutes = Int(totalActiveTime) % 3600 / 60
+        let activeSeconds = Int(totalActiveTime) % 60
+        row.append(String(format: "%02d:%02d:%02d", activeHours, activeMinutes, activeSeconds))
         
         return row.map { "\"\($0)\"" }.joined(separator: ",")
     }

@@ -23,6 +23,8 @@ struct MessageRow: View {
         self.message = message
         self.cotViewModel = cotViewModel
         self.isCompact = isCompact
+        _droneEncounter = State(initialValue: DroneStorageManager.shared.encounters[message.uid])
+        _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
     }
     
     enum SheetType: Identifiable {

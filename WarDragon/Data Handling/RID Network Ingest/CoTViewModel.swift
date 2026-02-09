@@ -24,7 +24,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var backgroundMessageBuffer: [Data] = []
     private let backgroundBufferLock = NSLock()
     private let signatureGenerator = DroneSignatureGenerator()
-    private let statusViewModel: StatusViewModel
+    public let statusViewModel: StatusViewModel
     private var spectrumViewModel: SpectrumData.SpectrumViewModel?
     private var zmqHandler: ZMQHandler?
     private lazy var messageConverter = ZMQHandler() // For message conversion even in multicast mode
@@ -773,24 +773,17 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     if Settings.shared.adsbEnabled {
                         await self.setupADSBClient()
                     } else {
-                        // Clean up ONLY aircraft data when disabling ADS-B
-                        // Do NOT touch parsedMessages (drone detections)
-                        print("ADS-B disabled - clearing aircraft tracks only, preserving \(self.parsedMessages.count) drone detections")
+                        // Stop ADS-B client but KEEP existing aircraft detections in view
+                        print("ADS-B disabled - stopping client but preserving \(self.aircraftTracks.count) aircraft tracks")
                         
                         self.adsbCancellables.removeAll()
                         self.adsbClient?.stop()
                         self.adsbClient = nil
                         
-                        // Only clear aircraft-related data
-                        self.aircraftTracks.removeAll()
+                        // DO NOT clear aircraftTracks - let them age out naturally
+                        // DO NOT clear aircraft alert rings - let them remain visible
                         
-                        // Remove aircraft alert rings only (preserve drone alert rings)
-                        self.alertRings.removeAll { $0.droneId.hasPrefix("aircraft-") }
-                        
-                        // IMPORTANT: Explicitly DO NOT clear parsedMessages
-                        // parsedMessages contains drone detections and should remain unchanged
-                        
-                        print("ADS-B cleanup complete - \(self.parsedMessages.count) drone detections preserved")
+                        print("ADS-B client stopped - \(self.aircraftTracks.count) aircraft tracks preserved, \(self.parsedMessages.count) drone detections preserved")
                     }
                 }
             }
@@ -2364,6 +2357,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             Task { @MainActor in
                 let currentMonitorStatus = self.statusViewModel.statusMessages.last
                 DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+                
+                if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: message.uid) {
+                    storedEncounter.logActivity(timestamp: Date())
+                }
             }
             
             return
@@ -2742,15 +2739,15 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             }
         }
         
-        // Update encounters storage with enhanced history preservation
         Task { @MainActor in
             let encounters = DroneStorageManager.shared.encounters
             let currentMonitorStatus = self.statusViewModel.statusMessages.last
             
-            // Save with complete history preservation
             DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
             
-            if encounters[signature.primaryId.id] != nil {
+            if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: signature.primaryId.id) {
+                storedEncounter.logActivity(timestamp: Date())
+                
                 let existing = encounters[signature.primaryId.id]!
                 let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
                 existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
@@ -2949,6 +2946,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
                 messageToProcess.trustStatus = storedEncounter.trustStatus
                 storedEncounter.addCurrentSession()
+                storedEncounter.logActivity(timestamp: Date())
                 try? SwiftDataStorageManager.shared.modelContext?.save()
             }
             

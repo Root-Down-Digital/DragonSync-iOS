@@ -186,12 +186,10 @@ class SwiftDataStorageManager: ObservableObject {
                 caaToIdCache[caaReg] = existing.id
             }
             
-            // Track MAC for this CAA registration
             if let mac = message.mac, !mac.isEmpty {
                 macToIdCache[mac] = targetId
             }
         } else if let mac = message.mac, !mac.isEmpty {
-            // For non-serial, non-CAA IDs (like manufacturer serials), use MAC for consolidation
             if let cachedId = macToIdCache[mac] {
                 let existingEncounter = fetchEncounter(id: cachedId)
                 let droneEncounter = fetchEncounter(id: droneId)
@@ -216,7 +214,6 @@ class SwiftDataStorageManager: ObservableObject {
                     targetId = droneId
                 }
             } else {
-                // First time seeing this MAC, cache it
                 macToIdCache[mac] = droneId
                 logger.info("New MAC cached: \(mac) -> \(droneId)")
             }
@@ -227,6 +224,23 @@ class SwiftDataStorageManager: ObservableObject {
         }
         
         let encounter = fetchOrCreateEncounter(id: targetId, message: message, context: context)
+        
+        let now = Date()
+        let sessionKey = createSessionKey(for: now)
+        var sessionHistory = encounter.metadata["sessionHistory"] ?? ""
+        let existingSessions = Set(sessionHistory.components(separatedBy: ";").filter { !$0.isEmpty })
+        if !existingSessions.contains(sessionKey) {
+            if sessionHistory.isEmpty {
+                sessionHistory = sessionKey
+            } else {
+                sessionHistory += ";\(sessionKey)"
+            }
+            encounter.metadata["sessionHistory"] = sessionHistory
+            logger.info("Added session \(sessionKey) to drone \(targetId)")
+        }
+        
+        // Log activity - when drone was actively transmitting data
+        logDroneActivity(encounter: encounter, timestamp: now)
         
         // Add flight point if valid
         var didAddPoint = false
@@ -683,6 +697,12 @@ class SwiftDataStorageManager: ObservableObject {
     
     // MARK: - Helper Methods
     
+    private func createSessionKey(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH"
+        return formatter.string(from: date)
+    }
+    
     private func findEncounterByMAC(_ mac: String, context: ModelContext) -> StoredDroneEncounter? {
         let descriptor = FetchDescriptor<StoredDroneEncounter>()
         
@@ -799,6 +819,37 @@ class SwiftDataStorageManager: ObservableObject {
         let location1 = CLLocation(latitude: from.latitude, longitude: from.longitude)
         let location2 = CLLocation(latitude: to.latitude, longitude: to.longitude)
         return location1.distance(from: location2)
+    }
+    
+    /// Log when drone was actively transmitting data
+    private func logDroneActivity(encounter: StoredDroneEncounter, timestamp: Date) {
+        let formatter = ISO8601DateFormatter()
+        let existingLog = encounter.metadata["activityLog"] ?? ""
+        var entries = existingLog.components(separatedBy: ";").filter { !$0.isEmpty }
+        
+        if let lastEntryString = entries.last {
+            let parts = lastEntryString.components(separatedBy: "|")
+            if parts.count == 2,
+               formatter.date(from: parts[0]) != nil,
+               let endTime = formatter.date(from: parts[1]) {
+                
+                if timestamp.timeIntervalSince(endTime) < 120 {
+                    entries[entries.count - 1] = "\(parts[0])|\(formatter.string(from: timestamp))"
+                    encounter.metadata["activityLog"] = entries.joined(separator: ";")
+                    logger.info("Extended activity log for \(encounter.id) to \(formatter.string(from: timestamp))")
+                    return
+                }
+            }
+        }
+        
+        let newEntry = "\(formatter.string(from: timestamp))|\(formatter.string(from: timestamp))"
+        if entries.isEmpty {
+            encounter.metadata["activityLog"] = newEntry
+        } else {
+            encounter.metadata["activityLog"] = existingLog + ";\(newEntry)"
+        }
+        
+        logger.info("Added new activity log entry for \(encounter.id) at \(formatter.string(from: timestamp))")
     }
     
     private func updateInMemoryCache() {

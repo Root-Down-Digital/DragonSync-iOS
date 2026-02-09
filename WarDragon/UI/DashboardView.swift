@@ -164,7 +164,7 @@ struct DronesOverviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "airplane")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .foregroundColor(.blue)
                 Text("ACTIVE DRONES")
                     .font(.appHeadline)

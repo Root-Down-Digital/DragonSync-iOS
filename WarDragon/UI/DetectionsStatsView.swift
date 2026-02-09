@@ -491,11 +491,11 @@ struct DetectionsStatsView: View {
             
             // Quick stats grid - Equal-width responsive columns
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount), spacing: 8) {
-                if detectionMode == .drones || detectionMode == .both {
+                if detectionMode == .drones {
                     QuickStatCard(
-                        title: "Aircraft",
+                        title: "Drones",
                         value: "\(activeDroneCount)",
-                        icon: "airplane.circle.fill",
+                        icon: "antenna.radiowaves.left.and.right",
                         color: .blue
                     )
                     
@@ -506,24 +506,20 @@ struct DetectionsStatsView: View {
                         color: .indigo
                     )
                     
-                    if detectionMode == .drones {
-                        QuickStatCard(
-                            title: "MACs",
-                            value: "\(uniqueMacCount)",
-                            icon: "number.circle.fill",
-                            color: .purple
-                        )
-                        
-                        QuickStatCard(
-                            title: "FPV",
-                            value: "\(fpvCount)",
-                            icon: "antenna.radiowaves.left.and.right",
-                            color: .orange
-                        )
-                    }
-                }
-                
-                if detectionMode == .aircraft || detectionMode == .both {
+                    QuickStatCard(
+                        title: "MACs",
+                        value: "\(uniqueMacCount)",
+                        icon: "number.circle.fill",
+                        color: .purple
+                    )
+                    
+                    QuickStatCard(
+                        title: "FPV",
+                        value: "\(fpvCount)",
+                        icon: "dot.radiowaves.left.and.right",
+                        color: .orange
+                    )
+                } else if detectionMode == .aircraft {
                     QuickStatCard(
                         title: "Aircraft",
                         value: "\(cotViewModel.aircraftTracks.count)",
@@ -550,6 +546,35 @@ struct DetectionsStatsView: View {
                         value: "\(emergencyAircraftCount)",
                         icon: "exclamationmark.triangle.fill",
                         color: emergencyAircraftCount > 0 ? .red : .gray
+                    )
+                } else {
+                    // .both mode - show unified stats
+                    QuickStatCard(
+                        title: "Drones",
+                        value: "\(activeDroneCount)",
+                        icon: "antenna.radiowaves.left.and.right",
+                        color: .blue
+                    )
+                    
+                    QuickStatCard(
+                        title: "Aircraft",
+                        value: "\(cotViewModel.aircraftTracks.count)",
+                        icon: "airplane.departure",
+                        color: .cyan
+                    )
+                    
+                    QuickStatCard(
+                        title: "Total Active",
+                        value: "\(activeDroneCount + cotViewModel.aircraftTracks.count)",
+                        icon: "chart.bar.fill",
+                        color: .purple
+                    )
+                    
+                    QuickStatCard(
+                        title: "All Seen",
+                        value: "\(totalDronesSeen + totalAircraftSeen)",
+                        icon: "clock.badge.checkmark",
+                        color: .indigo
                     )
                 }
             }
@@ -747,8 +772,8 @@ struct DetectionsStatsView: View {
     }
     
     private var totalAircraftSeen: Int {
-        // Count all aircraft encounters from storage
-        DroneStorageManager.shared.encounters.filter { $0.key.hasPrefix("aircraft-") }.count
+        // Count all aircraft encounters from StatusViewModel
+        cotViewModel.statusViewModel.adsbEncounterHistory.count
     }
     
     private var maxAircraftAltitude: Int? {
@@ -757,6 +782,14 @@ struct DetectionsStatsView: View {
     
     private var emergencyAircraftCount: Int {
         cotViewModel.aircraftTracks.filter { $0.isEmergency }.count
+    }
+    
+    private var spoofedCount: Int {
+        cotViewModel.parsedMessages.filter { $0.isSpoofed }.count
+    }
+    
+    private var maxAircraftSpeed: Int? {
+        cotViewModel.aircraftTracks.compactMap { $0.speedKnots }.max()
     }
     
     // Drone type distribution

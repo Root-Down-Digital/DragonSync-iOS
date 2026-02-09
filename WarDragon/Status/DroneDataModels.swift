@@ -105,6 +105,56 @@ final class StoredDroneEncounter {
         let rawHeading = parse("course") ?? parse("bearing") ?? parse("direction") ?? 0
         return (rawHeading.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
     }
+    
+    var sessionHistory: [String] {
+        get {
+            let historyString = metadata["sessionHistory"] ?? ""
+            return historyString.components(separatedBy: ";").filter { !$0.isEmpty }
+        }
+        set {
+            metadata["sessionHistory"] = newValue.joined(separator: ";")
+        }
+    }
+    
+    // Activity log tracks when drone was actively transmitting data
+    var activityLog: [ActivityLogEntry] {
+        get {
+            let logString = metadata["activityLog"] ?? ""
+            let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
+            return entries.compactMap { ActivityLogEntry.fromString($0) }
+        }
+        set {
+            metadata["activityLog"] = newValue.map { $0.toString() }.joined(separator: ";")
+        }
+    }
+    
+    func addCurrentSession() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH"
+        let sessionKey = formatter.string(from: Date())
+        var sessions = sessionHistory
+        if !sessions.contains(sessionKey) {
+            sessions.append(sessionKey)
+            sessionHistory = sessions
+            print("Added session \(sessionKey) to drone \(id)")
+        }
+    }
+    
+    // Log when drone was active (received data)
+    func logActivity(timestamp: Date) {
+        var logs = activityLog
+        
+        // If there's a recent entry within 2 minutes, extend it instead of creating new one
+        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].startTime) < 120 {
+            logs[lastIndex].endTime = timestamp
+        } else {
+            // Create new activity entry
+            let entry = ActivityLogEntry(startTime: timestamp, endTime: timestamp)
+            logs.append(entry)
+        }
+        
+        activityLog = logs
+    }
 }
 
 @Model

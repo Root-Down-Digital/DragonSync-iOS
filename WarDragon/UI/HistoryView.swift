@@ -434,10 +434,6 @@ struct StoredEncountersView: View {
                 } else {
                     regularDroneStatsRow
                 }
-                
-                Text("Duration: \(formatDuration(encounter.totalFlightTime))")
-                    .font(.appCaption)
-                    .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
@@ -1173,55 +1169,124 @@ struct StoredEncountersView: View {
         }
         
         private var encounterStats: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("ENCOUNTER STATS")
-                    .font(.appHeadline)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                
-                StatsGrid {
-                    StatItem(title: "Duration", value: formatDuration(encounter.totalFlightTime))
-                    StatItem(title: "Max Alt", value: String(format: "%.1fm", encounter.cachedMaxAltitude))
-                    StatItem(title: "Max Speed", value: String(format: "%.1fm/s", encounter.cachedMaxSpeed))
-                    StatItem(title: "Avg RSSI", value: String(format: "%.1fdBm", encounter.cachedAverageRSSI))
-                    StatItem(title: "Signatures", value: "\(encounter.cachedSignatureCount)")
+            VStack(spacing: 16) {
+                // MARK: - Flight Performance Stats
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("FLIGHT PERFORMANCE")
+                        .font(.appHeadline)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     
-                    if encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true" {
-                        let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ?? 0
-                        let proximityCount = totalDetections > 0 ? totalDetections : encounter.cachedFlightPointCount
-                        StatItem(title: "Points", value: "\(proximityCount)")
-                    } else {
-                        StatItem(title: "Points", value: "\(encounter.cachedFlightPointCount)")
+                    StatsGrid {
+                        StatItem(title: "Max Altitude", value: String(format: "%.1f m", encounter.cachedMaxAltitude))
+                        StatItem(title: "Max Speed", value: String(format: "%.1f m/s", encounter.cachedMaxSpeed))
+                        StatItem(title: "Avg Signal", value: String(format: "%.0f dBm", encounter.cachedAverageRSSI))
+                        
+                        if encounter.id.hasPrefix("fpv-") || encounter.metadata["isFPVDetection"] == "true" {
+                            let totalDetections = Int(encounter.metadata["totalDetections"] ?? "0") ?? 0
+                            let proximityCount = totalDetections > 0 ? totalDetections : encounter.cachedFlightPointCount
+                            StatItem(title: "Detections", value: "\(proximityCount)")
+                        } else {
+                            StatItem(title: "Track Points", value: "\(encounter.cachedFlightPointCount)")
+                        }
+                        
+                        StatItem(title: "Signatures", value: "\(encounter.cachedSignatureCount)")
+                        
+                        // Calculate actual duration
+                        let totalDuration: TimeInterval = {
+                            if !encounter.activityLog.isEmpty {
+                                return encounter.activityLog.reduce(0) { $0 + $1.duration }
+                            }
+                            if !flightPoints.isEmpty {
+                                let timestamps = flightPoints.map { $0.timestamp }.sorted()
+                                if let first = timestamps.first, let last = timestamps.last {
+                                    return last - first
+                                }
+                            }
+                            return encounter.lastSeen.timeIntervalSince(encounter.firstSeen)
+                        }()
+                        
+                        StatItem(title: "Duration", value: formatCompactDuration(totalDuration))
                     }
-                    
                 }
-                Text("ENCOUNTER TIMELINE")
-                    .font(.appHeadline)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                .padding()
+                .background(Color(UIColor.secondarySystemBackground))
+                .cornerRadius(12)
                 
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("First Detected")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text(formatDateTime(encounter.firstSeen))
+                // MARK: - Activity Timeline
+                if !encounter.activityLog.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("ACTIVITY PERIODS (\(encounter.activityLog.count))")
                             .font(.appHeadline)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        
+                        ForEach(Array(encounter.activityLog.enumerated()), id: \.offset) { index, entry in
+                            HStack(spacing: 12) {
+                                // Period number badge
+                                Text("\(index + 1)")
+                                    .font(.system(.caption, design: .rounded))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .frame(width: 28, height: 28)
+                                    .background(Circle().fill(Color.blue))
+                                
+                                // Time range
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "clock")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.green)
+                                        Text(formatTime(entry.startTime))
+                                            .font(.system(size: 12, design: .monospaced))
+                                    }
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "clock.badge.checkmark")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.red)
+                                        Text(formatTime(entry.endTime))
+                                            .font(.system(size: 12, design: .monospaced))
+                                    }
+                                }
+                                .foregroundColor(.secondary)
+                                
+                                Spacer()
+                                
+                                // Duration badge
+                                Text(formatCompactDuration(entry.duration))
+                                    .font(.system(.caption, design: .rounded))
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        Capsule()
+                                            .fill(activityDurationColor(entry.duration))
+                                    )
+                            }
+                            .padding(12)
+                            .background(Color(UIColor.tertiarySystemGroupedBackground))
+                            .cornerRadius(10)
+                        }
                     }
-                    
-                    Spacer()
-                    
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("Last Contact")
-                            .font(.appCaption)
-                            .foregroundStyle(.secondary)
-                        Text(formatDateTime(encounter.lastSeen))
-                            .font(.appHeadline)
-                    }
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(12)
                 }
             }
-            .padding()
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(12)
+        }
+        
+        // Compact duration formatter (e.g., "2h 15m" instead of "02:15:00")
+        private func formatCompactDuration(_ duration: TimeInterval) -> String {
+            let hours = Int(duration) / 3600
+            let minutes = (Int(duration) % 3600) / 60
+            let seconds = Int(duration) % 60
             
+            if hours > 0 {
+                return "\(hours)h \(minutes)m"
+            } else if minutes > 0 {
+                return "\(minutes)m \(seconds)s"
+            } else {
+                return "\(seconds)s"
+            }
         }
         
         private func formatDateTime(_ date: Date) -> String {
@@ -1229,6 +1294,22 @@ struct StoredEncountersView: View {
             formatter.dateStyle = .medium
             formatter.timeStyle = .medium
             return formatter.string(from: date)
+        }
+        
+        private func formatTime(_ date: Date) -> String {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .medium
+            return formatter.string(from: date)
+        }
+        
+        private func activityDurationColor(_ duration: TimeInterval) -> Color {
+            if duration < 60 {
+                return .orange
+            } else if duration < 300 {
+                return .blue
+            } else {
+                return .green
+            }
         }
         
         private var macSection: some View {

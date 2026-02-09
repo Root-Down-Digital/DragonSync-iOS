@@ -680,23 +680,32 @@ struct ContentView: View {
         // Only update if mode actually needs to change
         let newMode: DetectionMode
         
+        // Log current state for debugging
+        let droneCount = cotViewModel.parsedMessages.count
+        let aircraftCount = cotViewModel.aircraftTracks.count
+        
         if hasAircraft && !hasDrones {
             newMode = .aircraft
+            print("DEBUG: Switching to aircraft-only mode (\(aircraftCount) aircraft, \(droneCount) drones)")
         } else if hasDrones && !hasAircraft {
             newMode = .drones
+            print("DEBUG: Switching to drones-only mode (\(droneCount) drones, \(aircraftCount) aircraft)")
         } else if hasAircraft && hasDrones {
             // Keep current mode if already set to a valid option
             if detectionMode == .both || detectionMode == .drones || detectionMode == .aircraft {
                 return  // No change needed
             }
             newMode = .both
+            print("DEBUG: Switching to both mode (\(droneCount) drones, \(aircraftCount) aircraft)")
         } else {
+            print("DEBUG: No detections to track (\(droneCount) drones, \(aircraftCount) aircraft)")
             return  // Nothing to track, no change needed
         }
         
         // Only update if different
         if detectionMode != newMode {
             detectionMode = newMode
+            print("DEBUG: Detection mode updated to \(newMode)")
         }
     }
     
