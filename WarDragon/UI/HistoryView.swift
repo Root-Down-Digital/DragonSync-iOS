@@ -845,38 +845,33 @@ struct StoredEncountersView: View {
                 }
                 
                 Group {
-                    // Draw pilot trail if there's movement
                     let pilotCoordinates = pilotItems.map { $0.coordinate }
                     if pilotCoordinates.count > 1 {
-                        // Smooth the pilot path for better visual appearance
                         let smoothedPilotPath = FlightPathSmoother.smoothPath(pilotCoordinates, smoothness: 4)
                         MapPolyline(coordinates: smoothedPilotPath)
                             .stroke(.orange, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     }
                     
-                    // Only show latest pilot position
-                    if let latestPilot = pilotItems.last {
-                        Annotation("Pilot", coordinate: latestPilot.coordinate) {
-                            Image(systemName: "person.fill")
-                                .foregroundStyle(.orange)
+                    ForEach(pilotItems) { item in
+                        Annotation(item.title, coordinate: item.coordinate) {
+                            Image(systemName: item.systemImageName)
+                                .foregroundStyle(item.tintColor)
                                 .background(Circle().fill(.white))
                         }
                     }
                 }
                 
                 Group {
-                    // Draw home trail if there's movement
                     let homeCoordinates = homeItems.map { $0.coordinate }
                     if homeCoordinates.count > 1 {
                         MapPolyline(coordinates: homeCoordinates)
-                            .stroke(.yellow, lineWidth: 2)
+                            .stroke(.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     }
                     
-                    // Only show latest home position
-                    if let latestHome = homeItems.last {
-                        Annotation("Home", coordinate: latestHome.coordinate) {
-                            Image(systemName: "house.fill")
-                                .foregroundStyle(.green)
+                    ForEach(homeItems) { item in
+                        Annotation(item.title, coordinate: item.coordinate) {
+                            Image(systemName: item.systemImageName)
+                                .foregroundStyle(item.tintColor)
                                 .background(Circle().fill(.white))
                         }
                     }
