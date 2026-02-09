@@ -1334,47 +1334,57 @@ struct StoredEncountersView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                         
                         ForEach(Array(encounter.activityLog.enumerated()), id: \.offset) { index, entry in
-                            HStack(spacing: 12) {
-                                // Period number badge
-                                Text("\(index + 1)")
-                                    .font(.system(.caption, design: .rounded))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                                    .frame(width: 28, height: 28)
-                                    .background(Circle().fill(Color.blue))
-                                
-                                // Time range
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "clock")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.green)
-                                        Text(formatTime(entry.startTime))
-                                            .font(.system(size: 12, design: .monospaced))
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 12) {
+                                    Text("\(index + 1)")
+                                        .font(.system(.caption, design: .rounded))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .frame(width: 28, height: 28)
+                                        .background(Circle().fill(Color.blue))
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(formatDate(entry.startTime))
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(.primary)
+                                        
+                                        HStack(spacing: 12) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "clock")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(.green)
+                                                Text(formatTime(entry.startTime))
+                                                    .font(.system(size: 12, design: .monospaced))
+                                            }
+                                            
+                                            Image(systemName: "arrow.right")
+                                                .font(.system(size: 8))
+                                                .foregroundColor(.secondary)
+                                            
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "clock.badge.checkmark")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(.red)
+                                                Text(formatTime(entry.endTime))
+                                                    .font(.system(size: 12, design: .monospaced))
+                                            }
+                                        }
+                                        .foregroundColor(.secondary)
                                     }
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "clock.badge.checkmark")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.red)
-                                        Text(formatTime(entry.endTime))
-                                            .font(.system(size: 12, design: .monospaced))
-                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Text(formatCompactDuration(entry.duration))
+                                        .font(.system(.caption, design: .rounded))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            Capsule()
+                                                .fill(activityDurationColor(entry.duration))
+                                        )
                                 }
-                                .foregroundColor(.secondary)
-                                
-                                Spacer()
-                                
-                                // Duration badge
-                                Text(formatCompactDuration(entry.duration))
-                                    .font(.system(.caption, design: .rounded))
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(
-                                        Capsule()
-                                            .fill(activityDurationColor(entry.duration))
-                                    )
                             }
                             .padding(12)
                             .background(Color(UIColor.tertiarySystemGroupedBackground))
@@ -1407,6 +1417,12 @@ struct StoredEncountersView: View {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
             formatter.timeStyle = .medium
+            return formatter.string(from: date)
+        }
+        
+        private func formatDate(_ date: Date) -> String {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
             return formatter.string(from: date)
         }
         
