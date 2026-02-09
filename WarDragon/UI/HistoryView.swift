@@ -574,6 +574,7 @@ struct StoredEncountersView: View {
         @State private var flightPoints: [StoredFlightPoint] = []
         @State private var signatures: [StoredSignature] = []
         @State private var isDataLoaded = false
+        @State private var isLoadingStarted = false
         @State private var isFPVDetection = false
         
         enum MapStyle {
@@ -598,7 +599,7 @@ struct StoredEncountersView: View {
         
         @ViewBuilder
         private var encounterDetailContent: some View {
-            if !isDataLoaded {
+            if isLoadingStarted && !isDataLoaded {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -610,13 +611,16 @@ struct StoredEncountersView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding()
                 .background(Color(UIColor.systemBackground))
-                .onAppear {
-                    Task {
-                        await loadRelationshipData()
-                    }
-                }
             } else {
                 actualContent
+                    .onAppear {
+                        if !isLoadingStarted {
+                            isLoadingStarted = true
+                            Task {
+                                await loadRelationshipData()
+                            }
+                        }
+                    }
             }
         }
         
@@ -716,11 +720,6 @@ struct StoredEncountersView: View {
                 .padding()
             }
             .navigationTitle("Encounter Details")
-            .onAppear {
-                Task {
-                    await loadRelationshipData()
-                }
-            }
             .sheet(isPresented: $showingInfoEditor) {
                 NavigationView {
                     DroneInfoEditor(droneId: encounter.id)
@@ -787,8 +786,10 @@ struct StoredEncountersView: View {
         }
         
         private var mapSection: some View {
-            // Use @State loaded data instead of direct relationship access
-            let droneFlightPoints = flightPoints.filter { !$0.isProximityPoint }
+            let droneFlightPoints = flightPoints
+                .filter { !$0.isProximityPoint }
+                .sorted { $0.timestamp < $1.timestamp }
+            
             let proximityPointsWithRssi = flightPoints.filter { $0.isProximityPoint && $0.proximityRssi != nil }
             
             let pilotItems = buildPilotItems()
@@ -801,7 +802,6 @@ struct StoredEncountersView: View {
             return Map(position: $mapCameraPosition) {
                 Group {
                     if showFlightPath && droneFlightPoints.count > 1 {
-                        // Smooth the path for better visual appearance
                         let smoothedPath = FlightPathSmoother.smoothPath(droneFlightPoints.map { $0.coordinate }, smoothness: 4)
                         MapPolyline(coordinates: smoothedPath)
                             .stroke(.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
