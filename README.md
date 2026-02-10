@@ -60,6 +60,8 @@
 
 ![Detection interface](https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b)
 ![Signal analysis](https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635)
+<img width="965" height="912" alt="914C869C-2EAA-47D2-AA86-0DB41CF0EE74" src="https://github.com/user-attachments/assets/27674677-25f3-4ca8-be47-509ee5dba69e" />
+
 
 
 </td>
