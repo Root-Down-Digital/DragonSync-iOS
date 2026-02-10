@@ -8,7 +8,135 @@
 import SwiftUI
 import MapKit
 
-struct MessageRow: View {
+@MainActor
+private final class EditorStateStore: ObservableObject {
+    static let shared = EditorStateStore()
+    @Published var editingSessions: [String: EditingData] = [:]
+    
+    struct EditingData {
+        var name: String
+        var trust: DroneSignature.UserDefinedInfo.TrustStatus
+    }
+}
+
+private struct DroneInfoEditorSheet: View {
+    let droneId: String
+    @Binding var isPresented: Bool
+    @StateObject private var store = EditorStateStore.shared
+    
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                TextField("Drone Name", text: Binding(
+                    get: { store.editingSessions[droneId]?.name ?? "" },
+                    set: { newName in
+                        if var session = store.editingSessions[droneId] {
+                            session.name = newName
+                            store.editingSessions[droneId] = session
+                        }
+                    }
+                ))
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .font(.appDefault)
+                .padding(.bottom, 8)
+                .autocorrectionDisabled()
+                
+                Text("Trust Status")
+                    .font(.appSubheadline)
+                    .padding(.bottom, 4)
+                
+                HStack(spacing: 16) {
+                    TrustButton(
+                        title: "Trusted",
+                        icon: "checkmark.shield.fill",
+                        color: .green,
+                        isSelected: store.editingSessions[droneId]?.trust == .trusted,
+                        action: {
+                            if var session = store.editingSessions[droneId] {
+                                session.trust = .trusted
+                                store.editingSessions[droneId] = session
+                            }
+                        }
+                    )
+                    
+                    TrustButton(
+                        title: "Unknown",
+                        icon: "shield.fill",
+                        color: .gray,
+                        isSelected: store.editingSessions[droneId]?.trust == .unknown,
+                        action: {
+                            if var session = store.editingSessions[droneId] {
+                                session.trust = .unknown
+                                store.editingSessions[droneId] = session
+                            }
+                        }
+                    )
+                    
+                    TrustButton(
+                        title: "Untrusted",
+                        icon: "xmark.shield.fill",
+                        color: .red,
+                        isSelected: store.editingSessions[droneId]?.trust == .untrusted,
+                        action: {
+                            if var session = store.editingSessions[droneId] {
+                                session.trust = .untrusted
+                                store.editingSessions[droneId] = session
+                            }
+                        }
+                    )
+                }
+                .padding(.bottom, 16)
+                
+                Button(action: saveChanges) {
+                    Text("Save")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Edit Drone Info")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        isPresented = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.hidden)
+        .interactiveDismissDisabled(true)
+        .onAppear {
+            if store.editingSessions[droneId] == nil {
+                let encounter = DroneStorageManager.shared.encounters[droneId]
+                store.editingSessions[droneId] = EditorStateStore.EditingData(
+                    name: encounter?.customName ?? "",
+                    trust: encounter?.trustStatus ?? .unknown
+                )
+            }
+        }
+    }
+    
+    private func saveChanges() {
+        if let session = store.editingSessions[droneId] {
+            DroneStorageManager.shared.updateDroneInfo(
+                id: droneId,
+                name: session.name,
+                trustStatus: session.trust
+            )
+        }
+        store.editingSessions.removeValue(forKey: droneId)
+        isPresented = false
+    }
+}
+
+struct MessageRow: View, Equatable {
     let message: CoTViewModel.CoTMessage
     let cotViewModel: CoTViewModel
     let isCompact: Bool
@@ -18,6 +146,15 @@ struct MessageRow: View {
     @State private var showingSaveConfirmation = false
     @State private var showingInfoEditor = false
     @State private var showingDeleteConfirmation = false
+    @State private var editorDroneId: String = ""
+    
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.message.uid == rhs.message.uid && lhs.isCompact == rhs.isCompact
+    }
+    @State private var showingSaveConfirmation = false
+    @State private var showingInfoEditor = false
+    @State private var showingDeleteConfirmation = false
+    @State private var editorDroneId: String = "" // Store drone ID for editor separately
     
     init(message: CoTViewModel.CoTMessage, cotViewModel: CoTViewModel, isCompact: Bool = false) {
         self.message = message
@@ -25,6 +162,7 @@ struct MessageRow: View {
         self.isCompact = isCompact
         _droneEncounter = State(initialValue: DroneStorageManager.shared.encounters[message.uid])
         _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
+        _editorDroneId = State(initialValue: message.uid) // Initialize with current ID
     }
     
     enum SheetType: Identifiable {
@@ -309,7 +447,10 @@ struct MessageRow: View {
                 }
                 
                 Menu {
-                    Button(action: { showingInfoEditor = true }) {
+                    Button(action: { 
+                        editorDroneId = message.uid // Capture ID before opening
+                        showingInfoEditor = true 
+                    }) {
                         Label("Edit Info", systemImage: "pencil")
                     }
                     
@@ -459,40 +600,65 @@ struct MessageRow: View {
             if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }),
                !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
                 // FPV with valid alert ring - use fixed position to prevent auto-zoom
-                Map(position: .constant(.camera(MapCamera(
-                    centerCoordinate: ring.centerCoordinate,
-                    distance: ring.radius * 3 // 3x the radius for good viewing
-                ))), interactionModes: [.pan, .zoom]) {
-                    MapCircle(center: ring.centerCoordinate, radius: ring.radius)
-                        .foregroundStyle(.orange.opacity(0.1))
-                        .stroke(.orange, lineWidth: 2)
-                    
-                    Annotation("Monitor", coordinate: ring.centerCoordinate) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
+                VStack(alignment: .leading, spacing: 0) {
+                    // Quick preview label
+                    HStack {
+                        Text("Signal Range Map")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: {
+                            activeSheet = .detailView
+                        }) {
+                            HStack(spacing: 4) {
+                                Text("Quick View")
+                                    .font(.caption2)
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.caption2)
+                            }
                             .foregroundColor(.blue)
-                            .font(.title2)
-                            .background(Circle().fill(.white))
-                    }
-                    
-                    Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: ring.centerCoordinate) {
-                        VStack {
-                            Text("FPV Signal")
-                                .font(.caption)
-                            Text("\(Int(ring.radius))m radius")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
                         }
-                        .padding(6)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(6)
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.05))
+                    
+                    Map(position: .constant(.camera(MapCamera(
+                        centerCoordinate: ring.centerCoordinate,
+                        distance: ring.radius * 3 // 3x the radius for good viewing
+                    ))), interactionModes: [.pan, .zoom]) {
+                        MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                            .foregroundStyle(.orange.opacity(0.1))
+                            .stroke(.orange, lineWidth: 2)
+                        
+                        Annotation("Monitor", coordinate: ring.centerCoordinate) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .foregroundColor(.blue)
+                                .font(.title2)
+                                .background(Circle().fill(.white))
+                        }
+                        
+                        Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: ring.centerCoordinate) {
+                            VStack {
+                                Text("FPV Signal")
+                                    .font(.caption)
+                                Text("\(Int(ring.radius))m radius")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(6)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(6)
+                        }
+                    }
+                    .mapControls {
+                        MapUserLocationButton()
+                        MapCompass()
+                        MapScaleView()
+                    }
+                    .frame(height: 150)
                 }
-                .mapControls {
-                    MapUserLocationButton()
-                    MapCompass()
-                    MapScaleView()
-                }
-                .frame(height: 150)
                 .cornerRadius(10)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
@@ -501,33 +667,58 @@ struct MessageRow: View {
                 .allowsHitTesting(true)
             } else if let coord = message.coordinate, !(coord.latitude == 0 && coord.longitude == 0) {
                 // FPV detection with coordinate (from user's location) but no alert ring
-                Map(position: .constant(.camera(MapCamera(
-                    centerCoordinate: coord,
-                    distance: 500
-                ))), interactionModes: [.pan, .zoom]) {
-                    Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: coord) {
-                        VStack {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .foregroundColor(.orange)
-                                .font(.title2)
-                                .background(Circle().fill(.white).frame(width: 30, height: 30))
-                            Text("FPV Signal")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(4)
+                VStack(alignment: .leading, spacing: 0) {
+                    // Quick preview label
+                    HStack {
+                        Text("Signal Location Map")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: {
+                            activeSheet = .detailView
+                        }) {
+                            HStack(spacing: 4) {
+                                Text("Quick View")
+                                    .font(.caption2)
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.blue)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.05))
+                    
+                    Map(position: .constant(.camera(MapCamera(
+                        centerCoordinate: coord,
+                        distance: 500
+                    ))), interactionModes: [.pan, .zoom]) {
+                        Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: coord) {
+                            VStack {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                    .foregroundColor(.orange)
+                                    .font(.title2)
+                                    .background(Circle().fill(.white).frame(width: 30, height: 30))
+                                Text("FPV Signal")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(4)
+                            }
                         }
                     }
+                    .mapStyle(.standard)
+                    .mapControls {
+                        MapUserLocationButton()
+                        MapCompass()
+                        MapScaleView()
+                    }
+                    .frame(height: 150)
                 }
-                .mapStyle(.standard)
-                .mapControls {
-                    MapUserLocationButton()
-                    MapCompass()
-                    MapScaleView()
-                }
-                .frame(height: 150)
                 .cornerRadius(10)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
@@ -882,21 +1073,37 @@ struct MessageRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .id(message.uid)
         .contextMenu {
             contextMenuItems
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             swipeActionItems
         }
-        .task(id: message.id) {
-            droneEncounter = DroneStorageManager.shared.encounters[message.uid]
-            droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        .onAppear {
+            updateEncounterData()
+        }
+        .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
+            // Don't update while user is editing info - prevents text field from clearing
+            guard !showingInfoEditor else { return }
+            updateEncounterData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DroneInfoUpdated"))) { notification in
+            guard !showingInfoEditor else { return }
+            if let droneId = notification.userInfo?["droneId"] as? String,
+               droneId == message.uid {
+                updateEncounterData()
+            }
         }
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
         }
-        .sheet(isPresented: $showingInfoEditor) {
-            infoEditorSheet
+        .sheet(isPresented: $showingInfoEditor, onDismiss: {
+            // Update the encounter data after the editor is dismissed
+            // This ensures the UI reflects any changes made in the editor
+            updateEncounterData()
+        }) {
+            DroneInfoEditorSheet(droneId: editorDroneId, isPresented: $showingInfoEditor)
         }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
@@ -947,9 +1154,20 @@ struct MessageRow: View {
                     .padding(-8)
             )
         }
-        .task(id: message.id) {
-            droneEncounter = DroneStorageManager.shared.encounters[message.uid]
-            droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        .id(message.uid)
+        .onAppear {
+            updateEncounterData()
+        }
+        .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
+            guard !showingInfoEditor else { return }
+            updateEncounterData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DroneInfoUpdated"))) { notification in
+            guard !showingInfoEditor else { return }
+            if let droneId = notification.userInfo?["droneId"] as? String,
+               droneId == message.uid {
+                updateEncounterData()
+            }
         }
         .contextMenu {
             contextMenuItems
@@ -960,14 +1178,29 @@ struct MessageRow: View {
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
         }
-        .sheet(isPresented: $showingInfoEditor) {
-            infoEditorSheet
+        .sheet(isPresented: $showingInfoEditor, onDismiss: {
+            // Update the encounter data after the editor is dismissed
+            // This ensures the UI reflects any changes made in the editor
+            updateEncounterData()
+        }) {
+            DroneInfoEditorSheet(droneId: editorDroneId, isPresented: $showingInfoEditor)
         }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
         } message: {
             deleteConfirmationMessage
         }
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func updateEncounterData() {
+        // Don't update cached data while the editor sheet is open
+        // This prevents the text fields from being cleared during editing
+        guard !showingInfoEditor else { return }
+        
+        droneEncounter = DroneStorageManager.shared.encounters[message.uid]
+        droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
     }
     
     @ViewBuilder
@@ -1036,22 +1269,6 @@ struct MessageRow: View {
                 }
             }
         }
-    }
-    
-    private var infoEditorSheet: some View {
-        NavigationStack {
-            DroneInfoEditor(droneId: message.uid)
-                .navigationTitle("Edit Drone Info")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Done") {
-                            showingInfoEditor = false
-                        }
-                    }
-                }
-        }
-        .presentationDetents([.medium])
     }
     
     @ViewBuilder
