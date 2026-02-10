@@ -8,38 +8,39 @@
 import SwiftUI
 import MapKit
 
-@MainActor
-private final class EditorStateStore: ObservableObject {
-    static let shared = EditorStateStore()
-    @Published var editingSessions: [String: EditingData] = [:]
+private actor EditorCache {
+    static let shared = EditorCache()
+    private var sessions: [String: (String, DroneSignature.UserDefinedInfo.TrustStatus)] = [:]
     
-    struct EditingData {
-        var name: String
-        var trust: DroneSignature.UserDefinedInfo.TrustStatus
+    func get(_ id: String) -> (String, DroneSignature.UserDefinedInfo.TrustStatus)? {
+        sessions[id]
+    }
+    
+    func set(_ id: String, name: String, trust: DroneSignature.UserDefinedInfo.TrustStatus) {
+        sessions[id] = (name, trust)
+    }
+    
+    func clear(_ id: String) {
+        sessions.removeValue(forKey: id)
     }
 }
 
 private struct DroneInfoEditorSheet: View {
     let droneId: String
     @Binding var isPresented: Bool
-    @StateObject private var store = EditorStateStore.shared
+    @State private var customName: String = ""
+    @State private var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus = .unknown
+    @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                TextField("Drone Name", text: Binding(
-                    get: { store.editingSessions[droneId]?.name ?? "" },
-                    set: { newName in
-                        if var session = store.editingSessions[droneId] {
-                            session.name = newName
-                            store.editingSessions[droneId] = session
-                        }
-                    }
-                ))
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .font(.appDefault)
-                .padding(.bottom, 8)
-                .autocorrectionDisabled()
+                TextField("Drone Name", text: $customName)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.appDefault)
+                    .padding(.bottom, 8)
+                    .autocorrectionDisabled()
+                    .focused($isTextFieldFocused)
                 
                 Text("Trust Status")
                     .font(.appSubheadline)
@@ -50,39 +51,24 @@ private struct DroneInfoEditorSheet: View {
                         title: "Trusted",
                         icon: "checkmark.shield.fill",
                         color: .green,
-                        isSelected: store.editingSessions[droneId]?.trust == .trusted,
-                        action: {
-                            if var session = store.editingSessions[droneId] {
-                                session.trust = .trusted
-                                store.editingSessions[droneId] = session
-                            }
-                        }
+                        isSelected: trustStatus == .trusted,
+                        action: { trustStatus = .trusted }
                     )
                     
                     TrustButton(
                         title: "Unknown",
                         icon: "shield.fill",
                         color: .gray,
-                        isSelected: store.editingSessions[droneId]?.trust == .unknown,
-                        action: {
-                            if var session = store.editingSessions[droneId] {
-                                session.trust = .unknown
-                                store.editingSessions[droneId] = session
-                            }
-                        }
+                        isSelected: trustStatus == .unknown,
+                        action: { trustStatus = .unknown }
                     )
                     
                     TrustButton(
                         title: "Untrusted",
                         icon: "xmark.shield.fill",
                         color: .red,
-                        isSelected: store.editingSessions[droneId]?.trust == .untrusted,
-                        action: {
-                            if var session = store.editingSessions[droneId] {
-                                session.trust = .untrusted
-                                store.editingSessions[droneId] = session
-                            }
-                        }
+                        isSelected: trustStatus == .untrusted,
+                        action: { trustStatus = .untrusted }
                     )
                 }
                 .padding(.bottom, 16)
@@ -112,26 +98,38 @@ private struct DroneInfoEditorSheet: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.hidden)
         .interactiveDismissDisabled(true)
-        .onAppear {
-            if store.editingSessions[droneId] == nil {
+        .task {
+            if let cached = await EditorCache.shared.get(droneId) {
+                customName = cached.0
+                trustStatus = cached.1
+            } else {
                 let encounter = DroneStorageManager.shared.encounters[droneId]
-                store.editingSessions[droneId] = EditorStateStore.EditingData(
-                    name: encounter?.customName ?? "",
-                    trust: encounter?.trustStatus ?? .unknown
-                )
+                customName = encounter?.customName ?? ""
+                trustStatus = encounter?.trustStatus ?? .unknown
+            }
+            isTextFieldFocused = true
+        }
+        .onChange(of: customName) { _, new in
+            Task {
+                await EditorCache.shared.set(droneId, name: new, trust: trustStatus)
+            }
+        }
+        .onChange(of: trustStatus) { _, new in
+            Task {
+                await EditorCache.shared.set(droneId, name: customName, trust: new)
             }
         }
     }
     
     private func saveChanges() {
-        if let session = store.editingSessions[droneId] {
-            DroneStorageManager.shared.updateDroneInfo(
-                id: droneId,
-                name: session.name,
-                trustStatus: session.trust
-            )
+        DroneStorageManager.shared.updateDroneInfo(
+            id: droneId,
+            name: customName,
+            trustStatus: trustStatus
+        )
+        Task {
+            await EditorCache.shared.clear(droneId)
         }
-        store.editingSessions.removeValue(forKey: droneId)
         isPresented = false
     }
 }
@@ -149,12 +147,9 @@ struct MessageRow: View, Equatable {
     @State private var editorDroneId: String = ""
     
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
-        lhs.message.uid == rhs.message.uid && lhs.isCompact == rhs.isCompact
+        lhs.message.uid == rhs.message.uid && 
+        lhs.isCompact == rhs.isCompact
     }
-    @State private var showingSaveConfirmation = false
-    @State private var showingInfoEditor = false
-    @State private var showingDeleteConfirmation = false
-    @State private var editorDroneId: String = "" // Store drone ID for editor separately
     
     init(message: CoTViewModel.CoTMessage, cotViewModel: CoTViewModel, isCompact: Bool = false) {
         self.message = message
@@ -162,7 +157,7 @@ struct MessageRow: View, Equatable {
         self.isCompact = isCompact
         _droneEncounter = State(initialValue: DroneStorageManager.shared.encounters[message.uid])
         _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
-        _editorDroneId = State(initialValue: message.uid) // Initialize with current ID
+        _editorDroneId = State(initialValue: message.uid)
     }
     
     enum SheetType: Identifiable {
