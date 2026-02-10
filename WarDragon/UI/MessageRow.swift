@@ -8,39 +8,69 @@
 import SwiftUI
 import MapKit
 
-private actor EditorCache {
-    static let shared = EditorCache()
-    private var sessions: [String: (String, DroneSignature.UserDefinedInfo.TrustStatus)] = [:]
+// MARK: - Drone Editor Manager
+
+@MainActor
+class DroneEditorManager: ObservableObject {
+    static let shared = DroneEditorManager()
     
-    func get(_ id: String) -> (String, DroneSignature.UserDefinedInfo.TrustStatus)? {
-        sessions[id]
+    @Published var isPresented: Bool = false
+    @Published var editingDroneId: String? = nil
+    @Published var customName: String = ""
+    @Published var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus = .unknown
+    
+    private init() {}
+    
+    func present(droneId: String) {
+        // Load current data from storage
+        let encounter = DroneStorageManager.shared.encounters[droneId]
+        
+        self.editingDroneId = droneId
+        self.customName = encounter?.customName ?? ""
+        self.trustStatus = encounter?.trustStatus ?? .unknown
+        self.isPresented = true
     }
     
-    func set(_ id: String, name: String, trust: DroneSignature.UserDefinedInfo.TrustStatus) {
-        sessions[id] = (name, trust)
+    func dismiss() {
+        isPresented = false
+        
+        // Clear state after a short delay to allow sheet animation to complete
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            await MainActor.run {
+                self.editingDroneId = nil
+                self.customName = ""
+                self.trustStatus = .unknown
+            }
+        }
     }
     
-    func clear(_ id: String) {
-        sessions.removeValue(forKey: id)
+    func saveChanges() {
+        guard let droneId = editingDroneId else { return }
+        
+        DroneStorageManager.shared.updateDroneInfo(
+            id: droneId,
+            name: customName,
+            trustStatus: trustStatus
+        )
+        
+        dismiss()
     }
 }
 
-private struct DroneInfoEditorSheet: View {
-    let droneId: String
-    @Binding var isPresented: Bool
-    @State private var customName: String = ""
-    @State private var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus = .unknown
-    @FocusState private var isTextFieldFocused: Bool
+// MARK: - Drone Info Editor Sheet
+
+struct DroneInfoEditorSheet: View {
+    @ObservedObject var manager: DroneEditorManager = .shared
     
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                TextField("Drone Name", text: $customName)
+                TextField("Drone Name", text: $manager.customName)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .font(.appDefault)
                     .padding(.bottom, 8)
                     .autocorrectionDisabled()
-                    .focused($isTextFieldFocused)
                 
                 Text("Trust Status")
                     .font(.appSubheadline)
@@ -51,29 +81,29 @@ private struct DroneInfoEditorSheet: View {
                         title: "Trusted",
                         icon: "checkmark.shield.fill",
                         color: .green,
-                        isSelected: trustStatus == .trusted,
-                        action: { trustStatus = .trusted }
+                        isSelected: manager.trustStatus == .trusted,
+                        action: { manager.trustStatus = .trusted }
                     )
                     
                     TrustButton(
                         title: "Unknown",
                         icon: "shield.fill",
                         color: .gray,
-                        isSelected: trustStatus == .unknown,
-                        action: { trustStatus = .unknown }
+                        isSelected: manager.trustStatus == .unknown,
+                        action: { manager.trustStatus = .unknown }
                     )
                     
                     TrustButton(
                         title: "Untrusted",
                         icon: "xmark.shield.fill",
                         color: .red,
-                        isSelected: trustStatus == .untrusted,
-                        action: { trustStatus = .untrusted }
+                        isSelected: manager.trustStatus == .untrusted,
+                        action: { manager.trustStatus = .untrusted }
                     )
                 }
                 .padding(.bottom, 16)
                 
-                Button(action: saveChanges) {
+                Button(action: manager.saveChanges) {
                     Text("Save")
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -90,7 +120,7 @@ private struct DroneInfoEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        isPresented = false
+                        manager.dismiss()
                     }
                 }
             }
@@ -98,39 +128,6 @@ private struct DroneInfoEditorSheet: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.hidden)
         .interactiveDismissDisabled(true)
-        .task {
-            if let cached = await EditorCache.shared.get(droneId) {
-                customName = cached.0
-                trustStatus = cached.1
-            } else {
-                let encounter = DroneStorageManager.shared.encounters[droneId]
-                customName = encounter?.customName ?? ""
-                trustStatus = encounter?.trustStatus ?? .unknown
-            }
-            isTextFieldFocused = true
-        }
-        .onChange(of: customName) { _, new in
-            Task {
-                await EditorCache.shared.set(droneId, name: new, trust: trustStatus)
-            }
-        }
-        .onChange(of: trustStatus) { _, new in
-            Task {
-                await EditorCache.shared.set(droneId, name: customName, trust: new)
-            }
-        }
-    }
-    
-    private func saveChanges() {
-        DroneStorageManager.shared.updateDroneInfo(
-            id: droneId,
-            name: customName,
-            trustStatus: trustStatus
-        )
-        Task {
-            await EditorCache.shared.clear(droneId)
-        }
-        isPresented = false
     }
 }
 
@@ -142,9 +139,13 @@ struct MessageRow: View, Equatable {
     @State private var droneSignature: DroneSignature?
     @State private var activeSheet: SheetType?
     @State private var showingSaveConfirmation = false
-    @State private var showingInfoEditor = false
     @State private var showingDeleteConfirmation = false
-    @State private var editorDroneId: String = ""
+    @ObservedObject private var editorManager: DroneEditorManager = .shared
+    
+    // Computed property to check if this row's drone is being edited
+    private var isEditingThisDrone: Bool {
+        editorManager.isPresented && editorManager.editingDroneId == message.uid
+    }
     
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
         lhs.message.uid == rhs.message.uid && 
@@ -157,7 +158,6 @@ struct MessageRow: View, Equatable {
         self.isCompact = isCompact
         _droneEncounter = State(initialValue: DroneStorageManager.shared.encounters[message.uid])
         _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
-        _editorDroneId = State(initialValue: message.uid)
     }
     
     enum SheetType: Identifiable {
@@ -192,6 +192,11 @@ struct MessageRow: View, Equatable {
 
     private var displayDetails: String {
         if message.isFPVDetection {
+            // Check for channel detection
+            if let freq = message.fpvFrequency,
+               let channel = FPVChannel.detectChannel(fromFrequency: String(freq)) {
+                return "\(channel.name) • \(freq) MHz • \(channel.band) Band"
+            }
             return message.fpvFrequencyFormatted
         }
         
@@ -393,19 +398,74 @@ struct MessageRow: View, Equatable {
             let trustStatus = currentEncounter?.trustStatus ?? .unknown
             
             VStack(alignment: .leading) {
+                // Show custom name if available
                 if !customName.isEmpty {
                     Text(customName)
                         .font(.system(.title3, design: .monospaced))
                         .foregroundColor(.primary)
                 }
                 
-                HStack {
-                    Text(message.id)
-                        .font(.system(.title3, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .onAppear {
-                            print("Displaying drone: ID=\(message.id), UID=\(message.uid)")
+                // FPV Detection with Channel Info
+                if message.isFPVDetection {
+                    if let freq = message.fpvFrequency,
+                       let channel = FPVChannel.detectChannel(fromFrequency: String(freq)) {
+                        HStack(spacing: 8) {
+                            Image(systemName: channel.icon)
+                                .foregroundStyle(channel.color)
+                                .font(.title3)
+                            VStack(alignment: .leading, spacing: 2) {
+                                // Only show channel name if no custom name
+                                if customName.isEmpty {
+                                    Text("FPV Channel \(channel.name)")
+                                        .font(.system(.title3, design: .monospaced))
+                                        .foregroundColor(.primary)
+                                } else {
+                                    Text("Channel \(channel.name)")
+                                        .font(.appCaption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text("\(freq) MHz • \(channel.band) Band")
+                                    .font(.appCaption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                    } else {
+                        // No channel detected - show FPV display name only if no custom name
+                        if customName.isEmpty {
+                            HStack {
+                                Text(message.fpvDisplayName)
+                                    .font(.system(.title3, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .onAppear {
+                                        print("Displaying FPV: ID=\(message.id), UID=\(message.uid)")
+                                    }
+                            }
+                        } else {
+                            // Show frequency as subtitle
+                            if let freq = message.fpvFrequency {
+                                Text("\(freq) MHz")
+                                    .font(.appCaption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                } else {
+                    // Regular drone - only show ID if no custom name
+                    if customName.isEmpty {
+                        HStack {
+                            Text(message.id)
+                                .font(.system(.title3, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .onAppear {
+                                    print("Displaying drone: ID=\(message.id), UID=\(message.uid)")
+                                }
+                        }
+                    } else {
+                        // Show ID as subtitle
+                        Text(message.id)
+                            .font(.appCaption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 if let caaReg = message.caaRegistration, !caaReg.isEmpty {
@@ -443,8 +503,7 @@ struct MessageRow: View, Equatable {
                 
                 Menu {
                     Button(action: { 
-                        editorDroneId = message.uid // Capture ID before opening
-                        showingInfoEditor = true 
+                        editorManager.present(droneId: message.uid)
                     }) {
                         Label("Edit Info", systemImage: "pencil")
                     }
@@ -890,9 +949,23 @@ struct MessageRow: View, Equatable {
     private func detailsView() -> some View {
         Group {
             if message.isFPVDetection {
-                // FPV specific details
+                // FPV specific details with channel detection
                 if let frequency = message.fpvFrequency {
-                    Text("Frequency: \(frequency) MHz")
+                    if let channel = FPVChannel.detectChannel(fromFrequency: String(frequency)) {
+                        HStack(spacing: 8) {
+                            Image(systemName: channel.icon)
+                                .foregroundStyle(channel.color)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Channel: \(channel.name) (\(channel.band) Band)")
+                                    .font(.appDefault)
+                                Text("Frequency: \(frequency) MHz")
+                                    .font(.appCaption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    } else {
+                        Text("Frequency: \(frequency) MHz")
+                    }
                 }
                 if let bandwidth = message.fpvBandwidth, !bandwidth.isEmpty {
                     Text("Bandwidth: \(bandwidth)")
@@ -1000,15 +1073,33 @@ struct MessageRow: View, Equatable {
                 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(message.id)
-                            .font(.system(.body, design: .monospaced))
-                            .fontWeight(.medium)
-                            .foregroundColor(.primary)
-                        
-                        if let customName = currentEncounter?.customName, !customName.isEmpty {
-                            Text("(\(customName))")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(.secondary)
+                        // Show FPV channel if detected
+                        if message.isFPVDetection,
+                           let freq = message.fpvFrequency,
+                           let channel = FPVChannel.detectChannel(fromFrequency: String(freq)) {
+                            HStack(spacing: 4) {
+                                Image(systemName: channel.icon)
+                                    .foregroundStyle(channel.color)
+                                    .font(.caption)
+                                Text("FPV \(channel.name)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                Text("(\(freq) MHz)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Text(message.id)
+                                .font(.system(.body, design: .monospaced))
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            
+                            if let customName = currentEncounter?.customName, !customName.isEmpty {
+                                Text("(\(customName))")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                     
@@ -1080,11 +1171,11 @@ struct MessageRow: View, Equatable {
         }
         .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
             // Don't update while user is editing info - prevents text field from clearing
-            guard !showingInfoEditor else { return }
+            guard !isEditingThisDrone else { return }
             updateEncounterData()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DroneInfoUpdated"))) { notification in
-            guard !showingInfoEditor else { return }
+            guard !isEditingThisDrone else { return }
             if let droneId = notification.userInfo?["droneId"] as? String,
                droneId == message.uid {
                 updateEncounterData()
@@ -1092,13 +1183,6 @@ struct MessageRow: View, Equatable {
         }
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
-        }
-        .sheet(isPresented: $showingInfoEditor, onDismiss: {
-            // Update the encounter data after the editor is dismissed
-            // This ensures the UI reflects any changes made in the editor
-            updateEncounterData()
-        }) {
-            DroneInfoEditorSheet(droneId: editorDroneId, isPresented: $showingInfoEditor)
         }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
@@ -1154,11 +1238,11 @@ struct MessageRow: View, Equatable {
             updateEncounterData()
         }
         .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
-            guard !showingInfoEditor else { return }
+            guard !isEditingThisDrone else { return }
             updateEncounterData()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DroneInfoUpdated"))) { notification in
-            guard !showingInfoEditor else { return }
+            guard !isEditingThisDrone else { return }
             if let droneId = notification.userInfo?["droneId"] as? String,
                droneId == message.uid {
                 updateEncounterData()
@@ -1173,13 +1257,6 @@ struct MessageRow: View, Equatable {
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
         }
-        .sheet(isPresented: $showingInfoEditor, onDismiss: {
-            // Update the encounter data after the editor is dismissed
-            // This ensures the UI reflects any changes made in the editor
-            updateEncounterData()
-        }) {
-            DroneInfoEditorSheet(droneId: editorDroneId, isPresented: $showingInfoEditor)
-        }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
         } message: {
@@ -1192,7 +1269,7 @@ struct MessageRow: View, Equatable {
     private func updateEncounterData() {
         // Don't update cached data while the editor sheet is open
         // This prevents the text fields from being cleared during editing
-        guard !showingInfoEditor else { return }
+        guard !isEditingThisDrone else { return }
         
         droneEncounter = DroneStorageManager.shared.encounters[message.uid]
         droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })

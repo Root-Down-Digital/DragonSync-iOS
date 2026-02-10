@@ -19,6 +19,7 @@ struct ContentView: View {
     @EnvironmentObject private var cotViewModel: CoTViewModel
     @StateObject private var droneStorage = DroneStorageManager.shared
     @StateObject private var settings = Settings.shared
+    @ObservedObject private var editorManager = DroneEditorManager.shared
     @State private var showAlert = false
     @State private var latestMessage: CoTViewModel.CoTMessage?
     @State private var selectedTab: Int
@@ -141,6 +142,9 @@ struct ContentView: View {
                     cotViewModel.prepareForBackgroundExpiry()
                 }
             }
+        }
+        .sheet(isPresented: $editorManager.isPresented) {
+            DroneInfoEditorSheet()
         }
     }
     

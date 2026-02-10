@@ -13,6 +13,7 @@ struct DronesStatusTab: View {
     @State private var sortBy: SortOption = .lastSeen
     @State private var showFilters = false
     @State private var filterOptions = FilterOptions()
+    @ObservedObject private var editorManager = DroneEditorManager.shared
     
     enum SortOption: String, CaseIterable {
         case lastSeen = "Last Seen"
@@ -128,6 +129,9 @@ struct DronesStatusTab: View {
         }
         .sheet(isPresented: $showFilters) {
             filterSheet
+        }
+        .sheet(isPresented: $editorManager.isPresented) {
+            DroneInfoEditorSheet()
         }
     }
     

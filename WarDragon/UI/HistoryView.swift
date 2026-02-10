@@ -24,6 +24,7 @@ struct StoredEncountersView: View {
     let cotViewModel: CoTViewModel
     @Environment(\.modelContext) private var modelContext
     @StateObject private var storage = SwiftDataStorageManager.shared
+    @ObservedObject private var editorManager = DroneEditorManager.shared
     
     // Cache for expensive computed values
     @State private var cachedEncounterStats: [String: EncounterStats] = [:]
@@ -276,6 +277,9 @@ struct StoredEncountersView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .sheet(isPresented: $editorManager.isPresented) {
+            DroneInfoEditorSheet()
+        }
     }
     
     struct EncounterRow: View {
@@ -364,10 +368,22 @@ struct StoredEncountersView: View {
                             .foregroundColor(.secondary)
                     } else {
                         if isFPVDetection {
-                            // For FPV, show frequency prominently
+                            // For FPV, show frequency prominently with channel detection
                             if let freq = fpvFrequency {
-                                Text("FPV \(freq) MHz")
-                                    .font(.appHeadline)
+                                HStack(spacing: 6) {
+                                    if let channel = FPVChannel.detectChannel(fromFrequency: freq) {
+                                        Image(systemName: channel.icon)
+                                            .foregroundStyle(channel.color)
+                                        Text("FPV \(channel.name)")
+                                            .font(.appHeadline)
+                                        Text("(\(freq) MHz)")
+                                            .font(.appCaption)
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Text("FPV \(freq) MHz")
+                                            .font(.appHeadline)
+                                    }
+                                }
                             } else {
                                 Text(encounter.id)
                                     .font(.appHeadline)
@@ -455,21 +471,39 @@ struct StoredEncountersView: View {
                 .frame(maxWidth: .infinity)
                 
                 VStack(spacing: 2) {
-                    Image(systemName: "waveform")
-                        .font(.appCaption)
-                        .foregroundStyle(.secondary)
-                    if let freq = fpvFrequency {
+                    // Show channel icon if detected
+                    if let freq = fpvFrequency,
+                       let channel = FPVChannel.detectChannel(fromFrequency: freq) {
+                        Image(systemName: channel.icon)
+                            .font(.appCaption)
+                            .foregroundStyle(channel.color)
+                        Text(channel.name)
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
+                        Text("\(freq) MHz")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    } else if let freq = fpvFrequency {
+                        Image(systemName: "waveform")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
                         Text(freq)
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
+                        Text("MHz")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     } else {
+                        Image(systemName: "waveform")
+                            .font(.appCaption)
+                            .foregroundStyle(.secondary)
                         Text("N/A")
                             .font(.appCaption)
                             .foregroundStyle(.secondary)
+                        Text("MHz")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
-                    Text("MHz")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 
@@ -566,7 +600,6 @@ struct StoredEncountersView: View {
         @Environment(\.dismiss) private var dismiss
         @Environment(\.modelContext) private var modelContext
         @State private var showingDeleteConfirmation = false
-        @State private var showingInfoEditor = false
         @State private var showFlightPath = true
         @State private var selectedMapType: MapStyle = .standard
         @State private var mapCameraPosition: MapCameraPosition = .automatic
@@ -577,6 +610,7 @@ struct StoredEncountersView: View {
         @State private var mapPositionSet = false
         @State private var isLoadingStarted = false
         @State private var isFPVDetection = false
+        @ObservedObject private var editorManager = DroneEditorManager.shared
         
         enum MapStyle {
             case standard, satellite, hybrid
@@ -646,11 +680,27 @@ struct StoredEncountersView: View {
                                         .foregroundColor(.primary)
                                 } else {
                                     if isFPVDetection {
-                                        // Extract frequency from ID or metadata
+                                        // Extract frequency from ID or metadata with channel detection
                                         if let freq = encounter.metadata["fpvFrequency"] ?? encounter.metadata["frequency"] {
-                                            Text("FPV \(freq) MHz")
-                                                .font(.system(.title2, design: .monospaced))
-                                                .foregroundColor(.primary)
+                                            HStack(spacing: 8) {
+                                                if let channel = FPVChannel.detectChannel(fromFrequency: freq) {
+                                                    Image(systemName: channel.icon)
+                                                        .foregroundStyle(channel.color)
+                                                        .font(.title2)
+                                                    VStack(alignment: .leading, spacing: 2) {
+                                                        Text("FPV Channel \(channel.name)")
+                                                            .font(.system(.title2, design: .monospaced))
+                                                            .foregroundColor(.primary)
+                                                        Text("\(freq) MHz • \(channel.band) Band")
+                                                            .font(.appCaption)
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                } else {
+                                                    Text("FPV \(freq) MHz")
+                                                        .font(.system(.title2, design: .monospaced))
+                                                        .foregroundColor(.primary)
+                                                }
+                                            }
                                         } else {
                                             Text("FPV Detection")
                                                 .font(.system(.title2, design: .monospaced))
@@ -678,7 +728,9 @@ struct StoredEncountersView: View {
                                     .foregroundColor(encounter.trustStatus.color)
                                     .font(.system(size: 24))
                                 
-                                Button(action: { showingInfoEditor = true }) {
+                                Button(action: { 
+                                    editorManager.present(droneId: encounter.id)
+                                }) {
                                     Image(systemName: "pencil.circle")
                                         .font(.system(size: 24))
                                         .foregroundColor(.blue)
@@ -721,21 +773,6 @@ struct StoredEncountersView: View {
                 .padding()
             }
             .navigationTitle("Encounter Details")
-            .sheet(isPresented: $showingInfoEditor) {
-                NavigationView {
-                    DroneInfoEditor(droneId: encounter.id)
-                        .navigationTitle("Edit Drone Info")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button("Done") {
-                                    showingInfoEditor = false
-                                }
-                            }
-                        }
-                }
-                .presentationDetents([.medium])
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
@@ -1565,7 +1602,9 @@ struct StoredEncountersView: View {
         
         
         private var flightDataSection: some View {
-            VStack(alignment: .leading, spacing: 8) {
+            let isFPVEncounter = encounter.id.hasPrefix("fpv-") || isFPVDetection
+            
+            return VStack(alignment: .leading, spacing: 8) {
                 Text("FLIGHT DATA")
                     .font(.appHeadline)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -1594,6 +1633,21 @@ struct StoredEncountersView: View {
                                     title: "RSSI", 
                                     data: signatures.lazy.map { $0.rssi }.filter { $0 != 0 }
                                 )
+                            }
+                            
+                            // For FPV encounters, show RSSI from proximity points
+                            if isFPVEncounter {
+                                let rssiData = flightPoints
+                                    .filter { $0.isProximityPoint && $0.proximityRssi != nil }
+                                    .compactMap { $0.proximityRssi }
+                                    .filter { $0 != 0 }
+                                
+                                if !rssiData.isEmpty {
+                                    FlightDataChart(
+                                        title: "RSSI",
+                                        data: rssiData
+                                    )
+                                }
                             }
                             
                             Spacer()
@@ -1667,8 +1721,15 @@ struct StoredEncountersView: View {
                         // Use fixed range for RSSI to show better differentiation
                         let (minValue, maxValue): (Double, Double) = {
                             if title == "RSSI" {
-                                // Fixed range for RSSI: -100 dBm (weak) to -30 dBm (strong)
-                                return (-100.0, -30.0)
+                                // Detect if this is FPV RSSI (raw ADC values ~1000-1600) vs dBm (-100 to -30)
+                                let isFPVRSSI = dataMin > 0 && dataMin > 100
+                                if isFPVRSSI {
+                                    // FPV hardware raw ADC values - use auto-scaling
+                                    return (dataMin * 0.95, dataMax * 1.05)
+                                } else {
+                                    // Traditional dBm values - fixed range for better comparison
+                                    return (-100.0, -30.0)
+                                }
                             } else {
                                 // Auto-scale for other metrics
                                 return (dataMin, dataMax)
