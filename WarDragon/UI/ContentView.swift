@@ -338,6 +338,7 @@ struct ContentView: View {
                                 cotViewModel: cotViewModel,
                                 isCompact: cotViewModel.parsedMessages.count >= 2 || hasAircraft
                             )
+                            .id(item.uid) // Preserve view identity to prevent sheet dismissal on updates
                         }
                     }
                 }
@@ -354,6 +355,12 @@ struct ContentView: View {
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
+        // Check if this is an FPV detection - FPV should never have flight paths
+        if let message = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
+           message.isFPVDetection {
+            return []
+        }
+        
         guard let encounter = DroneStorageManager.shared.encounters[uid] else {
             return []
         }
@@ -600,6 +607,7 @@ struct ContentView: View {
                                         cotViewModel: cotViewModel,
                                         isCompact: cotViewModel.parsedMessages.count >= 2
                                     )
+                                    .id(item.uid) // Preserve view identity to prevent sheet dismissal on updates
                                 }
                             }
                         }
@@ -931,6 +939,22 @@ private struct LiveMapPreview: View {
                     }
                 }
                 
+                // FPV Alert Rings
+                ForEach(cotViewModel.alertRings) { ring in
+                    if !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
+                        MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                            .foregroundStyle(.orange.opacity(0.1))
+                            .stroke(.orange, lineWidth: 2)
+                        
+                        Annotation("Monitor", coordinate: ring.centerCoordinate) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .foregroundColor(.orange)
+                                .font(.title2)
+                                .background(Circle().fill(.white).frame(width: 24, height: 24))
+                        }
+                    }
+                }
+                
                 // Drone markers
                 ForEach(cotViewModel.parsedMessages) { message in
                     if let coordinate = message.coordinate,
@@ -1008,6 +1032,12 @@ private struct LiveMapPreview: View {
     }
     
     private func getDroneFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
+        // Check if this is an FPV detection - FPV should never have flight paths
+        if let currentMessage = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
+           currentMessage.isFPVDetection {
+            return []
+        }
+        
         // Get flight path from DroneStorageManager
         guard let encounter = DroneStorageManager.shared.encounters[uid] else {
             return []
@@ -1080,11 +1110,16 @@ private struct LiveMapPreview: View {
         
         // Always add drone coordinates (excluding FPV and 0/0)
         allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
-            guard let coord = message.coordinate else { return nil }
-            
+            // For FPV detections, try to use alert ring center instead of drone coordinate
             if message.isFPVDetection {
+                if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }),
+                   !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
+                    return ring.centerCoordinate
+                }
                 return nil
             }
+            
+            guard let coord = message.coordinate else { return nil }
             
             if coord.latitude == 0 && coord.longitude == 0 {
                 return nil

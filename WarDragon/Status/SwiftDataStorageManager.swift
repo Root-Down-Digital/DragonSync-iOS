@@ -17,17 +17,11 @@ class SwiftDataStorageManager: ObservableObject {
     
     private let logger = Logger(subsystem: "com.wardragon", category: "Storage")
     var cotViewModel: CoTViewModel?
-    
-    @Published var encounters: [String: DroneEncounter] = [:]
-    
-    // Reference to model context (will be set from ContentView)
+    var encounters: [String: DroneEncounter] = [:]
     var modelContext: ModelContext?
-    
-    // Cache for MAC to ID lookups to avoid repeated database queries
     private var macToIdCache: [String: String] = [:]
     private var caaToIdCache: [String: String] = [:]
     
-    // Batch saving optimization
     private var needsSave = false
     private var saveTimer: Timer?
     private var cacheUpdateCounter = 0
@@ -731,13 +725,17 @@ class SwiftDataStorageManager: ObservableObject {
             return existing
         }
         
-        logger.info("Creating NEW encounter for ID: \(id)")
+        // Check if there's an in-memory encounter we should preserve data from
+        let existingCustomName = encounters[id]?.customName ?? ""
+        let existingTrustStatus = encounters[id]?.trustStatus ?? .unknown
+        
+        logger.info("Creating NEW encounter for ID: \(id), preserving customName: '\(existingCustomName)', trustStatus: \(existingTrustStatus.rawValue)")
         let new = StoredDroneEncounter(
             id: id,
             firstSeen: Date(),
             lastSeen: Date(),
-            customName: "",
-            trustStatusRaw: "unknown",
+            customName: existingCustomName,
+            trustStatusRaw: existingTrustStatus.rawValue,
             metadata: [:],
             macAddresses: []
         )
@@ -851,6 +849,12 @@ class SwiftDataStorageManager: ObservableObject {
         }
         
         self.encounters = convertedEncounters
+        
+        // Manually notify observers since encounters is not @Published
+        Task { @MainActor in
+            self.objectWillChange.send()
+            DroneStorageManager.shared.objectWillChange.send()
+        }
     }
     
     private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
@@ -859,6 +863,12 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         encounters[encounter.id] = encounter.toLegacyLightweight()
+        
+        // Manually notify observers since encounters is not @Published
+        Task { @MainActor in
+            self.objectWillChange.send()
+            DroneStorageManager.shared.objectWillChange.send()
+        }
     }
     
     private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter, sendChangeNotification: Bool = true) {
@@ -866,10 +876,15 @@ class SwiftDataStorageManager: ObservableObject {
             logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounterFast")
             return
         }
+        
+        // Always update the dictionary (no longer @Published, so no auto-notification)
         encounters[encounter.id] = encounter.toLegacyLightweight()
         
+        // Only manually notify observers when requested
         if sendChangeNotification {
             Task { @MainActor in
+                // Notify both storage managers
+                self.objectWillChange.send()
                 DroneStorageManager.shared.objectWillChange.send()
             }
         }

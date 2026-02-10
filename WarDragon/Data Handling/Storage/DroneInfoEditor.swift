@@ -13,13 +13,43 @@ struct DroneInfoEditor: View {
     @State private var customName: String
     @State private var trustStatus: DroneSignature.UserDefinedInfo.TrustStatus
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var droneStorage = DroneStorageManager.shared
+    @FocusState private var isTextFieldFocused: Bool
+    private let editorId = UUID()
     
     init(droneId: String) {
         self.droneId = droneId
-        let encounter = DroneStorageManager.shared.encounters[droneId]
-        _customName = State(initialValue: encounter?.customName ?? "")
-        _trustStatus = State(initialValue: encounter?.trustStatus ?? .unknown)
+        
+        var customName = ""
+        var trustStatus = DroneSignature.UserDefinedInfo.TrustStatus.unknown
+        
+        if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: droneId) {
+            customName = storedEncounter.customName
+            trustStatus = storedEncounter.trustStatus
+        } else {
+            let baseId = droneId.replacingOccurrences(of: "drone-", with: "")
+            let possibleIds = [
+                droneId,
+                "drone-\(droneId)",
+                baseId,
+                "drone-\(baseId)"
+            ]
+            
+            var encounter: DroneEncounter? = nil
+            for id in possibleIds {
+                if let found = DroneStorageManager.shared.encounters[id] {
+                    encounter = found
+                    break
+                }
+            }
+            
+            if let encounter = encounter {
+                customName = encounter.customName
+                trustStatus = encounter.trustStatus
+            }
+        }
+        
+        self._customName = State(initialValue: customName)
+        self._trustStatus = State(initialValue: trustStatus)
     }
     
     var body: some View {
@@ -28,6 +58,8 @@ struct DroneInfoEditor: View {
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .font(.appDefault)
                 .padding(.bottom, 8)
+                .focused($isTextFieldFocused)
+                .autocorrectionDisabled()
             
             Text("Trust Status")
                 .font(.appSubheadline)
@@ -72,10 +104,10 @@ struct DroneInfoEditor: View {
             Spacer()
         }
         .padding()
+        .id(editorId)
     }
     
     private func saveChanges() {
-        // Use the proper method in DroneStorageManager
         DroneStorageManager.shared.updateDroneInfo(
             id: droneId,
             name: customName,

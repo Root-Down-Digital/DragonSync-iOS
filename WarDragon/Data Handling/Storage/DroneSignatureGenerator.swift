@@ -24,10 +24,10 @@ public final class DroneSignatureGenerator {
         static let signalStrengthDelta: Double = 10.0
         static let messageIntervalDelta: Double = 0.5
         static let minRssiDelta = 15.0
-        static let minDistance = 10.0 // Minimum distance in meters
-        static let maxSpeedMps = 150.0 // Maximum realistic speed in m/s
+        static let minDistance = 10.0
+        static let maxSpeedMps = 150.0
         static let minPositionChange = 50.0
-        static let confidenceThreshold = 0.7 // Minimum confidence to report spoof
+        static let confidenceThreshold = 0.7
     }
     
     public struct DroneTrackingInfo {

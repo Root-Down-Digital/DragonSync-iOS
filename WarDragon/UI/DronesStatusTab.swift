@@ -68,13 +68,15 @@ struct DronesStatusTab: View {
                     // Active drones list - no redundant header, just the list
                     Section(header: sectionHeader) {
                         ForEach(filteredAndSortedDrones) { drone in
-                            DroneStatusRow(drone: drone, cotViewModel: cotViewModel)
+                            MessageRow(message: drone, cotViewModel: cotViewModel, isCompact: false)
+                                .id(drone.uid) // Preserve view identity to prevent sheet dismissal
                         }
                     }
                 }
                 .listStyle(.insetGrouped)
                 .refreshable {
-                    // Refresh is automatic via CoT updates
+                    // Just complete immediately - updates are automatic
+                    return
                 }
             }
         }
