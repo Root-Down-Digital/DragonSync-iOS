@@ -513,6 +513,7 @@ struct LiveMapView: View {
                         showFlightPaths.toggle()
                     } label: {
                         Label(showFlightPaths ? "Paths" : "Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -542,6 +543,7 @@ struct LiveMapView: View {
                         }
                     } label: {
                         Label("Map", systemImage: "map")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -553,6 +555,7 @@ struct LiveMapView: View {
                     // Fit to View button
                     Button(action: resetMapView) {
                         Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)

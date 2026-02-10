@@ -128,7 +128,7 @@ struct DroneDetailView: View {
             
             // Throttle updates - only update if hash changed and at least 2 seconds have passed
             let now = Date()
-            if newHash != alertRingHash && now.timeIntervalSince(lastAlertRingUpdateTime) > 2.0 {
+            if newHash != alertRingHash && now.timeIntervalSince(lastAlertRingUpdateTime) > 5.0 {
                 alertRingHash = newHash
                 lastAlertRingUpdateTime = now
                 cachedAlertRings = newRings
@@ -186,6 +186,7 @@ struct DroneDetailView: View {
                     }
                 } label: {
                     Image(systemName: "map")
+                        .foregroundStyle(.white)
                         .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -199,6 +200,7 @@ struct DroneDetailView: View {
                         updateMapRegion()
                     } label: {
                         Text(showAllLocations ? "Drone Only" : "Show All")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -210,6 +212,7 @@ struct DroneDetailView: View {
                         showFlightPath.toggle()
                     } label: {
                         Label(showFlightPath ? "Hide Path" : "Show Path", systemImage: showFlightPath ? "eye.slash" : "eye")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
@@ -232,7 +235,7 @@ struct DroneDetailView: View {
                                     .fill(.orange)
                                     .frame(width: 34, height: 34)
                                 Image(systemName: "dot.radiowaves.left.and.right")
-                                    .foregroundColor(.white)
+                                    .foregroundStyle(.white)
                                     .font(.title2)
                             }
                         }

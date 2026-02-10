@@ -105,6 +105,7 @@ struct AircraftListView: View {
                 } label: {
                     Label("Sort", systemImage: sortIcon)
                         .labelStyle(.iconOnly)
+                        .foregroundStyle(.white)
                 }
                 .help("Sort aircraft")
                 
@@ -510,6 +511,7 @@ private struct UnifiedAircraftMapView: View {
                         showFlightPaths.toggle()
                     } label: {
                         Label(showFlightPaths ? "Paths" : "Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -539,6 +541,7 @@ private struct UnifiedAircraftMapView: View {
                         }
                     } label: {
                         Label("Map", systemImage: "map")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -550,6 +553,7 @@ private struct UnifiedAircraftMapView: View {
                     // Fit to View button
                     Button(action: resetMapView) {
                         Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)

@@ -111,6 +111,7 @@ struct MapView: View {
                 }
             } label: {
                 Image(systemName: "map")
+                    .foregroundStyle(.white)
                     .font(.caption)
                     .padding(8)
                     .background(.ultraThinMaterial)

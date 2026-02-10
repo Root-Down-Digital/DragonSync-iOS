@@ -672,11 +672,11 @@ struct StoredEncountersView: View {
                                         let remoteId = encounter.id.replacingOccurrences(of: "drone-", with: "")
                                         FAALookupButton(mac: mac, remoteId: remoteId)
                                     }
-                                    
-                                    Image(systemName: encounter.trustStatus.icon)
-                                        .foregroundColor(encounter.trustStatus.color)
-                                        .font(.system(size: 24))
                                 }
+                                
+                                Image(systemName: encounter.trustStatus.icon)
+                                    .foregroundColor(encounter.trustStatus.color)
+                                    .font(.system(size: 24))
                                 
                                 Button(action: { showingInfoEditor = true }) {
                                     Image(systemName: "pencil.circle")
@@ -763,6 +763,7 @@ struct StoredEncountersView: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(.white)
                     }
                 }
             }
