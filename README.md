@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> **TestFlight beta has expired**.
+> **Public TestFlight has expired**. 
 
 <div align="center">
   
@@ -40,20 +40,19 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 **Encrypted Drones (DJI Ocusync)**
 - RSSI-based distance estimation
-- MAC address tracking
-- Signal strength analysis
+- Reads unencrypted elements of RID
 
 **FPV Video Transmitters**
 - 5.8GHz analog video detection
 - RX5808 receiver integration
 - Channel and frequency identification
-- Signal strength monitoring
+- Signal strength ring map markers
 
 **Threats and Anomalies**
 - Spoof detection via signal analysis
 - Position consistency validation
 - Flight physics anomaly detection
-- MAC randomization attack detection
+- MAC randomization detection
 
 </td>
 <td width="40%" valign="top">
@@ -72,7 +71,7 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 **Features**
 - **Live Map View** - All detections on unified map with color-coded markers
-- **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer
+- **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer & more
 - **FAA Registry Lookup** - Real-time drone registration data with operator info
 - **History & Analysis** - Search, filter, export encounters (KML, CSV). Data is stored securely in iOS Keychain (TAK) and the app uses SwiftData. 
 - **System Monitoring** - CPU, memory, temperature, GPS, ANTSDR sensors
@@ -123,8 +122,7 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ### Reference 
 
-- A database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md)
-- Data flow and system information is [here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/DATA_FLOW_DIAGRAM.md)
+- Although performed automatically, a database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md) for users coming from earlier versions. 
 ---
 
 
@@ -134,19 +132,21 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 | Setup | Time | WiFi RID | BT RID | SDR | FPV | Best For |
 |-------|------|----------|--------|-----|-----|----------|
-| **WarDragon Pro** | 5 min | ✓ | ✓ | ✓ | ✓ | Full-spectrum deployment |
+| **WarDragon Pro** | 5 min | ✓ | ✓ | ✓ | ✗ | Full-spectrum deployment |
 | **Drag0net ESP32** | 15 min | ✓ 2.4GHz | ✗ | ✗ | ✗ | Portable WiFi RID only |
 | **Custom Build** | 60 min | ✓ | ✓ | ✓ | ✓ | DIY / maximum control |
 
 ---
 
+> [!NOTE]
+> Keeping up with all the changes to the backend data wrappers is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes. The stock DroneID parser is fine when not using FPV. Either use the fork, or multicast and additional python [DragonSync](https://github.com/alphafox02/DragonSync) wrapper for FPV. 
+
+- Be sure to `git pull` in both DroneID and DragonSync directories. 
+- Use the troubleshooting guide to fix common issues. 
+
 ## Option 1: WarDragon Pro
 
-Pre-configured system with ANTSDR E200, RX5808, GPS hardware. 
-
-Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes, but should be working with the latest version on the WarDragon. Be sure to `git pull` in both DroneID and DragonSync directories. 
-
-The hardware may also have other issues working with the app if commands are not used as referenced below. Use the troubleshooting guide to fix common issues. 
+Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
 
 **Quick Start:**
