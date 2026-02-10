@@ -377,6 +377,8 @@ Open `WarDragon.xcworkspace` in Xcode 15+.
 
 ## Credits & License
 
+This app is not affiliated with DragonOS or cemaxecutor in any official context. I wanted a simple way to interact with the drone capabilities, so I made this free and open source app. 
+
 **Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
 
 **Third-party frameworks used:** 
