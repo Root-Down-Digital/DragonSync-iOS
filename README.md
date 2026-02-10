@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> **TestFlight beta has expired**.
+> **Public TestFlight has expired**. 
 
 <div align="center">
   
@@ -11,9 +11,9 @@
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
-**Professional drone and aircraft detection for iOS/macOS** Built for WarDragon Pro. 
+**Professional drone and aircraft detection for iOS/macOS** _Use WiFi, BT, ADS-B & SDR for total airspace awareness_
 
-Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone monitoring • Advanced spoof detection
+**Remote/Drone ID • ADS-B tracking • FPV detection • Encrypted drone capable • Spoofing & Randomization detection**
 
 [Get Started](#installation) • [What It Detects](#what-it-detects) • [Screenshots](#in-action) • [Integrations](#integrations)
 
@@ -37,30 +37,30 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 - 1090MHz Mode S transponders
 - Real-time aircraft tracking
 - Flight number, altitude, speed
+- Supply your own or use OpenSky
 
 **Encrypted Drones (DJI Ocusync)**
 - RSSI-based distance estimation
-- MAC address tracking
-- Signal strength analysis
+- Reads unencrypted elements of RID
 
 **FPV Video Transmitters**
 - 5.8GHz analog video detection
 - RX5808 receiver integration
 - Channel and frequency identification
-- Signal strength monitoring
+- Signal strength ring map markers
 
 **Threats and Anomalies**
 - Spoof detection via signal analysis
 - Position consistency validation
 - Flight physics anomaly detection
-- MAC randomization attack detection
+- MAC randomization detection
 
 </td>
 <td width="40%" valign="top">
 
 ![Detection interface](https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b)
 ![Signal analysis](https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635)
-![Tracking display](https://github.com/user-attachments/assets/5c4a860a-ae6b-432a-b01d-88f824960e42)
+
 
 </td>
 </tr>
@@ -72,7 +72,7 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 **Features**
 - **Live Map View** - All detections on unified map with color-coded markers
-- **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer
+- **Detection Details** - Full telemetry: position, altitude, speed, heading, manufacturer & more
 - **FAA Registry Lookup** - Real-time drone registration data with operator info
 - **History & Analysis** - Search, filter, export encounters (KML, CSV). Data is stored securely in iOS Keychain (TAK) and the app uses SwiftData. 
 - **System Monitoring** - CPU, memory, temperature, GPS, ANTSDR sensors
@@ -82,14 +82,10 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 <tr>
 <td width="50%">
   <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
-  
-  ![EE346AF2-82AB-43D6-9B86-1ED5C446B5A9_1_201_a](https://github.com/user-attachments/assets/dfa41a2e-d594-4db8-ad9f-3629e1b1644d)
 
 </td>
 <td width="50%">
    <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
-  
-  ![CD8FDEBA-3CE5-4318-85B7-FD093C158720_1_201_a](https://github.com/user-attachments/assets/f2d423f6-8a85-4baa-9c0e-8e5ebf66aea9)
 </td>
 </tr>
 <tr>
@@ -123,8 +119,7 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ### Reference 
 
-- A database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md)
-- Data flow and system information is [here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/DATA_FLOW_DIAGRAM.md)
+- Although performed automatically, a database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md) for users coming from earlier versions. 
 ---
 
 
@@ -140,13 +135,15 @@ Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone mon
 
 ---
 
+> [!NOTE]
+> Keeping up with all the changes to the backend data wrappers is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes. The stock DroneID parser is fine when not using FPV. Either use the fork, or multicast and additional python [DragonSync](https://github.com/alphafox02/DragonSync) wrapper for FPV. 
+
+- Be sure to `git pull` in both DroneID and DragonSync directories. 
+- Use the troubleshooting guide to fix common issues. 
+
 ## Option 1: WarDragon Pro
 
-Pre-configured system with ANTSDR E200, RX5808, GPS hardware. 
-
-Keeping up with all the changes to the hardware is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes, but should be working with the latest version on the WarDragon. Be sure to `git pull` in both DroneID and DragonSync directories. 
-
-The hardware may also have other issues working with the app if commands are not used as referenced below. Use the troubleshooting guide to fix common issues. 
+Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
 
 **Quick Start:**
@@ -256,11 +253,15 @@ python3 python_cli/sniff_receiver.py -l -e -a -z -b 2000000
 
 # Terminal 3 - Decoder (aggregates all sources)
 cd DroneID
-python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v
+python3 zmq_decoder.py -z --dji 127.0.0.1:4221 --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223,127.0.0.1:4226 -v
 
 # Terminal 4 - System Health Monitor
 cd DragonSync
 python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
+
+# Terminal 5 - (Optional) FPV Detections
+cd DroneID
+fpv_mdn_receiver.py --serial /dev/ttyFPV --baud 115200 --zmq-port 4226 --stationary --debug
 ```
 
 **iOS App Configuration:**
@@ -376,6 +377,8 @@ Open `WarDragon.xcworkspace` in Xcode 15+.
 ---
 
 ## Credits & License
+
+This app is not affiliated with DragonOS or cemaxecutor in any official context. I wanted a simple way to interact with the drone capabilities, and easily integrate my ANTSDR. cemaxecuter was instrumental to the development of this project- All credit really should go to him.
 
 **Built on:** [DroneID](https://github.com/alphafox02/DroneID) • [DragonSync](https://github.com/alphafox02/DragonSync) • [Sniffle](https://github.com/nccgroup/Sniffle)
 
