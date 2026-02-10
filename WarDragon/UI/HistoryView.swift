@@ -1611,48 +1611,47 @@ struct StoredEncountersView: View {
                 
                 // Only show charts if we have data cached
                 if encounter.cachedFlightPointCount > 0 || encounter.cachedSignatureCount > 0 {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 20) {
-                            Spacer()
+                    HStack(spacing: 20) {
+                        // Only show altitude chart if we have flight points
+                        if encounter.cachedFlightPointCount > 0 {
+                            FlightDataChart(
+                                title: "Altitude", 
+                                data: flightPoints.lazy.map { $0.altitude }.filter { $0 != 0 }
+                            )
+                        }
+                        
+                        // Only show speed/RSSI if we have signatures
+                        if encounter.cachedSignatureCount > 0 {
+                            FlightDataChart(
+                                title: "Speed", 
+                                data: signatures.lazy.map { $0.speed }.filter { $0 != 0 }
+                            )
                             
-                            // Only show altitude chart if we have flight points
-                            if encounter.cachedFlightPointCount > 0 {
-                                FlightDataChart(
-                                    title: "Altitude", 
-                                    data: flightPoints.lazy.map { $0.altitude }.filter { $0 != 0 }
-                                )
-                            }
-                            
-                            // Only show speed/RSSI if we have signatures
-                            if encounter.cachedSignatureCount > 0 {
-                                FlightDataChart(
-                                    title: "Speed", 
-                                    data: signatures.lazy.map { $0.speed }.filter { $0 != 0 }
-                                )
+                            // Don't show RID RSSI for FPV encounters
+                            if !isFPVEncounter {
                                 FlightDataChart(
                                     title: "RSSI", 
                                     data: signatures.lazy.map { $0.rssi }.filter { $0 != 0 }
                                 )
                             }
+                        }
+                        
+                        // For FPV encounters, show RSSI from proximity points
+                        if isFPVEncounter {
+                            let rssiData = flightPoints
+                                .filter { $0.isProximityPoint && $0.proximityRssi != nil }
+                                .compactMap { $0.proximityRssi }
+                                .filter { $0 != 0 }
                             
-                            // For FPV encounters, show RSSI from proximity points
-                            if isFPVEncounter {
-                                let rssiData = flightPoints
-                                    .filter { $0.isProximityPoint && $0.proximityRssi != nil }
-                                    .compactMap { $0.proximityRssi }
-                                    .filter { $0 != 0 }
-                                
-                                if !rssiData.isEmpty {
-                                    FlightDataChart(
-                                        title: "RSSI",
-                                        data: rssiData
-                                    )
-                                }
+                            if !rssiData.isEmpty {
+                                FlightDataChart(
+                                    title: "RSSI",
+                                    data: rssiData
+                                )
                             }
-                            
-                            Spacer()
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 } else {
                     Text("No flight data available for charts")
                         .font(.appCaption)
