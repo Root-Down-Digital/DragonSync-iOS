@@ -303,14 +303,14 @@ class DroneMessageGenerator:
             {
                 "FPV Detection": {
                     "timestamp": timestamp,
-                    "manufacturer": source_inst,  # Instance ID from hardware
-                    "device_type": f"FPV{frequency}MHz",  # e.g., "FPV5621MHz"
-                    "frequency": frequency,  # Raw frequency in MHz
-                    "bandwidth": bandwidth,
-                    "signal_strength": rssi,  # Raw RSSI value (1200-1400 range)
-                    "detection_source": detection_source,  # e.g., "01-97e8"
-                    "status": "NEW CONTACT LOCK",
-                    "estimated_distance": distance  # Distance in meters based on RSSI
+                    "manufacturer": source_inst,  # "01" from actual logs
+                    "device_type": f"FPV{frequency}MHz",  # "FPV5621.0MHz" from actual logs
+                    "frequency": frequency,  # 5621 from actual logs
+                    "bandwidth": bandwidth,  # Empty string from actual logs
+                    "signal_strength": rssi,  # 1328.64-1332.6 from actual logs
+                    "detection_source": detection_source,  # "01-97e8" from actual logs
+                    "status": "LOCK UPDATE",  # Actual status from logs
+                    "estimated_distance": distance  # ~1e-50 from actual logs
                 }
             }
         ]

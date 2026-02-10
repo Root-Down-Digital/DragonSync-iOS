@@ -12,12 +12,14 @@ import CoreLocation
 struct DroneDetailView: View {
     let message: CoTViewModel.CoTMessage
     let flightPath: [CLLocationCoordinate2D]
-    @ObservedObject var cotViewModel: CoTViewModel
+    var cotViewModel: CoTViewModel
     @State private var mapCameraPosition: MapCameraPosition
     @State private var showAllLocations = true
     @State private var showFlightPath = true
     @State private var selectedMapStyle: MapStyleOption = .standard
     @State private var cachedAlertRings: [CoTViewModel.AlertRing] = []
+    @State private var lastAlertRingUpdateTime: Date = .distantPast
+    @State private var alertRingHash: Int = 0
     
     enum MapStyleOption {
         case standard
@@ -39,11 +41,23 @@ struct DroneDetailView: View {
         self.cotViewModel = cotViewModel
         
         // Cache alert rings to prevent map flashing
-        _cachedAlertRings = State(initialValue: cotViewModel.alertRings.filter { $0.droneId == message.uid })
+        let initialRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+        _cachedAlertRings = State(initialValue: initialRings)
+        
+        // Calculate initial hash
+        var hasher = Hasher()
+        for ring in initialRings {
+            hasher.combine(ring.droneId)
+            hasher.combine(ring.centerCoordinate.latitude)
+            hasher.combine(ring.centerCoordinate.longitude)
+            hasher.combine(ring.radius)
+            hasher.combine(ring.rssi)
+        }
+        _alertRingHash = State(initialValue: hasher.finalize())
         
         if message.isFPVDetection {
             // For FPV, try to center on alert ring
-            if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
+            if let ring = initialRings.first {
                 let span = MKCoordinateSpan(
                     latitudeDelta: max(ring.radius / 55000, 0.01),
                     longitudeDelta: max(ring.radius / 55000, 0.01)
@@ -104,6 +118,44 @@ struct DroneDetailView: View {
         }
         .navigationTitle(message.uid)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            updateAlertRingCache()
+        }
+        .onReceive(cotViewModel.objectWillChange) { _ in
+            // Only update if alert rings for this drone actually changed
+            let newRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+            let newHash = calculateAlertRingHash(newRings)
+            
+            // Throttle updates - only update if hash changed and at least 2 seconds have passed
+            let now = Date()
+            if newHash != alertRingHash && now.timeIntervalSince(lastAlertRingUpdateTime) > 2.0 {
+                alertRingHash = newHash
+                lastAlertRingUpdateTime = now
+                cachedAlertRings = newRings
+                print("Updated alert ring cache for \(message.uid): \(cachedAlertRings.count) rings")
+            }
+        }
+    }
+    
+    // Helper to calculate a hash for alert rings to detect actual changes
+    private func calculateAlertRingHash(_ rings: [CoTViewModel.AlertRing]) -> Int {
+        var hasher = Hasher()
+        for ring in rings {
+            hasher.combine(ring.droneId)
+            hasher.combine(ring.centerCoordinate.latitude)
+            hasher.combine(ring.centerCoordinate.longitude)
+            hasher.combine(ring.radius)
+            hasher.combine(ring.rssi)
+        }
+        return hasher.finalize()
+    }
+    
+    private func updateAlertRingCache() {
+        let newRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+        cachedAlertRings = newRings
+        alertRingHash = calculateAlertRingHash(newRings)
+        lastAlertRingUpdateTime = Date()
+        print("Initial alert ring cache for \(message.uid): \(cachedAlertRings.count) rings")
     }
     
     private var mapSection: some View {

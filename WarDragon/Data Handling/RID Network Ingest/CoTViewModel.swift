@@ -1379,17 +1379,93 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         }
                         // Handle AUX_ADV_IND from BT/WiFi array
                         else if messageObj["AUX_ADV_IND"] != nil {
-                            let fpvMessage = createAuxAdvIndMessage(messageObj)
+                            guard let fpvMessage = createAuxAdvIndMessage(messageObj) else { return }
                             Task { @MainActor in
-                                await self.updateFPVMessage(fpvMessage)
+                                // Check if this is an update message (no frequency)
+                                if fpvMessage.uid.hasPrefix("fpv-UPDATE-") {
+                                    // Extract source from UID
+                                    let source = fpvMessage.fpvSource ?? ""
+                                    
+                                    // Find existing FPV detection with this source
+                                    if let index = self.parsedMessages.firstIndex(where: { 
+                                        $0.isFPVDetection && $0.fpvSource == source 
+                                    }) {
+                                        var existing = self.parsedMessages[index]
+                                        existing.fpvRSSI = fpvMessage.fpvRSSI
+                                        existing.rssi = fpvMessage.rssi
+                                        existing.fpvTimestamp = fpvMessage.fpvTimestamp
+                                        existing.lastUpdated = Date()
+                                        existing.aa = fpvMessage.aa
+                                        existing.adv_mac = fpvMessage.adv_mac
+                                        
+                                        if let newSource = fpvMessage.signalSources.first {
+                                            existing.signalSources = [newSource]
+                                        }
+                                        
+                                        self.parsedMessages[index] = existing
+                                        self.updateAlertRing(for: existing)
+                                        
+                                        if Settings.shared.webhooksEnabled {
+                                            self.sendFPVWebhookNotification(for: existing)
+                                        }
+                                        
+                                        print("DEBUG: Updated existing FPV detection \(existing.uid) with new RSSI: \(fpvMessage.fpvRSSI ?? 0)")
+                                    } else {
+                                        print("DEBUG: No existing FPV detection found for update (source: \(source))")
+                                    }
+                                } else {
+                                    // Regular FPV message with frequency
+                                    await self.updateMessage(fpvMessage)
+                                    if Settings.shared.webhooksEnabled {
+                                        self.sendFPVWebhookNotification(for: fpvMessage)
+                                    }
+                                }
                             }
                         }
                         // Handle direct frequency field (from ZMQ decoded messages)
                         else if messageObj["frequency"] != nil &&
                                (messageObj["rssi"] != nil || messageObj["AUX_ADV_IND"] != nil) {
-                            let fpvMessage = createAuxAdvIndMessage(messageObj)
+                            guard let fpvMessage = createAuxAdvIndMessage(messageObj) else { return }
                             Task { @MainActor in
-                                await self.updateFPVMessage(fpvMessage)
+                                // Check if this is an update message (no frequency)
+                                if fpvMessage.uid.hasPrefix("fpv-UPDATE-") {
+                                    // Extract source from UID
+                                    let source = fpvMessage.fpvSource ?? ""
+                                    
+                                    // Find existing FPV detection with this source
+                                    if let index = self.parsedMessages.firstIndex(where: { 
+                                        $0.isFPVDetection && $0.fpvSource == source 
+                                    }) {
+                                        var existing = self.parsedMessages[index]
+                                        existing.fpvRSSI = fpvMessage.fpvRSSI
+                                        existing.rssi = fpvMessage.rssi
+                                        existing.fpvTimestamp = fpvMessage.fpvTimestamp
+                                        existing.lastUpdated = Date()
+                                        existing.aa = fpvMessage.aa
+                                        existing.adv_mac = fpvMessage.adv_mac
+                                        
+                                        if let newSource = fpvMessage.signalSources.first {
+                                            existing.signalSources = [newSource]
+                                        }
+                                        
+                                        self.parsedMessages[index] = existing
+                                        self.updateAlertRing(for: existing)
+                                        
+                                        if Settings.shared.webhooksEnabled {
+                                            self.sendFPVWebhookNotification(for: existing)
+                                        }
+                                        
+                                        print("DEBUG: Updated existing FPV detection \(existing.uid) with new RSSI: \(fpvMessage.fpvRSSI ?? 0)")
+                                    } else {
+                                        print("DEBUG: No existing FPV detection found for update (source: \(source))")
+                                    }
+                                } else {
+                                    // Regular FPV message with frequency
+                                    await self.updateMessage(fpvMessage)
+                                    if Settings.shared.webhooksEnabled {
+                                        self.sendFPVWebhookNotification(for: fpvMessage)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1411,9 +1487,47 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
                 // Handle AUX_ADV_IND update message (from BT/WiFi)
                 else if jsonObject["AUX_ADV_IND"] != nil {
-                    let fpvMessage = createAuxAdvIndMessage(jsonObject)
+                    guard let fpvMessage = createAuxAdvIndMessage(jsonObject) else { return }
                     Task { @MainActor in
-                        await self.updateFPVMessage(fpvMessage)
+                        // Check if this is an update message (no frequency)
+                        if fpvMessage.uid.hasPrefix("fpv-UPDATE-") {
+                            // Extract source from UID
+                            let source = fpvMessage.fpvSource ?? ""
+                            
+                            // Find existing FPV detection with this source
+                            if let index = self.parsedMessages.firstIndex(where: { 
+                                $0.isFPVDetection && $0.fpvSource == source 
+                            }) {
+                                var existing = self.parsedMessages[index]
+                                existing.fpvRSSI = fpvMessage.fpvRSSI
+                                existing.rssi = fpvMessage.rssi
+                                existing.fpvTimestamp = fpvMessage.fpvTimestamp
+                                existing.lastUpdated = Date()
+                                existing.aa = fpvMessage.aa
+                                existing.adv_mac = fpvMessage.adv_mac
+                                
+                                if let newSource = fpvMessage.signalSources.first {
+                                    existing.signalSources = [newSource]
+                                }
+                                
+                                self.parsedMessages[index] = existing
+                                self.updateAlertRing(for: existing)
+                                
+                                if Settings.shared.webhooksEnabled {
+                                    self.sendFPVWebhookNotification(for: existing)
+                                }
+                                
+                                print("DEBUG: Updated existing FPV detection \(existing.uid) with new RSSI: \(fpvMessage.fpvRSSI ?? 0)")
+                            } else {
+                                print("DEBUG: No existing FPV detection found for update (source: \(source))")
+                            }
+                        } else {
+                            // Regular FPV message with frequency
+                            await self.updateMessage(fpvMessage)
+                            if Settings.shared.webhooksEnabled {
+                                self.sendFPVWebhookNotification(for: fpvMessage)
+                            }
+                        }
                     }
                 }
                 // Handle direct frequency-based messages (from ZMQ decoded BT/WiFi)
@@ -1421,9 +1535,47 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                        (jsonObject["rssi"] != nil ||
                         jsonObject["signal_strength"] != nil ||
                         jsonObject["AUX_ADV_IND"] != nil) {
-                    let fpvMessage = createAuxAdvIndMessage(jsonObject)
+                    guard let fpvMessage = createAuxAdvIndMessage(jsonObject) else { return }
                     Task { @MainActor in
-                        await self.updateFPVMessage(fpvMessage)
+                        // Check if this is an update message (no frequency)
+                        if fpvMessage.uid.hasPrefix("fpv-UPDATE-") {
+                            // Extract source from UID
+                            let source = fpvMessage.fpvSource ?? ""
+                            
+                            // Find existing FPV detection with this source
+                            if let index = self.parsedMessages.firstIndex(where: { 
+                                $0.isFPVDetection && $0.fpvSource == source 
+                            }) {
+                                var existing = self.parsedMessages[index]
+                                existing.fpvRSSI = fpvMessage.fpvRSSI
+                                existing.rssi = fpvMessage.rssi
+                                existing.fpvTimestamp = fpvMessage.fpvTimestamp
+                                existing.lastUpdated = Date()
+                                existing.aa = fpvMessage.aa
+                                existing.adv_mac = fpvMessage.adv_mac
+                                
+                                if let newSource = fpvMessage.signalSources.first {
+                                    existing.signalSources = [newSource]
+                                }
+                                
+                                self.parsedMessages[index] = existing
+                                self.updateAlertRing(for: existing)
+                                
+                                if Settings.shared.webhooksEnabled {
+                                    self.sendFPVWebhookNotification(for: existing)
+                                }
+                                
+                                print("DEBUG: Updated existing FPV detection \(existing.uid) with new RSSI: \(fpvMessage.fpvRSSI ?? 0)")
+                            } else {
+                                print("DEBUG: No existing FPV detection found for update (source: \(source))")
+                            }
+                        } else {
+                            // Regular FPV message with frequency
+                            await self.updateMessage(fpvMessage)
+                            if Settings.shared.webhooksEnabled {
+                                self.sendFPVWebhookNotification(for: fpvMessage)
+                            }
+                        }
                     }
                 }
             }
@@ -1556,20 +1708,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         return message
     }
 
-    private func createAuxAdvIndMessage(_ jsonObject: [String: Any]) -> CoTMessage {
+    private func createAuxAdvIndMessage(_ jsonObject: [String: Any]) -> CoTMessage? {
         guard let auxAdvInd = jsonObject["AUX_ADV_IND"] as? [String: Any],
               let aext = jsonObject["aext"] as? [String: Any] else {
-            // Return a default message if parsing fails
-            return CoTMessage(
-                uid: "fpv-unknown",
-                type: "a-f-A-M-F-R",
-                lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
-                speed: "0.0", vspeed: "0.0", alt: "0.0",
-                pilotLat: "0.0", pilotLon: "0.0",
-                description: "Invalid FPV Update",
-                selfIDText: "", uaType: .helicopter, idType: "FPV Update",
-                rawMessage: jsonObject
-            )
+            print("DEBUG: Invalid AUX_ADV_IND format")
+            return nil
         }
         
         let rssi = auxAdvInd["rssi"] as? Double ?? 0.0
@@ -1591,6 +1734,35 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let frequencyMHz = Int(frequencyHz / 1_000_000)
         
         let detectionSource = advA
+        
+        // BUGFIX: If frequency is missing (0), this is an UPDATE message
+        // Return a special marker object with just the update fields
+        // The caller will handle finding and updating the existing detection
+        if frequencyMHz == 0 {
+            print("DEBUG: AUX_ADV_IND update (no frequency) for \(detectionSource)")
+            // Create a minimal message with update-only fields
+            var updateMessage = CoTMessage(
+                uid: "fpv-UPDATE-\(detectionSource)", // Special marker UID
+                type: "a-f-A-M-F-R",
+                lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+                speed: "0.0", vspeed: "0.0", alt: "0.0",
+                pilotLat: "0.0", pilotLon: "0.0",
+                description: "FPV Update",
+                selfIDText: "",
+                uaType: .helicopter,
+                idType: "FPV Update",
+                rawMessage: jsonObject
+            )
+            updateMessage.fpvSource = detectionSource
+            updateMessage.fpvRSSI = rssi
+            updateMessage.rssi = Int(rssi)
+            updateMessage.fpvTimestamp = timestamp
+            updateMessage.aa = aa
+            updateMessage.adv_mac = advA
+            
+            return updateMessage
+        }
+        
         let fpvId = "fpv-\(detectionSource)-\(frequencyMHz)"
         
         // Create the CoTMessage with AUX_ADV_IND data
@@ -1896,9 +2068,21 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         print("DEBUG: incoming message: \(message)")
         
-        // MARK: Check for FPV messages FIRST - they should never go through XML conversion
-        if message.contains("AUX_ADV_IND") || message.contains("FPV Detection") {
-            print("DEBUG: FPV message detected, routing directly to FPV processor")
+        // MARK: Check for FPV messages FIRST - Parse JSON to verify structure
+        // Check for single object with AUX_ADV_IND (FPV update format)
+        if let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if jsonObject["AUX_ADV_IND"] != nil {
+                print("DEBUG: AUX_ADV_IND format detected, routing to FPV processor")
+                processFPVMessage(data)
+                return
+            }
+        }
+        
+        // Check for array with FPV Detection (initial FPV detection format)
+        if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+           let first = jsonArray.first,
+           first["FPV Detection"] != nil {
+            print("DEBUG: FPV Detection array format detected, routing to FPV processor")
             processFPVMessage(data)
             return
         }

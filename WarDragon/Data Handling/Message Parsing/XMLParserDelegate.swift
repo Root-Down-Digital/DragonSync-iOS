@@ -1184,13 +1184,19 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         let bandwidth = fpvData["bandwidth"] as? String ?? ""
         let signalStrength = fpvData["signal_strength"] as? Double ?? 0.0
         let detectionSource = fpvData["detection_source"] as? String ?? ""
+        let estimatedDistance = fpvData["estimated_distance"] as? Double
+        let sensorLat = fpvData["sensor_lat"] as? Double
+        let sensorLon = fpvData["sensor_lon"] as? Double
+        let status = fpvData["status"] as? String
         
         let fpvId = "fpv-\(detectionSource)-\(frequency)"
         
-        let message = CoTViewModel.CoTMessage(
+        var message = CoTViewModel.CoTMessage(
             uid: fpvId,
             type: "a-f-A-M-F-R",
-            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            lat: sensorLat.map { String($0) } ?? "0.0",
+            lon: sensorLon.map { String($0) } ?? "0.0",
+            homeLat: "0.0", homeLon: "0.0",
             speed: "0.0", vspeed: "0.0", alt: "0.0",
             pilotLat: "0.0", pilotLon: "0.0",
             description: "FPV Detection: \(deviceType)",
@@ -1199,17 +1205,19 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             rawMessage: fpvData
         )
         
+        message.fpvTimestamp = timestamp
+        message.fpvSource = detectionSource
+        message.fpvFrequency = frequency
+        message.fpvBandwidth = bandwidth
+        message.fpvRSSI = signalStrength
+        message.manufacturer = manufacturer
+        message.fpvEstimatedDistance = estimatedDistance
+        message.fpvSensorLat = sensorLat
+        message.fpvSensorLon = sensorLon
+        message.fpvStatus = status
+        
         cotMessage = message
-        
-        // Set FPV fields
-        cotMessage?.fpvTimestamp = timestamp
-        cotMessage?.fpvSource = detectionSource
-        cotMessage?.fpvFrequency = frequency
-        cotMessage?.fpvBandwidth = bandwidth
-        cotMessage?.fpvRSSI = signalStrength
-        cotMessage?.manufacturer = manufacturer
-        
-        return cotMessage
+        return message
     }
 
     private func processAuxAdvInd(_ jsonObject: [String: Any]) -> CoTViewModel.CoTMessage? {
@@ -1222,14 +1230,20 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         let timestamp = auxAdvInd["time"] as? String ?? ""
         let advA = aext["AdvA"] as? String ?? ""
         let frequency = jsonObject["frequency"] as? Int ?? 0
+        let distance = jsonObject["distance"] as? Double
+        let location = jsonObject["location"] as? [String: Any]
+        let sensorLat = location?["lat"] as? Double
+        let sensorLon = location?["lon"] as? Double
         
         let detectionSource = advA.replacingOccurrences(of: " random", with: "")
         let fpvId = "fpv-\(detectionSource)-\(frequency)"
         
-        let message = CoTViewModel.CoTMessage(
+        var message = CoTViewModel.CoTMessage(
             uid: fpvId,
             type: "a-f-A-M-F-R",
-            lat: "0.0", lon: "0.0", homeLat: "0.0", homeLon: "0.0",
+            lat: sensorLat.map { String($0) } ?? "0.0",
+            lon: sensorLon.map { String($0) } ?? "0.0",
+            homeLat: "0.0", homeLon: "0.0",
             speed: "0.0", vspeed: "0.0", alt: "0.0",
             pilotLat: "0.0", pilotLon: "0.0",
             description: "FPV Update: \(detectionSource)",
@@ -1238,16 +1252,18 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             rawMessage: jsonObject
         )
         
+        message.fpvTimestamp = timestamp
+        message.fpvSource = detectionSource
+        message.fpvFrequency = frequency
+        message.fpvRSSI = rssi
+        message.aa = auxAdvInd["aa"] as? Int
+        message.fpvEstimatedDistance = distance
+        message.fpvSensorLat = sensorLat
+        message.fpvSensorLon = sensorLon
+        message.fpvStatus = "LOCK UPDATE"
+        
         cotMessage = message
-        
-        // Set FPV fields
-        cotMessage?.fpvTimestamp = timestamp
-        cotMessage?.fpvSource = detectionSource
-        cotMessage?.fpvFrequency = frequency
-        cotMessage?.fpvRSSI = rssi
-        cotMessage?.aa = auxAdvInd["aa"] as? Int
-        
-        return cotMessage
+        return message
     }
     
     // MARK: - Parsing helpers

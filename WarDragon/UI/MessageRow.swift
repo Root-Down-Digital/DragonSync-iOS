@@ -456,8 +456,13 @@ struct MessageRow: View {
     private func mapSectionView() -> some View {
         if message.isFPVDetection {
             // Try to get alert ring first, otherwise use message coordinate
-            if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
-                Map(interactionModes: [.pan, .zoom]) {
+            if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }),
+               !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
+                // FPV with valid alert ring - use fixed position to prevent auto-zoom
+                Map(position: .constant(.camera(MapCamera(
+                    centerCoordinate: ring.centerCoordinate,
+                    distance: ring.radius * 3 // 3x the radius for good viewing
+                ))), interactionModes: [.pan, .zoom]) {
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.orange.opacity(0.1))
                         .stroke(.orange, lineWidth: 2)
@@ -569,8 +574,13 @@ struct MessageRow: View {
                 return coord
             }()
             
+            // Filter out 0/0 coordinates from flight path
             let flightCoords: [CLLocationCoordinate2D] = {
-                var coords = encounter?.flightPath.map { $0.coordinate } ?? []
+                var coords = encounter?.flightPath.compactMap { point -> CLLocationCoordinate2D? in
+                    let coord = point.coordinate
+                    guard coord.latitude != 0 || coord.longitude != 0 else { return nil }
+                    return coord
+                } ?? []
                 
                 if let currentCoord = validCoordinate,
                    !coords.contains(where: { coord in
@@ -612,7 +622,7 @@ struct MessageRow: View {
                     centerCoordinate: center,
                     distance: 500
                 ))), interactionModes: [.pan, .zoom]) {
-                    // Flight path
+                    // Flight path - only use valid coordinates
                     if flightCoords.count > 1 {
                         MapPolyline(coordinates: flightCoords)
                             .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
