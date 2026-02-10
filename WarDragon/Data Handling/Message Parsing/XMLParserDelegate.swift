@@ -492,9 +492,34 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         }
     }
     
+    /// Checks if an ID is an ICAO 24-bit hex address (6 hex characters)
+    /// ADS-B aircraft use ICAO hex addresses like "66D365", "F6F63B", etc.
+    private func isICAOHexAddress(_ id: String) -> Bool {
+        // Remove any prefix that might have been added
+        let cleanId = id.replacingOccurrences(of: "drone-", with: "")
+            .replacingOccurrences(of: "aircraft-", with: "")
+        
+        // ICAO hex address is exactly 6 hexadecimal characters
+        guard cleanId.count == 6 else { return false }
+        
+        // Check if all characters are valid hex digits
+        let hexCharacterSet = CharacterSet(charactersIn: "0123456789ABCDEFabcdef")
+        return cleanId.unicodeScalars.allSatisfy { hexCharacterSet.contains($0) }
+    }
+    
     private func buildCoTMessageFromDroneData(_ droneData: [String: Any]) {
         
         let basicId = droneData["id"] as? String ?? ""
+        
+        // ADS-B aircraft use ICAO 24-bit hex addresses (6 hex digits)
+        let isADSBAircraft = isICAOHexAddress(basicId)
+        
+        if isADSBAircraft {
+            print("DEBUG: Rejecting ADS-B aircraft \(basicId) from drone processing pipeline")
+            cotMessage = nil
+            return
+        }
+        
         let mac = droneData["mac"] as? String ?? ""
         var manufacturer = droneData["manufacturer"] as? String
         
@@ -512,6 +537,7 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             }
         }
         
+        // Remote ID drones use "drone-" prefix
         let droneId = basicId.hasPrefix("drone-") ? basicId : "drone-\(basicId)"
         
         var message = CoTViewModel.CoTMessage(
@@ -618,7 +644,18 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         
         if let basicId = jsonData["Basic ID"] as? [String: Any] {
             let id = basicId["id"] as? String ?? UUID().uuidString
+            
+            // Check if this is an ADS-B aircraft based on ID format
+            let isADSBAircraft = isICAOHexAddress(id)
+
+            if isADSBAircraft {
+                print("DEBUG: Rejecting ADS-B aircraft \(id) from ESP32 drone processing pipeline")
+                return nil
+            }
+            
+            // Remote ID drones use "drone-" prefix
             let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
+            
             let idType = basicId["id_type"] as? String ?? ""
             
             var caaReg: String?
@@ -1090,6 +1127,17 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 rawMessage = jsonFormat
                 
                 let id = eventAttributes["uid"] ?? ""
+                
+                // Check if this is an ADS-B aircraft based on ID format
+                let isADSBAircraft = isICAOHexAddress(id)
+                
+                if isADSBAircraft {
+                    print("DEBUG: Rejecting ADS-B aircraft \(id) from XML CoT drone processing pipeline")
+                    cotMessage = nil
+                    break
+                }
+                
+                // Remote ID drones use "drone-" prefix
                 let droneId = id.hasPrefix("drone-") ? id : "drone-\(id)"
                 
                 let mac = eventAttributes["MAC"] ?? ""

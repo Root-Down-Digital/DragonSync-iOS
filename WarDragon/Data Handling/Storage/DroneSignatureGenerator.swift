@@ -730,11 +730,11 @@ public final class DroneSignatureGenerator {
                 let droneLocation = CLLocation(latitude: lat, longitude: lon)
                 let distance = droneLocation.distance(from: monitorLoc)
                 expectedSignalStrength = calculateExpectedRSSI(distance: distance)
-                print("DEBUG extractTransmissionInfo Distance: \(distance) meters")
-                print("DEBUG extractTransmissionInfo Lat/Lon: \(lat), \(lon)")
-                print("DEBUG extractTransmissionInfo Monitor Location: \(monitorLoc.coordinate.latitude), \(monitorLoc.coordinate.longitude)")
-                print("DEBUG extractTransmissionInfo Actual RSSI: \(String(describing: signalStrength)))")
-                print("DEBUG extractTransmissionInfo Expected RSSI: \(String(describing: expectedSignalStrength)))")
+//                print("DEBUG extractTransmissionInfo Distance: \(distance) meters")
+//                print("DEBUG extractTransmissionInfo Lat/Lon: \(lat), \(lon)")
+//                print("DEBUG extractTransmissionInfo Monitor Location: \(monitorLoc.coordinate.latitude), \(monitorLoc.coordinate.longitude)")
+//                print("DEBUG extractTransmissionInfo Actual RSSI: \(String(describing: signalStrength)))")
+//                print("DEBUG extractTransmissionInfo Expected RSSI: \(String(describing: expectedSignalStrength)))")
             } else {
                 expectedSignalStrength = nil
             }
