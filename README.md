@@ -11,7 +11,7 @@
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
-**Professional drone and aircraft detection for iOS/macOS** Built for WarDragon Pro. 
+**Professional drone and aircraft detection for iOS/macOS**
 
 Real-time Remote ID • ADS-B tracking • FPV detection • Encrypted drone monitoring • Advanced spoof detection
 
