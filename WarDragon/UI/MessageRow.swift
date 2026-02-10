@@ -457,7 +457,7 @@ struct MessageRow: View {
         if message.isFPVDetection {
             // Try to get alert ring first, otherwise use message coordinate
             if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
-                Map {
+                Map(interactionModes: [.pan, .zoom]) {
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                         .foregroundStyle(.orange.opacity(0.1))
                         .stroke(.orange, lineWidth: 2)
@@ -482,18 +482,24 @@ struct MessageRow: View {
                         .cornerRadius(6)
                     }
                 }
+                .mapControls {
+                    MapUserLocationButton()
+                    MapCompass()
+                    MapScaleView()
+                }
                 .frame(height: 150)
                 .cornerRadius(10)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.orange, lineWidth: 1)
                 )
-            } else if let coord = message.coordinate, coord.latitude != 0 || coord.longitude != 0 {
+                .allowsHitTesting(true)
+            } else if let coord = message.coordinate, !(coord.latitude == 0 && coord.longitude == 0) {
                 // FPV detection with coordinate (from user's location) but no alert ring
                 Map(position: .constant(.camera(MapCamera(
                     centerCoordinate: coord,
                     distance: 500
-                )))) {
+                ))), interactionModes: [.pan, .zoom]) {
                     Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: coord) {
                         VStack {
                             Image(systemName: "antenna.radiowaves.left.and.right")
@@ -511,12 +517,18 @@ struct MessageRow: View {
                     }
                 }
                 .mapStyle(.standard)
+                .mapControls {
+                    MapUserLocationButton()
+                    MapCompass()
+                    MapScaleView()
+                }
                 .frame(height: 150)
                 .cornerRadius(10)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.orange, lineWidth: 1)
                 )
+                .allowsHitTesting(true)
             } else {
                 // No location data available for FPV
                 VStack(spacing: 8) {
@@ -599,7 +611,7 @@ struct MessageRow: View {
                 Map(position: .constant(.camera(MapCamera(
                     centerCoordinate: center,
                     distance: 500
-                )))) {
+                ))), interactionModes: [.pan, .zoom]) {
                     // Flight path
                     if flightCoords.count > 1 {
                         MapPolyline(coordinates: flightCoords)
@@ -633,12 +645,18 @@ struct MessageRow: View {
                     }
                 }
                 .mapStyle(.standard)
+                .mapControls {
+                    MapUserLocationButton()
+                    MapCompass()
+                    MapScaleView()
+                }
                 .frame(height: 150)
                 .cornerRadius(10)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.gray, lineWidth: 1)
                 )
+                .allowsHitTesting(true)
             } else {
                 VStack(spacing: 8) {
                     HStack {
@@ -879,18 +897,37 @@ struct MessageRow: View {
     
     private var expandedView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: {
-                activeSheet = .detailView
-            }) {
-                VStack(alignment: .leading, spacing: 4) {
-                    headerView()
-                    typeInfoView()
-                    signalSourcesView()
-                    macRandomizationView()
-                    mapSectionView()
-                    detailsView()
-                    spoofDetectionView()
+            VStack(alignment: .leading, spacing: 4) {
+                // Tappable header section
+                Button(action: {
+                    activeSheet = .detailView
+                }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        headerView()
+                        typeInfoView()
+                        signalSourcesView()
+                        macRandomizationView()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                
+                // Non-tappable map section (allows map interactions)
+                mapSectionView()
+                
+                // Tappable details section
+                Button(action: {
+                    activeSheet = .detailView
+                }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        detailsView()
+                        spoofDetectionView()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             .cornerRadius(8)
             .padding(.vertical, 8)

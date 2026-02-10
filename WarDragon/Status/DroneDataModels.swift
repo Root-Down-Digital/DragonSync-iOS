@@ -371,7 +371,12 @@ extension StoredDroneEncounter {
     /// WARNING: This is expensive for encounters with many flight points/signatures
     /// Consider using toLegacyLightweight() for list views
     func toLegacy() -> DroneEncounter {
-        let flightPath = flightPoints.map { point in
+        // Filter out invalid 0/0 coordinates (except valid proximity points)
+        let validFlightPoints = flightPoints.filter { point in
+            !(point.latitude == 0 && point.longitude == 0) || point.isProximityPoint
+        }
+        
+        let flightPath = validFlightPoints.map { point in
             FlightPathPoint(
                 latitude: point.latitude,
                 longitude: point.longitude,
@@ -431,7 +436,12 @@ extension StoredDroneEncounter {
         // For old encounters, only include a few points for preview
         let pointLimit = isRecentlyActive ? 200 : 10
         
-        let recentFlightPoints = flightPoints
+        // Filter out invalid 0/0 coordinates (except valid proximity points) BEFORE taking suffix
+        let validFlightPoints = flightPoints.filter { point in
+            !(point.latitude == 0 && point.longitude == 0) || point.isProximityPoint
+        }
+        
+        let recentFlightPoints = validFlightPoints
             .suffix(pointLimit)
             .map { point in
                 FlightPathPoint(

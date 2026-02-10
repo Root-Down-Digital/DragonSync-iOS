@@ -111,6 +111,7 @@ struct ContentView: View {
             
             SwiftDataStorageManager.shared.repairCachedStats()
             SwiftDataStorageManager.shared.backfillActivityLogsForAllEncounters()
+            SwiftDataStorageManager.shared.cleanupInvalidFlightPoints()
             droneStorage.loadFromStorage()
             droneStorage.updateProximityPointsWithCorrectRadius()
             
@@ -910,10 +911,12 @@ private struct LiveMapPreview: View {
             Map(bounds: MapCameraBounds(centerCoordinateBounds: mapRegion)) {
                 // Drone flight paths
                 ForEach(cotViewModel.parsedMessages) { message in
-                    let flightPath = getDroneFlightPath(for: message.uid)
-                    if flightPath.count > 1 {
-                        MapPolyline(coordinates: flightPath)
-                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    if !message.isFPVDetection {
+                        let flightPath = getDroneFlightPath(for: message.uid)
+                        if flightPath.count > 1 {
+                            MapPolyline(coordinates: flightPath)
+                                .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        }
                     }
                 }
                 
@@ -930,7 +933,9 @@ private struct LiveMapPreview: View {
                 
                 // Drone markers
                 ForEach(cotViewModel.parsedMessages) { message in
-                    if let coordinate = message.coordinate {
+                    if let coordinate = message.coordinate,
+                       !message.isFPVDetection,
+                       !(coordinate.latitude == 0 && coordinate.longitude == 0) {
                         Annotation(message.id, coordinate: coordinate) {
                             droneAnnotationIcon(for: message)
                         }
@@ -1073,11 +1078,18 @@ private struct LiveMapPreview: View {
     private var mapRegion: MKCoordinateRegion {
         var allCoords: [CLLocationCoordinate2D] = []
         
-        // Always add drone coordinates
+        // Always add drone coordinates (excluding FPV and 0/0)
         allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
             guard let coord = message.coordinate else { return nil }
-            let hasValidCoord = coord.latitude != 0 || coord.longitude != 0
-            return hasValidCoord ? coord : nil
+            
+            if message.isFPVDetection {
+                return nil
+            }
+            
+            if coord.latitude == 0 && coord.longitude == 0 {
+                return nil
+            }
+            return coord
         }
         
         // Only add aircraft coordinates if showAircraft is true

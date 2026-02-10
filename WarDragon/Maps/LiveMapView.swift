@@ -380,15 +380,15 @@ struct LiveMapView: View {
                                         ZStack {
                                             Circle()
                                                 .fill(color)
-                                                .frame(width: 30, height: 30)
+                                                .frame(width: 34, height: 34)
+                                                .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
                                             
                                             Image(systemName: "airplane")
                                                 .resizable()
-                                                .frame(width: 18, height: 18)
+                                                .frame(width: 20, height: 20)
                                                 .foregroundStyle(.white)
                                                 .rotationEffect(.degrees(message.headingDeg - 90))
                                         }
-                                        .shadow(color: .black.opacity(0.5), radius: 3, x: 0, y: 2)
                                         
                                         Text(message.uid)
                                             .font(.caption2)
@@ -412,12 +412,16 @@ struct LiveMapView: View {
                             Annotation(aircraft.displayName, coordinate: coordinate) {
                                 VStack(spacing: 2) {
                                     ZStack {
+                                        Circle()
+                                            .fill(.green)
+                                            .frame(width: 34, height: 34)
+                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                        
                                         Image(systemName: "airplane")
                                             .resizable()
-                                            .frame(width: 24, height: 24)
-                                            .foregroundStyle(.green)
+                                            .frame(width: 20, height: 20)
+                                            .foregroundStyle(.white)
                                             .rotationEffect(.degrees((aircraft.track ?? 0) - 90))
-                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
                                     }
                                     
                                     Text(aircraft.displayName)

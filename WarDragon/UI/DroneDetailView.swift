@@ -17,6 +17,7 @@ struct DroneDetailView: View {
     @State private var showAllLocations = true
     @State private var showFlightPath = true
     @State private var selectedMapStyle: MapStyleOption = .standard
+    @State private var cachedAlertRings: [CoTViewModel.AlertRing] = []
     
     enum MapStyleOption {
         case standard
@@ -36,6 +37,9 @@ struct DroneDetailView: View {
         self.message = message
         self.flightPath = flightPath
         self.cotViewModel = cotViewModel
+        
+        // Cache alert rings to prevent map flashing
+        _cachedAlertRings = State(initialValue: cotViewModel.alertRings.filter { $0.droneId == message.uid })
         
         if message.isFPVDetection {
             // For FPV, try to center on alert ring
@@ -165,16 +169,20 @@ struct DroneDetailView: View {
 
             Map(position: $mapCameraPosition) {
                 if message.isFPVDetection {
-                    ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
+                    ForEach(cachedAlertRings) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .foregroundStyle(.orange.opacity(0.1))
                             .stroke(.orange, lineWidth: 3)
                         
                         Annotation("Monitor", coordinate: ring.centerCoordinate) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .foregroundColor(.blue)
-                                .font(.title2)
-                                .background(Circle().fill(.white))
+                            ZStack {
+                                Circle()
+                                    .fill(.orange)
+                                    .frame(width: 34, height: 34)
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(.white)
+                                    .font(.title2)
+                            }
                         }
                         
                         Annotation("FPV \(message.fpvFrequency ?? 0)MHz", coordinate: ring.centerCoordinate) {
@@ -194,11 +202,16 @@ struct DroneDetailView: View {
                 } else {
                     if let pt = message.coordinate {
                         Annotation("Drone", coordinate: pt) {
-                            Image(systemName: "airplane")
-                                .resizable()
-                                .frame(width: 20, height: 20)
-                                .rotationEffect(.degrees(message.headingDeg - 90))
-                                .foregroundStyle(.blue)
+                            ZStack {
+                                Circle()
+                                    .fill(.blue)
+                                    .frame(width: 30, height: 30)
+                                Image(systemName: "airplane")
+                                    .resizable()
+                                    .frame(width: 18, height: 18)
+                                    .rotationEffect(.degrees(message.headingDeg - 90))
+                                    .foregroundStyle(.white)
+                            }
                         }
                     }
 
@@ -207,10 +220,14 @@ struct DroneDetailView: View {
                        let lon = Double(message.homeLon)
                     {
                         Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                            Image(systemName: "house.fill")
-                                .foregroundStyle(.green)
-                                .background(Circle().fill(.white))
-                                .frame(width: 18, height: 18)
+                            ZStack {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 30, height: 30)
+                                Image(systemName: "house.fill")
+                                    .foregroundStyle(.white)
+                                    .font(.body)
+                            }
                         }
                     }
 
@@ -219,10 +236,14 @@ struct DroneDetailView: View {
                        let plon = Double(message.pilotLon)
                     {
                         Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
-                            Image(systemName: "person.fill")
-                                .foregroundStyle(.orange)
-                                .background(Circle().fill(.white))
-                                .frame(width: 18, height: 18)
+                            ZStack {
+                                Circle()
+                                    .fill(.orange)
+                                    .frame(width: 30, height: 30)
+                                Image(systemName: "person.fill")
+                                    .foregroundStyle(.white)
+                                    .font(.body)
+                            }
                         }
                     }
 
@@ -238,7 +259,7 @@ struct DroneDetailView: View {
                             .stroke(.purple, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
 
-                    ForEach(cotViewModel.alertRings.filter { $0.droneId == message.uid }) { ring in
+                    ForEach(cachedAlertRings) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .stroke(.red.opacity(0.2), lineWidth: 2)
                     }
@@ -247,12 +268,6 @@ struct DroneDetailView: View {
             .mapStyle(selectedMapStyle.mapStyle)
             .frame(height: 300)
             .cornerRadius(12)
-            .onAppear {
-                updateMapRegion()
-            }
-            .onChange(of: message.coordinate?.latitude) { oldLat, newLat in
-                updateMapRegion()
-            }
         }
     }
 
@@ -640,8 +655,8 @@ struct DroneDetailView: View {
     
     private func updateMapRegion() {
         if message.isFPVDetection {
-            // For FPV, center on alert ring if available
-            if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }) {
+            // For FPV, center on cached alert ring if available
+            if let ring = cachedAlertRings.first {
                 let span = MKCoordinateSpan(
                     latitudeDelta: max(ring.radius / 55000, 0.01),
                     longitudeDelta: max(ring.radius / 55000, 0.01)
