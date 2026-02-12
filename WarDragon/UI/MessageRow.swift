@@ -225,7 +225,6 @@ struct MessageRow: View, Equatable {
     }
     
     private func removeDroneFromTracking() {
-        // Get all possible ID variants for this drone
         var baseId = message.uid.replacingOccurrences(of: "drone-", with: "")
         baseId = baseId.replacingOccurrences(of: "fpv-", with: "")
         
@@ -240,44 +239,36 @@ struct MessageRow: View, Equatable {
             fpvId
         ]
         
-        // For FPV detections, also add the message.id variant
         if message.isFPVDetection {
             idsToRemove.append(message.id)
             idsToRemove.append("fpv-\(message.id)")
         }
         
-        // Remove from active messages - use both ID and UID matching
+        for id in idsToRemove {
+            DroneStorageManager.shared.markAsDoNotTrack(id: id)
+        }
+        
         cotViewModel.parsedMessages.removeAll { msg in
             return idsToRemove.contains(msg.uid) || idsToRemove.contains(msg.id) || msg.uid.contains(baseId) || msg.id.contains(baseId)
         }
         
-        // Remove signatures for all ID variants
         cotViewModel.droneSignatures.removeAll { signature in
             return idsToRemove.contains(signature.primaryId.id)
         }
         
-        // Remove MAC history for all ID variants
         for id in idsToRemove {
             cotViewModel.macIdHistory.removeValue(forKey: id)
             cotViewModel.macProcessing.removeValue(forKey: id)
         }
         
-        // Remove any alert rings for all ID variants (critical for FPV)
         cotViewModel.alertRings.removeAll { ring in
             return idsToRemove.contains(ring.droneId) || ring.droneId.contains(baseId)
         }
         
-        // Clear webhook notification history for all ID variants
         for id in idsToRemove {
             WebhookManager.shared.clearNotificationHistory(for: id)
         }
         
-        // Mark this device as "do not track" in storage for all possible ID formats
-        for id in idsToRemove {
-            DroneStorageManager.shared.markAsDoNotTrack(id: id)
-        }
-        
-        // Force immediate UI update
         cotViewModel.objectWillChange.send()
         
         print("Stopped tracking drone/FPV with IDs: \(idsToRemove)")

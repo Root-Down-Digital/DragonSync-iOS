@@ -442,10 +442,24 @@ class SwiftDataStorageManager: ObservableObject {
         if let encounter = fetchEncounter(id: id) {
             context.delete(encounter)
             
+            let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
+            let possibleIds = [
+                id,
+                "drone-\(id)",
+                baseId,
+                "drone-\(baseId)",
+                "fpv-\(baseId)",
+                "fpv-\(id)"
+            ]
+            
+            for possibleId in possibleIds {
+                doNotTrackCache.remove(possibleId)
+            }
+            
             do {
                 try context.save()
                 updateInMemoryCache()
-                logger.info("Deleted encounter: \(id)")
+                logger.info("Deleted encounter and cleared do-not-track: \(id)")
             } catch {
                 logger.error("Failed to delete encounter: \(error.localizedDescription)")
             }
@@ -456,7 +470,6 @@ class SwiftDataStorageManager: ObservableObject {
         guard let context = modelContext else { return }
         
         do {
-            // Fetch all encounters fresh from context to ensure we have valid references
             let descriptor = FetchDescriptor<StoredDroneEncounter>()
             let encounters = try context.fetch(descriptor)
             
@@ -470,10 +483,11 @@ class SwiftDataStorageManager: ObservableObject {
             
             macToIdCache.removeAll()
             caaToIdCache.removeAll()
+            doNotTrackCache.removeAll()
             
             self.encounters.removeAll()
             
-            logger.info("Successfully deleted all encounters")
+            logger.info("Successfully deleted all encounters and cleared all caches")
             
         } catch {
             logger.error("Failed to delete all encounters: \(error.localizedDescription)")
@@ -533,6 +547,7 @@ class SwiftDataStorageManager: ObservableObject {
         ]
         
         for possibleId in possibleIds {
+            doNotTrackCache.insert(possibleId)
             if let encounter = fetchEncounter(id: possibleId) {
                 encounter.metadata["doNotTrack"] = "true"
             }
@@ -546,7 +561,41 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
+    private var doNotTrackCache = Set<String>()
+    
     func isMarkedAsDoNotTrack(id: String) -> Bool {
+        if doNotTrackCache.contains(id) {
+            return true
+        }
+        
+        let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
+        
+        if doNotTrackCache.contains(baseId) {
+            doNotTrackCache.insert(id)
+            return true
+        }
+        
+        guard let encounter = fetchEncounter(id: id) else {
+            if baseId != id, let baseEncounter = fetchEncounter(id: baseId) {
+                if baseEncounter.metadata["doNotTrack"] == "true" {
+                    doNotTrackCache.insert(id)
+                    doNotTrackCache.insert(baseId)
+                    return true
+                }
+            }
+            return false
+        }
+        
+        if encounter.metadata["doNotTrack"] == "true" {
+            doNotTrackCache.insert(id)
+            doNotTrackCache.insert(baseId)
+            return true
+        }
+        
+        return false
+    }
+    
+    func clearDoNotTrack(id: String) {
         let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
         let possibleIds = [
             id,
@@ -558,38 +607,19 @@ class SwiftDataStorageManager: ObservableObject {
         ]
         
         for possibleId in possibleIds {
-            if let encounter = fetchEncounter(id: possibleId),
-               encounter.metadata["doNotTrack"] == "true" {
-                return true
-            }
-        }
-        
-        return false
-    }
-    
-    func clearDoNotTrack(id: String) {
-        let baseId = id.replacingOccurrences(of: "drone-", with: "")
-        let possibleIds = [id, "drone-\(id)", baseId, "drone-\(baseId)"]
-        
-        var cleared = false
-        for possibleId in possibleIds {
+            doNotTrackCache.remove(possibleId)
             if let encounter = fetchEncounter(id: possibleId) {
                 encounter.metadata.removeValue(forKey: "doNotTrack")
-                cleared = true
                 logger.info(" Cleared do not track for: \(possibleId)")
             }
         }
         
-        if cleared {
-            do {
-                try modelContext?.save()
-                updateInMemoryCache()
-                logger.info("Successfully cleared do not track for: \(possibleIds)")
-            } catch {
-                logger.error("Failed to save after clearing do not track: \(error.localizedDescription)")
-            }
-        } else {
-            logger.warning("No encounter found to clear do not track: \(possibleIds)")
+        do {
+            try modelContext?.save()
+            updateInMemoryCache()
+            logger.info("Successfully cleared do not track for: \(possibleIds)")
+        } catch {
+            logger.error("Failed to save after clearing do not track: \(error.localizedDescription)")
         }
     }
     
