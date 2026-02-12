@@ -226,19 +226,29 @@ struct MessageRow: View, Equatable {
     
     private func removeDroneFromTracking() {
         // Get all possible ID variants for this drone
-        let baseId = message.uid.replacingOccurrences(of: "drone-", with: "")
-        let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
+        var baseId = message.uid.replacingOccurrences(of: "drone-", with: "")
+        baseId = baseId.replacingOccurrences(of: "fpv-", with: "")
         
-        let idsToRemove = [
+        let droneId = message.uid.hasPrefix("drone-") ? message.uid : "drone-\(message.uid)"
+        let fpvId = message.uid.hasPrefix("fpv-") ? message.uid : "fpv-\(baseId)"
+        
+        var idsToRemove = [
             message.uid,
             droneId,
             baseId,
-            "drone-\(baseId)"
+            "drone-\(baseId)",
+            fpvId
         ]
+        
+        // For FPV detections, also add the message.id variant
+        if message.isFPVDetection {
+            idsToRemove.append(message.id)
+            idsToRemove.append("fpv-\(message.id)")
+        }
         
         // Remove from active messages - use both ID and UID matching
         cotViewModel.parsedMessages.removeAll { msg in
-            return idsToRemove.contains(msg.uid) || idsToRemove.contains(msg.id) || msg.uid.contains(baseId)
+            return idsToRemove.contains(msg.uid) || idsToRemove.contains(msg.id) || msg.uid.contains(baseId) || msg.id.contains(baseId)
         }
         
         // Remove signatures for all ID variants
@@ -252,9 +262,14 @@ struct MessageRow: View, Equatable {
             cotViewModel.macProcessing.removeValue(forKey: id)
         }
         
-        // Remove any alert rings for all ID variants
+        // Remove any alert rings for all ID variants (critical for FPV)
         cotViewModel.alertRings.removeAll { ring in
-            return idsToRemove.contains(ring.droneId)
+            return idsToRemove.contains(ring.droneId) || ring.droneId.contains(baseId)
+        }
+        
+        // Clear webhook notification history for all ID variants
+        for id in idsToRemove {
+            WebhookManager.shared.clearNotificationHistory(for: id)
         }
         
         // Mark this device as "do not track" in storage for all possible ID formats
@@ -265,17 +280,27 @@ struct MessageRow: View, Equatable {
         // Force immediate UI update
         cotViewModel.objectWillChange.send()
         
-        print("Stopped tracking drone with IDs: \(idsToRemove)")
+        print("Stopped tracking drone/FPV with IDs: \(idsToRemove)")
     }
     
     private func deleteDroneFromStorage() {
-        let baseId = message.uid.replacingOccurrences(of: "drone-", with: "")
-        let possibleIds = [
+        var baseId = message.uid.replacingOccurrences(of: "drone-", with: "")
+        baseId = baseId.replacingOccurrences(of: "fpv-", with: "")
+        
+        var possibleIds = [
             message.uid,
             "drone-\(message.uid)",
             baseId,
-            "drone-\(baseId)"
+            "drone-\(baseId)",
+            "fpv-\(baseId)"
         ]
+        
+        // For FPV detections, also include message.id variants
+        if message.isFPVDetection {
+            possibleIds.append(message.id)
+            possibleIds.append("fpv-\(message.id)")
+        }
+        
         for id in possibleIds {
             DroneStorageManager.shared.deleteEncounter(id: id)
         }
@@ -529,9 +554,12 @@ struct MessageRow: View, Equatable {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 18))
+                        .font(.system(size: 22))
                         .foregroundColor(.blue)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -781,34 +809,34 @@ struct MessageRow: View, Equatable {
                 .allowsHitTesting(true)
             } else {
                 // No location data available for FPV
-                VStack(spacing: 8) {
-                    HStack {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .foregroundColor(.orange)
-                            .font(.title2)
-                        
-                        VStack(alignment: .leading) {
-                            Text(message.fpvDisplayName)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            Text("No location data")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Spacer()
-                    }
-                    .padding()
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.orange.opacity(0.1))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                            )
-                    )
-                }
-                .frame(height: 80)
+//                VStack(spacing: 8) {
+//                    HStack {
+//                        Image(systemName: "antenna.radiowaves.left.and.right")
+//                            .foregroundColor(.orange)
+//                            .font(.title2)
+//                        
+//                        VStack(alignment: .leading) {
+//                            Text(message.fpvDisplayName)
+//                                .font(.caption)
+//                                .fontWeight(.medium)
+//                            Text("No location data")
+//                                .font(.caption2)
+//                                .foregroundColor(.secondary)
+//                        }
+//                        
+//                        Spacer()
+//                    }
+//                    .padding()
+//                    .background(
+//                        RoundedRectangle(cornerRadius: 10)
+//                            .fill(Color.orange.opacity(0.1))
+//                            .overlay(
+//                                RoundedRectangle(cornerRadius: 10)
+//                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+//                            )
+//                    )
+//                }
+//                .frame(height: 80)
             }
         } else {
             let encounter = DroneStorageManager.shared.encounters[message.uid]
@@ -1194,12 +1222,27 @@ struct MessageRow: View, Equatable {
     private var expandedView: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                // Tappable header section
+                // Header with menu button - needs special handling to allow menu taps
+                ZStack(alignment: .topLeading) {
+                    // Background button for the entire header area
+                    Button(action: {
+                        activeSheet = .detailView
+                    }) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    // Actual header content on top
+                    headerView()
+                        .allowsHitTesting(true) // Allow menu button to be tapped
+                }
+                
+                // Rest of the tappable sections
                 Button(action: {
                     activeSheet = .detailView
                 }) {
                     VStack(alignment: .leading, spacing: 4) {
-                        headerView()
                         typeInfoView()
                         signalSourcesView()
                         macRandomizationView()

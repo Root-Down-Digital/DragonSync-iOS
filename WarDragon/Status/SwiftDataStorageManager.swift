@@ -151,11 +151,16 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         
+        let droneId = message.uid
+        
+        if isMarkedAsDoNotTrack(id: droneId) {
+            return
+        }
+        
         ensureTimerStarted()
         
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
-        let droneId = message.uid
         
         var targetId: String = droneId
         
@@ -517,8 +522,15 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     func markAsDoNotTrack(id: String) {
-        let baseId = id.replacingOccurrences(of: "drone-", with: "")
-        let possibleIds = [id, "drone-\(id)", baseId, "drone-\(baseId)"]
+        let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
+        let possibleIds = [
+            id,
+            "drone-\(id)",
+            baseId,
+            "drone-\(baseId)",
+            "fpv-\(baseId)",
+            "fpv-\(id)"
+        ]
         
         for possibleId in possibleIds {
             if let encounter = fetchEncounter(id: possibleId) {
@@ -532,6 +544,27 @@ class SwiftDataStorageManager: ObservableObject {
         } catch {
             logger.error("Failed to mark as do not track: \(error.localizedDescription)")
         }
+    }
+    
+    func isMarkedAsDoNotTrack(id: String) -> Bool {
+        let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
+        let possibleIds = [
+            id,
+            "drone-\(id)",
+            baseId,
+            "drone-\(baseId)",
+            "fpv-\(baseId)",
+            "fpv-\(id)"
+        ]
+        
+        for possibleId in possibleIds {
+            if let encounter = fetchEncounter(id: possibleId),
+               encounter.metadata["doNotTrack"] == "true" {
+                return true
+            }
+        }
+        
+        return false
     }
     
     func clearDoNotTrack(id: String) {
