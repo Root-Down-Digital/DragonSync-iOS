@@ -1190,6 +1190,7 @@ class ZMQHandler: ObservableObject {
     func disconnect() {
         print("ZMQ: Disconnecting...")
         shouldContinueRunning = false
+        isReconnecting = false  // Reset reconnection flag
         
         pollingLock.lock()
         isPollingActive = false
@@ -1228,12 +1229,37 @@ class ZMQHandler: ObservableObject {
         isSubscriptionActive = false
         print("ZMQ: Disconnected")
     }
+    
+    /// Force reset connection state - useful when stuck in reconnecting loop
+    func resetConnectionState() {
+        print("ZMQ: Force resetting connection state")
+        disconnect()
+        isReconnecting = false
+        lastHost = ""
+        lastTelemetryPort = 0
+        lastStatusPort = 0
+    }
 
+    private var isReconnecting = false
+    
     func reconnect() {
-        if isConnected || lastHost.isEmpty || lastTelemetryPort == 0 || lastStatusPort == 0 {
+        // Prevent multiple simultaneous reconnection attempts
+        guard !isReconnecting else {
+            print("ZMQ: Reconnection already in progress, skipping")
             return
         }
         
+        guard !isConnected else {
+            print("ZMQ: Already connected, skipping reconnect")
+            return
+        }
+        
+        guard !lastHost.isEmpty, lastTelemetryPort > 0, lastStatusPort > 0 else {
+            print("ZMQ: Invalid reconnection parameters")
+            return
+        }
+        
+        isReconnecting = true
         print("ZMQ: Reconnecting...")
         
         do {
@@ -1242,6 +1268,7 @@ class ZMQHandler: ObservableObject {
         } catch {
             print("ZMQ Socket Close Error: \(error)")
             disconnect()
+            isReconnecting = false
             return
         }
         
@@ -1249,13 +1276,20 @@ class ZMQHandler: ObservableObject {
         statusSocket = nil
         isConnected = false
         
-        connect(
-            host: lastHost,
-            zmqTelemetryPort: lastTelemetryPort,
-            zmqStatusPort: lastStatusPort,
-            onTelemetry: lastTelemetryHandler,
-            onStatus: lastStatusHandler
-        )
+        // Small delay before reconnecting to avoid rapid reconnect loops
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+            
+            self.connect(
+                host: self.lastHost,
+                zmqTelemetryPort: self.lastTelemetryPort,
+                zmqStatusPort: self.lastStatusPort,
+                onTelemetry: self.lastTelemetryHandler,
+                onStatus: self.lastStatusHandler
+            )
+            
+            self.isReconnecting = false
+        }
     }
 
     
