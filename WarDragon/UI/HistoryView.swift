@@ -23,7 +23,7 @@ struct StoredEncountersView: View {
     @State private var sortOrder: SortOrder = .lastSeen
     let cotViewModel: CoTViewModel
     @Environment(\.modelContext) private var modelContext
-    @StateObject private var storage = SwiftDataStorageManager.shared
+    private let storage = SwiftDataStorageManager.shared
     @ObservedObject private var editorManager = DroneEditorManager.shared
     
     // Cache for expensive computed values
@@ -169,11 +169,10 @@ struct StoredEncountersView: View {
             if !fpvEncounters.isEmpty {
                 Section {
                     ForEach(fpvEncounters) { encounter in
-                        NavigationLink(destination: EncounterDetailView(encounter: encounter)
-                            .environmentObject(cotViewModel)) {
-                                EncounterRow(encounter: encounter)
-                            }
-                            .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
+                        NavigationLink(value: encounter) {
+                            EncounterRow(encounter: encounter)
+                        }
+                        .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                     }
                     .onDelete { indexSet in
                         // Disable animations during delete to prevent accessing deleted objects
@@ -204,11 +203,10 @@ struct StoredEncountersView: View {
             if !regularEncounters.isEmpty {
                 Section {
                     ForEach(regularEncounters) { encounter in
-                        NavigationLink(destination: EncounterDetailView(encounter: encounter)
-                            .environmentObject(cotViewModel)) {
-                                EncounterRow(encounter: encounter)
-                            }
-                            .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
+                        NavigationLink(value: encounter) {
+                            EncounterRow(encounter: encounter)
+                        }
+                        .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                     }
                     .onDelete { indexSet in
                         // Disable animations during delete to prevent accessing deleted objects
@@ -235,10 +233,14 @@ struct StoredEncountersView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped) // Better performance than plain list
+        .listStyle(.insetGrouped)
         .searchable(text: $searchText, prompt: "Search by ID or CAA Registration")
         .navigationTitle("Encounter History")
         .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: StoredDroneEncounter.self) { encounter in
+            EncounterDetailView(encounter: encounter)
+                .environmentObject(cotViewModel)
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
@@ -610,6 +612,8 @@ struct StoredEncountersView: View {
         @State private var mapPositionSet = false
         @State private var isLoadingStarted = false
         @State private var isFPVDetection = false
+        @State private var loadingTimeoutReached = false
+        @State private var hasAppeared = false
         @ObservedObject private var editorManager = DroneEditorManager.shared
         
         enum MapStyle {
@@ -621,46 +625,89 @@ struct StoredEncountersView: View {
         }
         
         var body: some View {
-            if encounter.modelContext == nil {
-                return AnyView(ContentUnavailableView(
-                    "Encounter Unavailable",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text("This encounter may have been deleted.")
-                ))
-            } else {
-                return AnyView(encounterDetailContent)
-            }
-        }
-        
-        @ViewBuilder
-        private var encounterDetailContent: some View {
-            if isLoadingStarted && !isDataLoaded {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .progressViewStyle(CircularProgressViewStyle())
-                    Text("Loading encounter data...")
-                        .font(.appCaption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-                .background(Color(UIColor.systemBackground))
-            } else {
-                actualContent
+            Group {
+                if encounter.modelContext == nil {
+                    ContentUnavailableView(
+                        "Encounter Unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("This encounter may have been deleted.")
+                    )
+                } else if !isDataLoaded {
+                    VStack(spacing: 16) {
+                        if loadingTimeoutReached {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.largeTitle)
+                                .foregroundColor(.orange)
+                            Text("Loading Timed Out")
+                                .font(.headline)
+                            Text("This encounter may have too much data or the database is busy.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("Try Again") {
+                                loadingTimeoutReached = false
+                                isLoadingStarted = false
+                                isDataLoaded = false
+                                Task {
+                                    await loadRelationshipData()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .progressViewStyle(CircularProgressViewStyle())
+                            Text("Loading encounter data...")
+                                .font(.appCaption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                    .background(Color(UIColor.systemBackground))
+                    .navigationTitle("Loading...")
+                    .navigationBarTitleDisplayMode(.inline)
                     .onAppear {
+                        guard !hasAppeared else { return }
+                        hasAppeared = true
+                        
                         if !isLoadingStarted {
                             isLoadingStarted = true
+                            
+                            Task {
+                                try? await Task.sleep(for: .seconds(10))
+                                if !isDataLoaded {
+                                    loadingTimeoutReached = true
+                                }
+                            }
+                            
                             Task {
                                 await loadRelationshipData()
                             }
                         }
                     }
+                } else {
+                    actualContent
+                }
             }
         }
         
         @ViewBuilder
         private var actualContent: some View {
+            // Double-check encounter is still valid before rendering
+            if encounter.modelContext == nil {
+                ContentUnavailableView(
+                    "Encounter No Longer Available",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("This encounter was deleted while loading.")
+                )
+            } else {
+                scrollContent
+            }
+        }
+        
+        @ViewBuilder
+        private var scrollContent: some View {
             ScrollView {
                 VStack(spacing: 16) {
                     // Custom name and trust status section
@@ -1191,6 +1238,12 @@ struct StoredEncountersView: View {
         }
 
         private func loadRelationshipData() async {
+            // Prevent multiple simultaneous loads
+            guard !isDataLoaded else {
+                return
+            }
+            
+            // Capture values we need from main actor context BEFORE going to background
             let encounterId = encounter.id
             let metadata = encounter.metadata
             let modelContext = self.modelContext
@@ -1202,7 +1255,9 @@ struct StoredEncountersView: View {
                 return
             }
             
+            // Create background context for expensive operations
             let backgroundContext = ModelContext(container)
+            backgroundContext.autosaveEnabled = false // Don't auto-save in background
             
             var descriptor = FetchDescriptor<StoredDroneEncounter>(
                 predicate: #Predicate { $0.id == encounterId }
@@ -1222,9 +1277,12 @@ struct StoredEncountersView: View {
                     return
                 }
                 
+                // Backfill activity log if needed
                 freshEncounter.backfillActivityLog()
                 try? backgroundContext.save()
                 
+                // Extract data from managed objects into plain tuples
+                // This prevents relationship faults when switching back to main thread
                 let pointsData = freshEncounter.flightPoints.map { point in
                     (latitude: point.latitude,
                      longitude: point.longitude,
@@ -1247,7 +1305,14 @@ struct StoredEncountersView: View {
                 
                 let fpvDetection = encounterId.hasPrefix("fpv-") || metadata["isFPVDetection"] == "true"
                 
+                // Switch back to main actor to update UI state
                 await MainActor.run {
+                    // Check again if we're still needed (user might have navigated away)
+                    guard !self.isDataLoaded else {
+                        return
+                    }
+                    
+                    // Create new unmanaged objects for UI display
                     self.flightPoints = pointsData.map { data in
                         StoredFlightPoint(
                             latitude: data.latitude,
@@ -1278,6 +1343,7 @@ struct StoredEncountersView: View {
                 }
             } catch {
                 await MainActor.run {
+                    // Still mark as loaded so user sees the error state instead of infinite loading
                     self.isDataLoaded = true
                 }
             }
