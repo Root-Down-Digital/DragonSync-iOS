@@ -290,6 +290,12 @@ class WebhookManager: ObservableObject {
     private var session: URLSession
     private let maxDeliveryHistory = 100
     
+    // Deduplication tracking for FPV and drone detections
+    private var notifiedDroneIds: Set<String> = []
+    private var notifiedFPVIds: Set<String> = []
+    private var lastNotificationTime: [String: Date] = [:]
+    private let notificationCooldown: TimeInterval = 300.0  // 5 minutes cooldown per detection
+    
     struct WebhookDelivery: Identifiable {
         let id = UUID()
         let webhookName: String
@@ -351,10 +357,119 @@ class WebhookManager: ObservableObject {
     
     // MARK: - Webhook Delivery
     
+    /// Check if a webhook should be sent for this detection (deduplication)
+    private func shouldSendWebhook(event: WebhookEvent, droneId: String) -> Bool {
+        let key = "\(event.rawValue)_\(droneId)"
+        
+        // Check cooldown period
+        if let lastTime = lastNotificationTime[key] {
+            let timeSinceLastNotification = Date().timeIntervalSince(lastTime)
+            if timeSinceLastNotification < notificationCooldown {
+                print("Webhook cooldown active for \(droneId) - skipping (last sent \(Int(timeSinceLastNotification))s ago)")
+                return false
+            }
+        }
+        
+        // For FPV signals, check if we've already notified
+        if event == .fpvSignal {
+            if notifiedFPVIds.contains(droneId) {
+                // Check if cooldown has expired
+                if let lastTime = lastNotificationTime[key] {
+                    let timeSinceLastNotification = Date().timeIntervalSince(lastTime)
+                    if timeSinceLastNotification < notificationCooldown {
+                        return false  // Still in cooldown
+                    }
+                }
+                // Cooldown expired, allow re-notification
+                print("FPV webhook cooldown expired for \(droneId) - allowing re-notification")
+            }
+        }
+        
+        // For drone detections, check if we've already notified
+        if event == .droneDetected {
+            if notifiedDroneIds.contains(droneId) {
+                // Check if cooldown has expired
+                if let lastTime = lastNotificationTime[key] {
+                    let timeSinceLastNotification = Date().timeIntervalSince(lastTime)
+                    if timeSinceLastNotification < notificationCooldown {
+                        return false  // Still in cooldown
+                    }
+                }
+                // Cooldown expired, allow re-notification
+                print("Drone webhook cooldown expired for \(droneId) - allowing re-notification")
+            }
+        }
+        
+        return true
+    }
+    
+    /// Mark that a webhook has been sent for this detection
+    private func markWebhookSent(event: WebhookEvent, droneId: String) {
+        let key = "\(event.rawValue)_\(droneId)"
+        lastNotificationTime[key] = Date()
+        
+        if event == .fpvSignal {
+            notifiedFPVIds.insert(droneId)
+        } else if event == .droneDetected {
+            notifiedDroneIds.insert(droneId)
+        }
+        
+        // Cleanup old entries (keep only last 1000)
+        if lastNotificationTime.count > 1000 {
+            let sortedKeys = lastNotificationTime.sorted { $0.value < $1.value }.map { $0.key }
+            for key in sortedKeys.prefix(lastNotificationTime.count - 1000) {
+                lastNotificationTime.removeValue(forKey: key)
+            }
+        }
+        
+        print("Webhook sent for \(event.rawValue): \(droneId)")
+    }
+    
+    /// Clear webhook notification history for a specific drone/FPV (call when user deletes or stops tracking)
+    func clearNotificationHistory(for droneId: String) {
+        notifiedDroneIds.remove(droneId)
+        notifiedFPVIds.remove(droneId)
+        
+        // Remove from cooldown tracking
+        let keysToRemove = lastNotificationTime.keys.filter { $0.contains(droneId) }
+        for key in keysToRemove {
+            lastNotificationTime.removeValue(forKey: key)
+        }
+        
+        print("Cleared webhook notification history for: \(droneId)")
+    }
+    
     func sendWebhook(event: WebhookEvent, data: [String: Any], metadata: [String: String] = [:]) {
         Task { @MainActor in
             guard Settings.shared.webhooksEnabled else { return }
             guard Settings.shared.enabledWebhookEvents.contains(event) else { return }
+            
+            // Deduplication for drone and FPV detections
+            if event == .droneDetected || event == .fpvSignal {
+                // Try to extract drone/FPV ID from data
+                var droneId: String?
+                
+                if let id = data["id"] as? String {
+                    droneId = id
+                } else if let uid = data["uid"] as? String {
+                    droneId = uid
+                } else if let frequency = data["frequency"] as? Int {
+                    // FPV uses frequency as ID
+                    droneId = "fpv-\(frequency)"
+                } else if let frequency = data["frequency"] as? String {
+                    droneId = "fpv-\(frequency)"
+                }
+                
+                if let droneId = droneId {
+                    guard shouldSendWebhook(event: event, droneId: droneId) else {
+                        print("Skipping duplicate webhook for \(event.rawValue): \(droneId)")
+                        return
+                    }
+                    
+                    // Mark as sent BEFORE sending to prevent race conditions
+                    markWebhookSent(event: event, droneId: droneId)
+                }
+            }
             
             let enabledConfigs = configurations.filter {
                 $0.isEnabled && $0.enabledEvents.contains(event)
