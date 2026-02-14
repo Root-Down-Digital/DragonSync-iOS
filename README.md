@@ -11,7 +11,9 @@
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
-**Professional drone and aircraft detection for iOS/macOS** _Use WiFi, BT, ADS-B & SDR for total airspace awareness_
+**Professional drone and aircraft detection for iOS/macOS** 
+
+_Utilize WiFi, BT & SDR for total airspace awareness_
 
 **Remote/Drone ID • ADS-B tracking • FPV detection • Encrypted drone capable • Spoofing & Randomization detection**
 
@@ -24,7 +26,12 @@
 
 <table>
 <tr>
-<td width="60%" valign="top">
+  <td align="center"><img src="https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b" width="100%" alt="Detection interface" /></td>
+  <td align="center"><img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="100%" alt="Signal analysis" /></td>
+  <td align="center"><img src="https://github.com/user-attachments/assets/27674677-25f3-4ca8-be47-509ee5dba69e" width="100%" alt="914C869C-2EAA-47D2-AA86-0DB41CF0EE74" /></td>
+</tr>
+<tr>
+<td colspan="3">
 
 **Remote ID Broadcasts**
 - WiFi 2.4GHz and 5GHz transmissions
@@ -54,15 +61,6 @@
 - Position consistency validation
 - Flight physics anomaly detection
 - MAC randomization detection
-
-</td>
-<td width="40%" valign="top">
-
-![Detection interface](https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b)
-![Signal analysis](https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635)
-<img width="965" height="912" alt="914C869C-2EAA-47D2-AA86-0DB41CF0EE74" src="https://github.com/user-attachments/assets/27674677-25f3-4ca8-be47-509ee5dba69e" />
-
-
 
 </td>
 </tr>
