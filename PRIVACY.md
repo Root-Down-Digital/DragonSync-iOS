@@ -70,7 +70,7 @@ All app data is stored locally in your device's:
 You have complete control over your data:
 - **Access**: All data is accessible through the app interface
 - **Deletion**: You can delete all stored data through the app's settings
-- **Export**: Detection data can be exported (if implemented in future versions)
+- **Export**: Detection data can be exported in Settings > Database Manager
 
 ## Children's Privacy
 
