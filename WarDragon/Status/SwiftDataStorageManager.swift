@@ -17,7 +17,7 @@ class SwiftDataStorageManager: ObservableObject {
     
     private let logger = Logger(subsystem: "com.wardragon", category: "Storage")
     var cotViewModel: CoTViewModel?
-    var encounters: [String: DroneEncounter] = [:]
+    var encounters: [String: StoredDroneEncounter] = [:]
     var modelContext: ModelContext?
     private var macToIdCache: [String: String] = [:]
     private var caaToIdCache: [String: String] = [:]
@@ -78,72 +78,7 @@ class SwiftDataStorageManager: ObservableObject {
     
     // MARK: - Save Operations
     
-    /// Save an encounter directly from the legacy DroneEncounter format
-    /// This is optimized to avoid re-parsing and re-fetching
-    func saveEncounterDirect(_ encounter: DroneEncounter) {
-        guard let context = modelContext else {
-            logger.error("ModelContext not set")
-            return
-        }
-        
-        // Fetch or create SwiftData encounter
-        let stored = fetchOrCreateEncounter(id: encounter.id, message: nil, context: context)
-        
-        // Update scalar fields
-        stored.firstSeen = encounter.firstSeen
-        stored.lastSeen = encounter.lastSeen
-        stored.customName = encounter.customName
-        stored.trustStatus = encounter.trustStatus
-        stored.metadata = encounter.metadata
-        stored.macAddresses = Array(encounter.macHistory)
-        
-        // Only update flight points if count changed (optimization)
-        if stored.flightPoints.count != encounter.flightPath.count {
-            stored.flightPoints.forEach { context.delete($0) }
-            stored.flightPoints.removeAll()
-            
-            for point in encounter.flightPath {
-                if point.latitude == 0 && point.longitude == 0 && !point.isProximityPoint {
-                    logger.warning("Skipping invalid 0/0 flight point during saveEncounterDirect for \(encounter.id)")
-                    continue
-                }
-                
-                let storedPoint = StoredFlightPoint(
-                    latitude: point.latitude,
-                    longitude: point.longitude,
-                    altitude: point.altitude,
-                    timestamp: point.timestamp,
-                    homeLatitude: point.homeLatitude,
-                    homeLongitude: point.homeLongitude,
-                    isProximityPoint: point.isProximityPoint,
-                    proximityRssi: point.proximityRssi,
-                    proximityRadius: point.proximityRadius
-                )
-                stored.flightPoints.append(storedPoint)
-            }
-        }
-        
-        // Only update signatures if count changed (optimization)
-        if stored.signatures.count != encounter.signatures.count {
-            stored.signatures.forEach { context.delete($0) }
-            stored.signatures.removeAll()
-            
-            for sig in encounter.signatures {
-                let storedSig = StoredSignature(
-                    timestamp: sig.timestamp,
-                    rssi: sig.rssi,
-                    speed: sig.speed,
-                    height: sig.height,
-                    mac: sig.mac
-                )
-                stored.signatures.append(storedSig)
-            }
-        }
-        
-        stored.updateCachedStats()
-        
-        needsSave = true
-    }
+    // REMOVED: saveEncounterDirect() - no longer needed, we work with SwiftData directly
     
     func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
         guard let context = modelContext else {
@@ -389,17 +324,30 @@ class SwiftDataStorageManager: ObservableObject {
             updateInMemoryCacheForEncounterFast(encounter, sendChangeNotification: shouldNotify)
         }
         
+        // Update in-memory cache with SwiftData encounter directly
         if didAddPoint {
-            Task { @MainActor in
-                if let legacyEncounter = self.encounters[encounter.id] {
-                    DroneStorageManager.shared.updateEncounterInCache(legacyEncounter)
-                }
-            }
+            updateInMemoryCacheForEncounterFast(encounter, sendChangeNotification: true)
         }
     }
     // MARK: - Query Operations
     
     func fetchAllEncounters() -> [StoredDroneEncounter] {
+        guard let context = modelContext else { return [] }
+        
+        var descriptor = FetchDescriptor<StoredDroneEncounter>(
+            sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
+        )
+        descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
+        
+        do {
+            return try context.fetch(descriptor)
+        } catch {
+            logger.error("Failed to fetch encounters: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    func fetchAllEncountersLightweight() -> [StoredDroneEncounter] {
         guard let context = modelContext else { return [] }
         
         let descriptor = FetchDescriptor<StoredDroneEncounter>(
@@ -420,7 +368,8 @@ class SwiftDataStorageManager: ObservableObject {
         let predicate = #Predicate<StoredDroneEncounter> { encounter in
             encounter.id == id
         }
-        let descriptor = FetchDescriptor(predicate: predicate)
+        var descriptor = FetchDescriptor(predicate: predicate)
+        descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
         
         do {
             return try context.fetch(descriptor).first
@@ -431,37 +380,70 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     /// Fetch full encounter with all data (use for detail views)
-    func fetchFullEncounter(id: String) -> DroneEncounter? {
-        guard let stored = fetchEncounter(id: id) else { return nil }
-        return stored.toLegacy()
+    /// Returns the SwiftData model directly
+    func fetchFullEncounter(id: String) -> StoredDroneEncounter? {
+        guard let context = modelContext else { return nil }
+        
+        let predicate = #Predicate<StoredDroneEncounter> { encounter in
+            encounter.id == id
+        }
+        var descriptor = FetchDescriptor(predicate: predicate)
+        descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
+        
+        do {
+            return try context.fetch(descriptor).first
+        } catch {
+            logger.error("Failed to fetch full encounter \(id): \(error.localizedDescription)")
+            return nil
+        }
     }
     
     func deleteEncounter(id: String) {
-        guard let context = modelContext else { return }
+        guard let context = modelContext else { 
+            logger.error("Cannot delete encounter: ModelContext not set")
+            return 
+        }
         
-        if let encounter = fetchEncounter(id: id) {
-            context.delete(encounter)
+        guard let encounter = fetchEncounter(id: id) else {
+            logger.warning("Encounter \(id) not found for deletion")
+            return
+        }
+        
+        guard encounter.modelContext != nil else {
+            logger.warning("Encounter \(id) is already deleted or detached")
+            return
+        }
+        
+        let encounterId = encounter.id
+        
+        context.delete(encounter)
+        
+        let baseId = encounterId.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
+        let possibleIds = [
+            encounterId,
+            "drone-\(encounterId)",
+            baseId,
+            "drone-\(baseId)",
+            "fpv-\(baseId)",
+            "fpv-\(encounterId)"
+        ]
+        
+        for possibleId in possibleIds {
+            doNotTrackCache.remove(possibleId)
+            encounters.removeValue(forKey: possibleId)
+        }
+        
+        do {
+            try context.save()
+            logger.info("Deleted encounter and cleared caches: \(encounterId)")
             
-            let baseId = id.replacingOccurrences(of: "drone-", with: "").replacingOccurrences(of: "fpv-", with: "")
-            let possibleIds = [
-                id,
-                "drone-\(id)",
-                baseId,
-                "drone-\(baseId)",
-                "fpv-\(baseId)",
-                "fpv-\(id)"
-            ]
+            updateInMemoryCache()
+        } catch {
+            logger.error("Failed to delete encounter \(encounterId): \(error.localizedDescription)")
             
-            for possibleId in possibleIds {
-                doNotTrackCache.remove(possibleId)
-            }
-            
-            do {
-                try context.save()
-                updateInMemoryCache()
-                logger.info("Deleted encounter and cleared do-not-track: \(id)")
-            } catch {
-                logger.error("Failed to delete encounter: \(error.localizedDescription)")
+            if let nsError = error as NSError? {
+                logger.error("Error domain: \(nsError.domain), code: \(nsError.code)")
+                logger.error("Error details: \(nsError.userInfo)")
             }
         }
     }
@@ -473,7 +455,7 @@ class SwiftDataStorageManager: ObservableObject {
             let descriptor = FetchDescriptor<StoredDroneEncounter>()
             let encounters = try context.fetch(descriptor)
             
-            logger.info("🗑️ Deleting \(encounters.count) drone encounters...")
+            logger.info("Deleting \(encounters.count) drone encounters...")
             
             for encounter in encounters {
                 context.delete(encounter)
@@ -492,23 +474,9 @@ class SwiftDataStorageManager: ObservableObject {
         } catch {
             logger.error("Failed to delete all encounters: \(error.localizedDescription)")
             
-            do {
-                let descriptor = FetchDescriptor<StoredDroneEncounter>()
-                let remaining = try context.fetch(descriptor)
-                
-                var convertedEncounters: [String: DroneEncounter] = [:]
-                for encounter in remaining {
-                    guard encounter.modelContext != nil else {
-                        continue
-                    }
-                    convertedEncounters[encounter.id] = encounter.toLegacyLightweight()
-                }
-                
-                self.encounters = convertedEncounters
-            } catch {
-                self.encounters.removeAll()
-                logger.error("Failed to update cache after deletion error, cleared cache")
-            }
+            // On error, just clear the in-memory cache
+            self.encounters.removeAll()
+            logger.error("Failed to update cache after deletion error, cleared cache")
         }
     }
     
@@ -610,7 +578,7 @@ class SwiftDataStorageManager: ObservableObject {
             doNotTrackCache.remove(possibleId)
             if let encounter = fetchEncounter(id: possibleId) {
                 encounter.metadata.removeValue(forKey: "doNotTrack")
-                logger.info(" Cleared do not track for: \(possibleId)")
+                logger.info("Cleared do not track for: \(possibleId)")
             }
         }
         
@@ -638,7 +606,7 @@ class SwiftDataStorageManager: ObservableObject {
             do {
                 try modelContext?.save()
                 updateInMemoryCache()
-                logger.info(" Cleared do not track for \(clearedCount) encounters")
+                logger.info("Cleared do not track for \(clearedCount) encounters")
             } catch {
                 logger.error("Failed to save after clearing all do not track: \(error.localizedDescription)")
             }
@@ -689,21 +657,23 @@ class SwiftDataStorageManager: ObservableObject {
         if repairedCount > 0 {
             do {
                 try context.save()
-                logger.info(" Repaired cached stats for \(repairedCount) encounters")
+                logger.info("Repaired cached stats for \(repairedCount) encounters")
             } catch {
                 logger.error("Failed to save repaired stats: \(error.localizedDescription)")
             }
         } else {
-            logger.info(" All encounters have valid cached stats")
+            logger.info("All encounters have valid cached stats")
         }
     }
     
     // MARK: - Export Operations
     
+    /// Export encounters to CSV using stored SwiftData models
     func exportToCSV() -> String {
         let encounters = fetchAllEncounters()
         var csv = DroneEncounter.csvHeaders() + "\n"
         
+        // Only convert to legacy format for CSV export (unavoidable for now)
         for encounter in encounters {
             let legacy = encounter.toLegacy()
             csv += legacy.toCSVRow() + "\n"
@@ -899,21 +869,27 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     private func updateInMemoryCache() {
+        guard modelContext != nil else {
+            logger.warning("Cannot update cache: ModelContext not set")
+            return
+        }
+        
         let stored = fetchAllEncounters()
         
-        var convertedEncounters: [String: DroneEncounter] = [:]
+        // Store SwiftData models directly - NO CONVERSION
+        var convertedEncounters: [String: StoredDroneEncounter] = [:]
         for encounter in stored {
             guard encounter.modelContext != nil else {
-                logger.warning("Skipping deleted/detached encounter \(encounter.id) during cache update")
+                logger.warning("Skipping deleted/detached encounter during cache update (no context)")
                 continue
             }
             
-            convertedEncounters[encounter.id] = encounter.toLegacyLightweight()
+            convertedEncounters[encounter.id] = encounter
         }
         
         self.encounters = convertedEncounters
+        logger.info("Updated in-memory cache: \(convertedEncounters.count) encounters")
         
-        // Manually notify observers since encounters is not @Published
         Task { @MainActor in
             self.objectWillChange.send()
             DroneStorageManager.shared.objectWillChange.send()
@@ -925,7 +901,9 @@ class SwiftDataStorageManager: ObservableObject {
             logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounter")
             return
         }
-        encounters[encounter.id] = encounter.toLegacyLightweight()
+        
+        // Store SwiftData model directly - NO CONVERSION
+        encounters[encounter.id] = encounter
         
         // Manually notify observers since encounters is not @Published
         Task { @MainActor in
@@ -940,8 +918,8 @@ class SwiftDataStorageManager: ObservableObject {
             return
         }
         
-        // Always update the dictionary (no longer @Published, so no auto-notification)
-        encounters[encounter.id] = encounter.toLegacyLightweight()
+        // Store SwiftData model directly - NO CONVERSION
+        encounters[encounter.id] = encounter
         
         // Only manually notify observers when requested
         if sendChangeNotification {
@@ -975,7 +953,7 @@ class SwiftDataStorageManager: ObservableObject {
             let deleteCount = aircraftEncounters.count - maxAircraftCount
             let toDelete = sortedAircraft.prefix(deleteCount)
             
-            logger.info("🗑️ Cleaning up \(deleteCount) old aircraft encounters (keeping \(maxAircraftCount) newest)...")
+            logger.info("Cleaning up \(deleteCount) old aircraft encounters (keeping \(maxAircraftCount) newest)...")
             
             for aircraft in toDelete {
                 context.delete(aircraft)
@@ -1003,7 +981,7 @@ class SwiftDataStorageManager: ObservableObject {
             
             let aircraftEncounters = allEncounters.filter { $0.id.hasPrefix("aircraft-") }
             
-            logger.info("🗑️ Deleting \(aircraftEncounters.count) aircraft encounters...")
+            logger.info("Deleting \(aircraftEncounters.count) aircraft encounters...")
             
             for aircraft in aircraftEncounters {
                 context.delete(aircraft)
@@ -1076,7 +1054,7 @@ class SwiftDataStorageManager: ObservableObject {
             var totalPointsRemoved = 0
             var encountersAffected = 0
             
-            logger.info("🧹 Checking \(allEncounters.count) encounters for invalid 0/0 flight points...")
+            logger.info("Checking \(allEncounters.count) encounters for invalid 0/0 flight points...")
             
             for encounter in allEncounters {
                 let invalidPoints = encounter.flightPoints.filter { point in
@@ -1100,9 +1078,9 @@ class SwiftDataStorageManager: ObservableObject {
             
             if totalPointsRemoved > 0 {
                 try context.save()
-                logger.info("✅ Removed \(totalPointsRemoved) invalid flight points from \(encountersAffected) encounters")
+                logger.info("Removed \(totalPointsRemoved) invalid flight points from \(encountersAffected) encounters")
             } else {
-                logger.info("✅ No invalid flight points found")
+                logger.info("No invalid flight points found")
             }
             
             UserDefaults.standard.set(true, forKey: "invalidFlightPointsCleanupCompleted")

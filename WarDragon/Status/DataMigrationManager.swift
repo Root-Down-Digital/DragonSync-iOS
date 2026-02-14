@@ -144,9 +144,9 @@ class DataMigrationManager {
                     // Skip duplicates - the existing one is already in SwiftData
                     // If you need to update, delete and re-create instead of appending
                 } else {
-                    // Create new - this now safely builds arrays first
                     let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
                     modelContext.insert(stored)
+                    stored.updateCachedStats()
                     migratedCount += 1
                 }
                 
@@ -708,6 +708,7 @@ class DataMigrationManager {
                 for (_, encounter) in encounters {
                     let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
                     modelContext.insert(stored)
+                    stored.updateCachedStats()
                     importedCount += 1
                 }
                 
@@ -769,6 +770,7 @@ class DataMigrationManager {
                         for (_, encounter) in encounters {
                             let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
                             modelContext.insert(stored)
+                            stored.updateCachedStats()
                             importedCount += 1
                         }
                         
@@ -814,6 +816,7 @@ class DataMigrationManager {
                         for (_, encounter) in encounters {
                             let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
                             modelContext.insert(stored)
+                            stored.updateCachedStats()
                             importedCount += 1
                         }
                         

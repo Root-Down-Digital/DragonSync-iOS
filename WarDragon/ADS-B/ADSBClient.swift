@@ -252,9 +252,9 @@ class ADSBClient: ObservableObject {
                 guard let coord = aircraft.coordinate else { continue }
                 
                 await MainActor.run {
-                    var stored = self.fetchOrCreateAircraftEncounter(id: aircraftId, aircraft: aircraft)
+                    let stored = self.fetchOrCreateAircraftEncounter(id: aircraftId, aircraft: aircraft)
                     
-                    let flightPoint = FlightPathPoint(
+                    let flightPoint = StoredFlightPoint(
                         latitude: coord.latitude,
                         longitude: coord.longitude,
                         altitude: aircraft.altitude ?? 0,
@@ -268,18 +268,21 @@ class ADSBClient: ObservableObject {
                     
                     stored.lastSeen = aircraft.lastSeen
                     
-                    if let lastPoint = stored.flightPath.last {
+                    if let lastPoint = stored.flightPoints.last {
                         let loc1 = CLLocation(latitude: lastPoint.latitude, longitude: lastPoint.longitude)
                         let loc2 = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                         if loc1.distance(from: loc2) > 10 {
-                            stored.flightPath.append(flightPoint)
+                            stored.flightPoints.append(flightPoint)
                         }
                     } else {
-                        stored.flightPath.append(flightPoint)
+                        stored.flightPoints.append(flightPoint)
                     }
                     
-                    if stored.flightPath.count > 1000 {
-                        stored.flightPath = Array(stored.flightPath.suffix(500))
+                    if stored.flightPoints.count > 1000 {
+                        let toRemove = Array(stored.flightPoints.prefix(500))
+                        guard let context = SwiftDataStorageManager.shared.modelContext else { return }
+                        toRemove.forEach { context.delete($0) }
+                        stored.flightPoints.removeFirst(500)
                     }
                     
                     stored.metadata["callsign"] = aircraft.flight ?? ""
@@ -287,21 +290,24 @@ class ADSBClient: ObservableObject {
                     stored.metadata["category"] = aircraft.category ?? ""
                     stored.metadata["source"] = "ADS-B"
                     
-                    if let rssi = aircraft.rssi, rssi != 0,
-                       let signature = SignatureData(
-                        timestamp: aircraft.lastSeen.timeIntervalSince1970,
-                        rssi: rssi,
-                        speed: aircraft.groundSpeed ?? 0,
-                        height: aircraft.altitude ?? 0,
-                        mac: nil
-                       ) {
+                    if let rssi = aircraft.rssi, rssi != 0 {
+                        let signature = StoredSignature(
+                            timestamp: aircraft.lastSeen.timeIntervalSince1970,
+                            rssi: rssi,
+                            speed: aircraft.groundSpeed ?? 0,
+                            height: aircraft.altitude ?? 0,
+                            mac: nil
+                        )
                         stored.signatures.append(signature)
                         if stored.signatures.count > 500 {
-                            stored.signatures = Array(stored.signatures.suffix(250))
+                            let toRemove = Array(stored.signatures.prefix(250))
+                            guard let context = SwiftDataStorageManager.shared.modelContext else { return }
+                            toRemove.forEach { context.delete($0) }
+                            stored.signatures.removeFirst(250)
                         }
                     }
                     
-                    SwiftDataStorageManager.shared.saveEncounterDirect(stored)
+                    stored.updateCachedStats()
                 }
             }
             
@@ -311,14 +317,11 @@ class ADSBClient: ObservableObject {
         }
     }
     
-    /// Fetch or create a DroneEncounter for an aircraft
-    private func fetchOrCreateAircraftEncounter(id: String, aircraft: Aircraft) -> DroneEncounter {
-        // Check if we already have this aircraft in storage
+    private func fetchOrCreateAircraftEncounter(id: String, aircraft: Aircraft) -> StoredDroneEncounter {
         if let existing = SwiftDataStorageManager.shared.fetchFullEncounter(id: id) {
             return existing
         }
         
-        // Create new encounter for this aircraft
         let metadata: [String: String] = [
             "callsign": aircraft.flight ?? "",
             "squawk": aircraft.squawk ?? "",
@@ -326,18 +329,24 @@ class ADSBClient: ObservableObject {
             "source": "ADS-B"
         ]
         
-        return DroneEncounter(
+        let new = StoredDroneEncounter(
             id: id,
             firstSeen: aircraft.lastSeen,
             lastSeen: aircraft.lastSeen,
-            flightPath: [],
-            signatures: [],
+            customName: "",
+            trustStatusRaw: "unknown",
             metadata: metadata,
-            macHistory: []
+            macAddresses: []
         )
+        
+        guard let context = SwiftDataStorageManager.shared.modelContext else {
+            return new
+        }
+        
+        context.insert(new)
+        return new
     }
     
-    /// Calculate distance between two coordinates in meters
     private func calculateDistanceMeters(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
         let location1 = CLLocation(latitude: from.latitude, longitude: from.longitude)
         let location2 = CLLocation(latitude: to.latitude, longitude: to.longitude)

@@ -34,9 +34,9 @@ struct DroneInfoEditor: View {
                 "drone-\(baseId)"
             ]
             
-            var encounter: DroneEncounter? = nil
+            var encounter: StoredDroneEncounter? = nil
             for id in possibleIds {
-                if let found = DroneStorageManager.shared.encounters[id] {
+                if let found = SwiftDataStorageManager.shared.encounters[id] {
                     encounter = found
                     break
                 }

@@ -333,8 +333,10 @@ class DroneStorageManager: ObservableObject {
     // Reference to SwiftData manager (single source of truth)
     private let swiftDataManager = SwiftDataStorageManager.shared
     
-    // Lightweight cache for quick lookups (DO NOT use for writes)
-    @Published private(set) var encounters: [String: DroneEncounter] = [:]
+    // Direct access to SwiftData encounters (no conversion!)
+    var encounters: [String: StoredDroneEncounter] {
+        swiftDataManager.encounters
+    }
     
     init() {
         // Migration will happen automatically in app delegate
@@ -352,136 +354,60 @@ class DroneStorageManager: ObservableObject {
     }
 
     func markAsDoNotTrack(id: String) {
-        // Mark in SwiftData
         swiftDataManager.markAsDoNotTrack(id: id)
-        
-        // Update in-memory cache
-        let baseId = id.replacingOccurrences(of: "drone-", with: "")
-        let possibleIds = [id, "drone-\(id)", baseId, "drone-\(baseId)"]
-        
-        for possibleId in possibleIds {
-            if var encounter = encounters[possibleId] {
-                encounter.metadata["doNotTrack"] = "true"
-                encounters[possibleId] = encounter
-            }
-        }
-        print("Marked as do not track: \(possibleIds)")
     }
     
     //MARK: - Storage Functions/CRUD
     
     func updateDroneInfo(id: String, name: String, trustStatus: DroneSignature.UserDefinedInfo.TrustStatus) {
-        // Update SwiftData
         swiftDataManager.updateDroneInfo(id: id, name: name, trustStatus: trustStatus)
-        
-        // Update in-memory cache
-        if var encounter = encounters[id] {
-            encounter.metadata["customName"] = name
-            encounter.metadata["trustStatus"] = trustStatus.rawValue
-            encounters[id] = encounter
-            objectWillChange.send()
-        }
-        
-        // Notify CoTViewModel to update its parsedMessages array
-        NotificationCenter.default.post(
-            name: Notification.Name("DroneInfoUpdated"),
-            object: nil,
-            userInfo: ["droneId": id, "customName": name, "trustStatus": trustStatus.rawValue]
-        )
     }
     
     func deleteEncounter(id: String) {
-        // Delete from SwiftData
         swiftDataManager.deleteEncounter(id: id)
-        
-        // Delete from in-memory cache
-        encounters.removeValue(forKey: id)
-        objectWillChange.send()
     }
     
     func deleteAllEncounters() {
-        // Delete from SwiftData
         swiftDataManager.deleteAllEncounters()
         
         UserDefaults.standard.removeObject(forKey: "DroneEncounters")
         UserDefaults.standard.synchronize()
         print("🗑️ Cleared UserDefaults backup")
         
-        // Clear in-memory cache
-        encounters.removeAll()
-        objectWillChange.send()
-        
-        print(" Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
+        print("✅ Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
     }
     
     func saveToStorage() {
-        // Save all in-memory changes to SwiftData
-        for (_, encounter) in encounters {
-            swiftDataManager.saveEncounterDirect(encounter)
-        }
+        // No-op: SwiftData auto-saves
         swiftDataManager.forceSave()
     }
     
     func loadFromStorage() {
-        // Check if SwiftData manager has a ModelContext
-        if SwiftDataStorageManager.shared.modelContext == nil {
-            print("SwiftDataStorageManager.modelContext is nil - will fallback to UserDefaults")
-        }
-        
         // Check if migration has been completed
         let migrationCompleted = UserDefaults.standard.bool(forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
         
-        // Try to load from SwiftData first
-        updateInMemoryCache()
-        
-        // Log what we loaded
         let swiftDataCount = encounters.count
-        print("Loaded \(swiftDataCount) encounters from SwiftData")
+        print("📊 Loaded \(swiftDataCount) encounters from SwiftData")
         
-        // Only fallback to UserDefaults if migration hasn't been completed yet
-        // This prevents loading old data after it's been deleted from SwiftData
         if encounters.isEmpty && !migrationCompleted {
-            if let data = UserDefaults.standard.data(forKey: "DroneEncounters"),
-               let loaded = try? JSONDecoder().decode([String: DroneEncounter].self, from: data) {
-                encounters = loaded
-                print("SwiftData empty - Loaded \(encounters.count) encounters from UserDefaults (pre-migration)")
-                print("Migration may not have completed yet or data needs to be migrated")
-            } else {
-                print("No encounters found in either SwiftData or UserDefaults (fresh install)")
-            }
+            print("⚠️ SwiftData empty - migration may not be complete yet")
         } else if encounters.isEmpty && migrationCompleted {
-            print(" Migration completed - SwiftData is intentionally empty (all data deleted or no encounters yet)")
+            print("✅ Migration completed - SwiftData is empty (fresh start or all deleted)")
         } else {
-            print(" Using \(encounters.count) encounters from SwiftData")
+            print("✅ Using \(swiftDataCount) encounters from SwiftData")
         }
     }
     
-    private func updateInMemoryCache() {
-        // Get all encounters from SwiftData
-        let stored = swiftDataManager.fetchAllEncounters()
-        encounters = Dictionary(uniqueKeysWithValues: stored.map { ($0.id, $0.toLegacy()) })
-    }
-    
-    /// Update a single encounter in the cache
-    /// Used by SwiftDataStorageManager to keep cache in sync
-    func updateEncounterInCache(_ encounter: DroneEncounter) {
-        encounters[encounter.id] = encounter
-        objectWillChange.send()
-    }
-    
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
-        // Fetch encounter from SwiftData
         guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
             print("Encounter not found: \(droneId)")
             return
         }
         
-        // Update metadata
         var metadata = storedEncounter.metadata
         metadata["pilotLat"] = String(latitude)
         metadata["pilotLon"] = String(longitude)
         
-        // Preserve in history
         let timestamp = Date().timeIntervalSince1970
         let pilotEntry = "\(timestamp):\(latitude),\(longitude)"
         
@@ -492,33 +418,21 @@ class DroneStorageManager: ObservableObject {
         }
         
         storedEncounter.metadata = metadata
-        
-        // Save to SwiftData
         swiftDataManager.forceSave()
-        
-        // Update in-memory cache
-        if var encounter = encounters[droneId] {
-            encounter.metadata = metadata
-            encounters[droneId] = encounter
-        }
         
         print("Updated pilot location history for \(droneId)")
     }
 
-    // Update home location function to preserve history
     func updateHomeLocation(droneId: String, latitude: Double, longitude: Double) {
-        // Fetch encounter from SwiftData
         guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
             print("Encounter not found: \(droneId)")
             return
         }
         
-        // Update metadata
         var metadata = storedEncounter.metadata
         metadata["homeLat"] = String(latitude)
         metadata["homeLon"] = String(longitude)
         
-        // Preserve in history
         let timestamp = Date().timeIntervalSince1970
         let homeEntry = "\(timestamp):\(latitude),\(longitude)"
         
@@ -529,29 +443,18 @@ class DroneStorageManager: ObservableObject {
         }
         
         storedEncounter.metadata = metadata
-        
-        // Save to SwiftData
         swiftDataManager.forceSave()
-        
-        // Update in-memory cache
-        if var encounter = encounters[droneId] {
-            encounter.metadata = metadata
-            encounters[droneId] = encounter
-        }
         
         print("Updated home location history for \(droneId)")
     }
 
-    // Helper function for distance calculation
     private func calculateDistance(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
         let location1 = CLLocation(latitude: from.latitude, longitude: from.longitude)
         let location2 = CLLocation(latitude: to.latitude, longitude: to.longitude)
         return location1.distance(from: location2)
     }
 
-    
     func updateProximityPointsWithCorrectRadius() {
-        // Fetch all encounters from SwiftData
         let allEncounters = swiftDataManager.fetchAllEncounters()
         
         for storedEncounter in allEncounters {
@@ -562,15 +465,11 @@ class DroneStorageManager: ObservableObject {
             
             for point in storedEncounter.flightPoints {
                 if point.isProximityPoint {
-                    // Calculate from RSSI if needed
                     if let rssi = point.proximityRssi, (point.proximityRadius == nil || point.proximityRadius == 0) {
                         let generator = DroneSignatureGenerator()
                         var radius = generator.calculateDistance(rssi)
-                        
-                        // Ensure minimum radius
                         radius = max(radius, 50.0)
                         
-                        // Create new point with calculated radius
                         let updatedPoint = StoredFlightPoint(
                             latitude: point.latitude,
                             longitude: point.longitude,
@@ -593,26 +492,19 @@ class DroneStorageManager: ObservableObject {
             }
             
             if needsUpdate {
-                // Remove old points and add updated ones
                 storedEncounter.flightPoints.removeAll()
                 storedEncounter.flightPoints.append(contentsOf: updatedFlightPoints)
             }
         }
         
-        // Save all changes to SwiftData
         swiftDataManager.forceSave()
-        
-        // Refresh in-memory cache
-        updateInMemoryCache()
     }
     
     func exportToCSV() -> String {
-        // Use SwiftData manager for export
         return swiftDataManager.exportToCSV()
     }
     
     func shareCSV(from viewController: UIViewController? = nil) {
-        // Delegate to SwiftData manager
         swiftDataManager.shareCSV(from: viewController)
     }
     
@@ -646,6 +538,4 @@ class DroneStorageManager: ObservableObject {
             return filename
         }
     }
-    
-    
 }

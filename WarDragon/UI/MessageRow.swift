@@ -22,8 +22,7 @@ class DroneEditorManager: ObservableObject {
     private init() {}
     
     func present(droneId: String) {
-        // Load current data from storage
-        let encounter = DroneStorageManager.shared.encounters[droneId]
+        let encounter = SwiftDataStorageManager.shared.encounters[droneId]
         
         self.editingDroneId = droneId
         self.customName = encounter?.customName ?? ""
@@ -48,7 +47,7 @@ class DroneEditorManager: ObservableObject {
     func saveChanges() {
         guard let droneId = editingDroneId else { return }
         
-        DroneStorageManager.shared.updateDroneInfo(
+        SwiftDataStorageManager.shared.updateDroneInfo(
             id: droneId,
             name: customName,
             trustStatus: trustStatus
@@ -135,7 +134,7 @@ struct MessageRow: View, Equatable {
     let message: CoTViewModel.CoTMessage
     let cotViewModel: CoTViewModel
     let isCompact: Bool
-    @State private var droneEncounter: DroneEncounter?
+    @State private var droneEncounter: StoredDroneEncounter?
     @State private var droneSignature: DroneSignature?
     @State private var activeSheet: SheetType?
     @State private var showingSaveConfirmation = false
@@ -156,7 +155,7 @@ struct MessageRow: View, Equatable {
         self.message = message
         self.cotViewModel = cotViewModel
         self.isCompact = isCompact
-        _droneEncounter = State(initialValue: DroneStorageManager.shared.encounters[message.uid])
+        _droneEncounter = State(initialValue: SwiftDataStorageManager.shared.encounters[message.uid])
         _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
     }
     
@@ -214,14 +213,12 @@ struct MessageRow: View, Equatable {
         return details.joined(separator: " • ")
     }
     
-    // MARK: - Helper Properties
-    
-    private var currentEncounter: DroneEncounter? {
-        droneEncounter  // Use cached value
+    private var currentEncounter: StoredDroneEncounter? {
+        droneEncounter
     }
     
     private var signature: DroneSignature? {
-        droneSignature  // Use cached value
+        droneSignature
     }
     
     private func removeDroneFromTracking() {
@@ -245,7 +242,7 @@ struct MessageRow: View, Equatable {
         }
         
         for id in idsToRemove {
-            DroneStorageManager.shared.markAsDoNotTrack(id: id)
+            SwiftDataStorageManager.shared.markAsDoNotTrack(id: id)
         }
         
         cotViewModel.parsedMessages.removeAll { msg in
@@ -293,7 +290,7 @@ struct MessageRow: View, Equatable {
         }
         
         for id in possibleIds {
-            DroneStorageManager.shared.deleteEncounter(id: id)
+            SwiftDataStorageManager.shared.deleteEncounter(id: id)
         }
     }
 
@@ -830,7 +827,7 @@ struct MessageRow: View, Equatable {
 //                .frame(height: 80)
             }
         } else {
-            let encounter = DroneStorageManager.shared.encounters[message.uid]
+            let encounter = SwiftDataStorageManager.shared.encounters[message.uid]
             
             let validCoordinate: CLLocationCoordinate2D? = {
                 guard let coord = message.coordinate else { return nil }
@@ -840,7 +837,7 @@ struct MessageRow: View, Equatable {
             
             // Filter out 0/0 coordinates from flight path
             let flightCoords: [CLLocationCoordinate2D] = {
-                var coords = encounter?.flightPath.compactMap { point -> CLLocationCoordinate2D? in
+                var coords = encounter?.flightPoints.compactMap { point -> CLLocationCoordinate2D? in
                     let coord = point.coordinate
                     guard coord.latitude != 0 || coord.longitude != 0 else { return nil }
                     return coord
@@ -1188,8 +1185,7 @@ struct MessageRow: View, Equatable {
         .onAppear {
             updateEncounterData()
         }
-        .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
-            // Don't update while user is editing info - prevents text field from clearing
+        .onReceive(SwiftDataStorageManager.shared.objectWillChange) { _ in
             guard !isEditingThisDrone else { return }
             updateEncounterData()
         }
@@ -1271,7 +1267,7 @@ struct MessageRow: View, Equatable {
         .onAppear {
             updateEncounterData()
         }
-        .onReceive(DroneStorageManager.shared.objectWillChange) { _ in
+        .onReceive(SwiftDataStorageManager.shared.objectWillChange) { _ in
             guard !isEditingThisDrone else { return }
             updateEncounterData()
         }
@@ -1301,11 +1297,9 @@ struct MessageRow: View, Equatable {
     // MARK: - Helper Functions
     
     private func updateEncounterData() {
-        // Don't update cached data while the editor sheet is open
-        // This prevents the text fields from being cleared during editing
         guard !isEditingThisDrone else { return }
         
-        droneEncounter = DroneStorageManager.shared.encounters[message.uid]
+        droneEncounter = SwiftDataStorageManager.shared.encounters[message.uid]
         droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
     }
     
@@ -1361,8 +1355,8 @@ struct MessageRow: View, Equatable {
             NavigationStack {
                 DroneDetailView(
                     message: message,
-                    flightPath: DroneStorageManager.shared
-                        .encounters[message.uid]?.flightPath
+                    flightPath: SwiftDataStorageManager.shared
+                        .encounters[message.uid]?.flightPoints
                         .map { $0.coordinate } ?? [],
                     cotViewModel: cotViewModel
                 )

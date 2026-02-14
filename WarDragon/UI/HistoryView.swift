@@ -42,48 +42,54 @@ struct StoredEncountersView: View {
     }
     
     var sortedEncounters: [StoredDroneEncounter] {
-        // Group by MAC address to deduplicate (only if needed)
-        let uniqueEncounters: [StoredDroneEncounter]
-        
-        // Skip expensive deduplication if not needed
-        let hasDuplicates = Set(encounters.map { $0.metadata["mac"] ?? $0.id }).count != encounters.count
-        
-        if hasDuplicates {
-            uniqueEncounters = Dictionary(grouping: encounters) { encounter in
-                encounter.metadata["mac"] ?? encounter.id
-            }.values.map { encounters in
-                encounters.max { $0.lastSeen < $1.lastSeen }!
-            }
-        } else {
-            uniqueEncounters = encounters
+        let validEncounters = encounters.filter { encounter in
+            encounter.modelContext != nil
         }
         
-        // Fast filter
+        let uniqueEncounters: [StoredDroneEncounter]
+        
+        let hasDuplicates = Set(validEncounters.compactMap { encounter -> String? in
+            guard encounter.modelContext != nil else { return nil }
+            return encounter.metadata["mac"] ?? encounter.id
+        }).count != validEncounters.count
+        
+        if hasDuplicates {
+            uniqueEncounters = Dictionary(grouping: validEncounters) { encounter in
+                encounter.metadata["mac"] ?? encounter.id
+            }.values.compactMap { encounters in
+                encounters.max { $0.lastSeen < $1.lastSeen }
+            }
+        } else {
+            uniqueEncounters = validEncounters
+        }
+        
         let filtered: [StoredDroneEncounter]
         if searchText.isEmpty {
             filtered = uniqueEncounters
         } else {
             let lowercasedSearch = searchText.lowercased()
             filtered = uniqueEncounters.filter { encounter in
-                encounter.id.lowercased().contains(lowercasedSearch) ||
+                guard encounter.modelContext != nil else { return false }
+                return encounter.id.lowercased().contains(lowercasedSearch) ||
                 (encounter.metadata["caaRegistration"]?.lowercased().contains(lowercasedSearch) ?? false)
             }
         }
         
-        // Sort efficiently
         return filtered.sorted { first, second in
+            guard first.modelContext != nil, second.modelContext != nil else {
+                return first.modelContext != nil
+            }
+            
             switch sortOrder {
             case .lastSeen: 
                 return first.lastSeen > second.lastSeen
             case .firstSeen: 
                 return first.firstSeen < second.firstSeen
             case .maxAltitude:
-                // Use cached values if available
                 let firstAlt = cachedEncounterStats[first.id]?.maxAltitude ?? computeMaxAltitude(first)
                 let secondAlt = cachedEncounterStats[second.id]?.maxAltitude ?? computeMaxAltitude(second)
                 return firstAlt > secondAlt
             case .maxSpeed:
-                // Use cached values if available
                 let firstSpeed = cachedEncounterStats[first.id]?.maxSpeed ?? computeMaxSpeed(first)
                 let secondSpeed = cachedEncounterStats[second.id]?.maxSpeed ?? computeMaxSpeed(second)
                 return firstSpeed > secondSpeed
@@ -175,16 +181,24 @@ struct StoredEncountersView: View {
                         .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                     }
                     .onDelete { indexSet in
-                        // Disable animations during delete to prevent accessing deleted objects
                         withAnimation(nil) {
-                            for index in indexSet {
-                                let encounterToDelete = fpvEncounters[index]
-                                modelContext.delete(encounterToDelete)
-                                // Clean up cache
-                                cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                            let idsToDelete = indexSet.map { fpvEncounters[$0].id }
+                            let encountersToDelete = indexSet.map { fpvEncounters[$0] }
+                            
+                            for encounter in encountersToDelete {
+                                modelContext.delete(encounter)
                             }
-                            // Force immediate save to prevent faulting issues
-                            try? modelContext.save()
+                            
+                            for id in idsToDelete {
+                                cachedEncounterStats.removeValue(forKey: id)
+                            }
+                            
+                            do {
+                                try modelContext.save()
+                                print("Deleted \(idsToDelete.count) FPV encounters: \(idsToDelete)")
+                            } catch {
+                                print("Failed to delete FPV encounters: \(error)")
+                            }
                         }
                     }
                 } header: {
@@ -209,16 +223,24 @@ struct StoredEncountersView: View {
                         .listRowBackground(Color(UIColor.secondarySystemGroupedBackground))
                     }
                     .onDelete { indexSet in
-                        // Disable animations during delete to prevent accessing deleted objects
                         withAnimation(nil) {
-                            for index in indexSet {
-                                let encounterToDelete = regularEncounters[index]
-                                modelContext.delete(encounterToDelete)
-                                // Clean up cache
-                                cachedEncounterStats.removeValue(forKey: encounterToDelete.id)
+                            let idsToDelete = indexSet.map { regularEncounters[$0].id }
+                            let encountersToDelete = indexSet.map { regularEncounters[$0] }
+                            
+                            for encounter in encountersToDelete {
+                                modelContext.delete(encounter)
                             }
-                            // Force immediate save to prevent faulting issues
-                            try? modelContext.save()
+                            
+                            for id in idsToDelete {
+                                cachedEncounterStats.removeValue(forKey: id)
+                            }
+                            
+                            do {
+                                try modelContext.save()
+                                print("Deleted \(idsToDelete.count) drone encounters: \(idsToDelete)")
+                            } catch {
+                                print("Failed to delete drone encounters: \(error)")
+                            }
                         }
                     }
                 } header: {

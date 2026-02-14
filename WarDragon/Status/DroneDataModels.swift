@@ -8,11 +8,14 @@
 import Foundation
 import SwiftData
 import CoreLocation
+import OSLog
 
 // MARK: - SwiftData Models
 
 @Model
 final class StoredDroneEncounter {
+    private static let logger = Logger(subsystem: "com.wardragon", category: "StoredDroneEncounter")
+    
     @Attribute(.unique) var id: String
     var firstSeen: Date
     var lastSeen: Date
@@ -30,6 +33,41 @@ final class StoredDroneEncounter {
     
     @Relationship(deleteRule: .cascade) var flightPoints: [StoredFlightPoint] = []
     @Relationship(deleteRule: .cascade) var signatures: [StoredSignature] = []
+    
+    // Computed property for compatibility with legacy code
+    var flightPath: [FlightPathPoint] {
+        flightPoints.map { point in
+            FlightPathPoint(
+                latitude: point.latitude,
+                longitude: point.longitude,
+                altitude: point.altitude,
+                timestamp: point.timestamp,
+                homeLatitude: point.homeLatitude,
+                homeLongitude: point.homeLongitude,
+                isProximityPoint: point.isProximityPoint,
+                proximityRssi: point.proximityRssi,
+                proximityRadius: point.proximityRadius
+            )
+        }
+    }
+    
+    // Computed property for signature compatibility
+    var signatureData: [SignatureData] {
+        signatures.compactMap { sig in
+            SignatureData(
+                timestamp: sig.timestamp,
+                rssi: sig.rssi,
+                speed: sig.speed,
+                height: sig.height,
+                mac: sig.mac
+            )
+        }
+    }
+    
+    // Computed property for MAC history compatibility
+    var macHistory: Set<String> {
+        Set(macAddresses)
+    }
     
     init(id: String, 
          firstSeen: Date, 
@@ -50,12 +88,23 @@ final class StoredDroneEncounter {
         self.flightPoints = flightPoints
         self.signatures = signatures
         
-        // Initialize cached values
-        self.updateCachedStats()
+        self.cachedFlightPointCount = 0
+        self.cachedSignatureCount = 0
+        self.cachedMaxAltitude = 0
+        self.cachedMaxSpeed = 0
+        self.cachedAverageRSSI = 0
     }
     
-    // Call this after modifying flightPoints or signatures
     func updateCachedStats() {
+        guard modelContext != nil else {
+            cachedFlightPointCount = 0
+            cachedSignatureCount = 0
+            cachedMaxAltitude = 0
+            cachedMaxSpeed = 0
+            cachedAverageRSSI = 0
+            return
+        }
+        
         cachedFlightPointCount = flightPoints.count
         cachedSignatureCount = signatures.count
         cachedMaxAltitude = flightPoints.filter { !$0.isProximityPoint }.lazy.map { $0.altitude }.max() ?? 0
@@ -411,13 +460,9 @@ extension StoredDroneEncounter {
         )
     }
     
-    /// Lightweight conversion that only includes essential data for list views
-    /// This avoids converting thousands of flight points and signatures
-    /// Uses more points for recent activity (last hour) vs old encounters
     func toLegacyLightweight() -> DroneEncounter {
-        // Safety check: ensure we have a valid model context
-        // If the object has been deleted/detached, return a minimal encounter
         guard modelContext != nil else {
+            Self.logger.warning("toLegacyLightweight() called on deleted/detached encounter: \(self.id)")
             return DroneEncounter(
                 id: id,
                 firstSeen: firstSeen,
@@ -429,14 +474,10 @@ extension StoredDroneEncounter {
             )
         }
         
-        // Determine if this is a recent/active encounter (updated in last hour)
         let isRecentlyActive = Date().timeIntervalSince(lastSeen) < 3600
         
-        // For recent encounters, include more points for smooth flight path display
-        // For old encounters, only include a few points for preview
         let pointLimit = isRecentlyActive ? 200 : 10
         
-        // Filter out invalid 0/0 coordinates (except valid proximity points) BEFORE taking suffix
         let validFlightPoints = flightPoints.filter { point in
             !(point.latitude == 0 && point.longitude == 0) || point.isProximityPoint
         }
@@ -457,7 +498,6 @@ extension StoredDroneEncounter {
                 )
             }
         
-        // Only include last few signatures (e.g., last 50 for active, 10 for old)
         let signatureLimit = isRecentlyActive ? 50 : 10
         let recentSignatures = signatures
             .suffix(signatureLimit)
@@ -471,7 +511,6 @@ extension StoredDroneEncounter {
                 )
             }
         
-        // Safely access metadata - it might fault if object was deleted
         let safeMetadata = metadata
         let safeMacAddresses = macAddresses
         
