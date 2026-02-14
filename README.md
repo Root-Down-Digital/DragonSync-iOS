@@ -13,21 +13,24 @@
 
 **Professional drone and aircraft detection for iOS/macOS** 
 
-_Utilize WiFi, BT & SDR for total airspace awareness_
+Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing & Randomization Sniffers
 
-**Remote/Drone ID • ADS-B tracking • FPV detection • Encrypted drone capable • Spoofing & Randomization detection**
-
-[Get Started](#installation) • [What It Detects](#what-it-detects) • [Screenshots](#in-action) • [Integrations](#integrations)
+[Get Started](#installation) • [What It Detects](#what-it-detects) • [In-Action](#in-action) • [Integrations](#integrations)
 
 </div>
 
 ---
 ## What It Detects
 
+
+<img width="839" height="912" alt="screen1" src="https://github.com/user-attachments/assets/79b98235-36da-4adc-9b5a-3acb83d74622" />
+
+
 <table>
 <tr>
   <td align="center"><img src="https://github.com/user-attachments/assets/53bea64a-08ef-492a-8468-6b0ccb93105b" width="100%" alt="Detection interface" /></td>
-  <td align="center"><img src="https://github.com/user-attachments/assets/4bca9359-3351-4579-94fe-ce67ed1ae635" width="100%" alt="Signal analysis" /></td>
+  <td align="center"><img src="https://github.com/user-attachments/assets/4076f0c2-5cd0-43e5-9194-52c655006df7" width="100%" alt="Signal analysis" /></td>
+  
   <td align="center"><img src="https://github.com/user-attachments/assets/27674677-25f3-4ca8-be47-509ee5dba69e" width="100%" alt="914C869C-2EAA-47D2-AA86-0DB41CF0EE74" /></td>
 </tr>
 <tr>
@@ -82,10 +85,9 @@ _Utilize WiFi, BT & SDR for total airspace awareness_
 <tr>
 <td width="50%">
   <img src="https://github.com/user-attachments/assets/f1395931-c5f0-4812-9ce2-fa997ebc3a05" width="100%">
-
 </td>
 <td width="50%">
-   <img width="1011" height="790" alt="C5A87C81-B6C2-417D-B0CC-5068A7824E6D" src="https://github.com/user-attachments/assets/50ee00df-db1d-4afe-90ae-fdcdbd0201d7" />
+<img width="860" height="777" alt="screen2" src="https://github.com/user-attachments/assets/97aaccdf-cf47-4802-93ca-f4d8111c8a28" />
 </td>
 </tr>
 <tr>
@@ -94,9 +96,13 @@ _Utilize WiFi, BT & SDR for total airspace awareness_
 </td>
 <td width="50%">
   
-  ![EF03E9CF-B175-4B55-BCDE-B6B65A9032A4_4_5005_c](https://github.com/user-attachments/assets/5ee6bb15-584e-4724-bf26-4e6f45e77980)
+  
 
+  
+  ![EF03E9CF-B175-4B55-BCDE-B6B65A9032A4_4_5005_c](https://github.com/user-attachments/assets/5ee6bb15-584e-4724-bf26-4e6f45e77980) 
+  
   <img src="https://github.com/user-attachments/assets/3c5165f1-4177-4934-8a79-4196f3824ba3" width="100%">
+  
 </td>
 </tr>
 </table>
@@ -117,9 +123,7 @@ _Utilize WiFi, BT & SDR for total airspace awareness_
 - **ADS-B** - readsb, tar1090, dump1090 JSON feeds and [OpenSky Network](https://opensky-network.org)
 - **Background Mode** - Continuous monitoring with local notifications
 
-### Reference 
 
-- Although performed automatically, a database migration guide can be [found here](https://github.com/Root-Down-Digital/DragonSync-iOS/blob/main/MIGRATION_GUIDE.md) for users coming from earlier versions. 
 ---
 
 
@@ -135,11 +139,11 @@ _Utilize WiFi, BT & SDR for total airspace awareness_
 
 ---
 
-> [!NOTE]
-> Keeping up with all the changes to the backend data wrappers is difficult. This uses my own [zmq_decoder fork](https://github.com/lukeswitz/DroneID) for FPV and other changes. The stock DroneID parser is fine when not using FPV. Either use the fork, or multicast and additional python [DragonSync](https://github.com/alphafox02/DragonSync) wrapper for FPV. 
+
 
 - Be sure to `git pull` in both DroneID and DragonSync directories. 
-- Use the troubleshooting guide to fix common issues. 
+- Use the troubleshooting guide to fix common issues.
+- Multicast/`dragonsync.py` is not a requirement for FPV. Run the `fpv_receiver.py` in this [zmq_decoder fork](https://github.com/lukeswitz/DroneID)
 
 ## Option 1: WarDragon Pro
 
