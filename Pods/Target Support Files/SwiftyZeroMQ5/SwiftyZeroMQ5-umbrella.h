@@ -10,8 +10,8 @@
 #endif
 #endif
 
-#import "SwiftyZeroMQ.h"
-#import "zmq.h"
+#import <SwiftyZeroMQ5/SwiftyZeroMQ.h>
+#import <SwiftyZeroMQ5/zmq.h>
 
 FOUNDATION_EXPORT double SwiftyZeroMQ5VersionNumber;
 FOUNDATION_EXPORT const unsigned char SwiftyZeroMQ5VersionString[];

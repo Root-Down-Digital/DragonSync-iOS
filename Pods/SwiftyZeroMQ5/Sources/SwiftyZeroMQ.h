@@ -6,7 +6,7 @@
 //
 
 // Provides target conditional macros
-#import "TargetConditionals.h"
+#import <TargetConditionals.h>
 
 // Import appropriate library depending on target being iOS/tvOS/watchOS or
 // macOS
@@ -17,7 +17,7 @@
 #endif
 
 // Import libzmq functions and constants into Swift
-#import "zmq.h"
+#import <SwiftyZeroMQ5/zmq.h>
 
 //! Project version number for SwiftySwiftyZeroMQ.
 FOUNDATION_EXPORT double SwiftyZeroMQVersionNumber;

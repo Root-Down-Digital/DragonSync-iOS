@@ -519,24 +519,15 @@ extension SwiftyZeroMQ {
             return try self.getValueOption(ZMQ_BACKLOG)
         }
         
-        // TODO Move this to helper functions
-        private static func pointerTo<T>(_ value: T) -> UnsafeRawPointer where T: FixedWidthInteger {
-            var mutableValue = value
-            let data = Data(bytes: &mutableValue, count: MemoryLayout<T>.size)
-            return data.withUnsafeBytes({
-                let unsafeBufferPtr = $0.bindMemory(to: UInt8.self)
-                let u8ptr = unsafeBufferPtr.baseAddress!
-                return UnsafeRawPointer(u8ptr)
-            })
-        }
-        
         /**
          Generically set an option which is just a single value, such as an
          Int, Int64 or UInt64
          */
-        private func setValueOption<T: FixedWidthInteger>(_ name: Int32, _ value: T) throws {
-            let pointer = SwiftyZeroMQ.Socket.pointerTo(value)
-            try setOption(name, pointer, MemoryLayout<T>.size)
+        private func setValueOption<T>(_ name: Int32, _ value: T) throws {
+            var mutableValue = value
+            try withUnsafePointer(to: &mutableValue) { pointer in
+                try setOption(name, pointer, MemoryLayout<T>.size)
+            }
         }
         
         private func setBufferOption(_ name: Int32, _ buffer: Data) throws {
