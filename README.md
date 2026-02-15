@@ -72,6 +72,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 ---
 
 ## In Action
+![image](https://github.com/user-attachments/assets/5b4113a0-e227-4a0e-ba83-a761a09a9d1b)
 
 **Features**
 - **Live Map View** - All detections on unified map with color-coded markers
