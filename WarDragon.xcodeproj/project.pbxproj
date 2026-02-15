@@ -36,8 +36,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		EBA7F5BB2EFDD3CA00B1FD1D /* Tests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = Tests;
 			sourceTree = "<group>";
 		};
@@ -187,9 +185,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-WarDragon/Pods-WarDragon-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-WarDragon/Pods-WarDragon-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -363,7 +365,7 @@
 				CODE_SIGN_ENTITLEMENTS = WarDragon/WarDragon.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4.2.9;
+				CURRENT_PROJECT_VERSION = 4.3.0;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"WarDragon/Preview Content\"";
 				ENABLE_APP_SANDBOX = YES;
@@ -416,7 +418,7 @@
 				CODE_SIGN_ENTITLEMENTS = WarDragon/WarDragon.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4.2.9;
+				CURRENT_PROJECT_VERSION = 4.3.0;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"WarDragon/Preview Content\"";
 				ENABLE_APP_SANDBOX = YES;
