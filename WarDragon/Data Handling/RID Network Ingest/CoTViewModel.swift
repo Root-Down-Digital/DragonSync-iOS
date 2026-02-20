@@ -2924,15 +2924,23 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         Task { @MainActor in
-            let encounters = DroneStorageManager.shared.encounters
             let currentMonitorStatus = self.statusViewModel.statusMessages.last
             
+            // Save encounter first (synchronously within this Task)
             DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
+            
+            // Re-fetch encounters after save to ensure we have the latest data
+            let updatedEncounters = DroneStorageManager.shared.encounters
             
             if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: signature.primaryId.id) {
                 storedEncounter.logActivity(timestamp: Date())
                 
-                let existing = encounters[signature.primaryId.id]!
+                // Safe unwrap with guard to prevent crash
+                guard let existing = updatedEncounters[signature.primaryId.id] else {
+                    print("⚠️ Encounter not found for signature: \(signature.primaryId.id) - skipping position check")
+                    return
+                }
+                
                 let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
                 existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
                 existing.flightPath.last?.altitude != signature.position.altitude
