@@ -21,6 +21,14 @@ struct DroneDetailView: View {
     @State private var lastAlertRingUpdateTime: Date = .distantPast
     @State private var alertRingHash: Int = 0
     
+    // FAA Lookup states
+    @State private var showingFAAInfo = false
+    @State private var showingFAAError = false
+    @State private var faaData: [String: Any]?
+    @State private var faaError: String?
+    @State private var isLoadingFAA = false
+    @StateObject private var faaService = FAAService.shared
+    
     enum MapStyleOption {
         case standard
         case hybrid
@@ -118,6 +126,29 @@ struct DroneDetailView: View {
         }
         .navigationTitle(message.uid)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingFAAInfo) {
+            if let data = faaData {
+                NavigationStack {
+                    FAAInfoView(faaData: data)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") {
+                                    showingFAAInfo = false
+                                }
+                            }
+                        }
+                        .navigationTitle("FAA Lookup")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.height(350)])
+                .presentationDragIndicator(.visible)
+            }
+        }
+        .alert("FAA Lookup Error", isPresented: $showingFAAError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(faaError ?? "Unknown error occurred")
+        }
         .onAppear {
             updateAlertRingCache()
         }
@@ -134,6 +165,25 @@ struct DroneDetailView: View {
                 cachedAlertRings = newRings
                 print("Updated alert ring cache for \(message.uid): \(cachedAlertRings.count) rings")
             }
+        }
+    }
+    
+    // MARK: - FAA Lookup
+    
+    private func triggerFAALookup() {
+        guard let mac = message.mac else { return }
+        let remoteId = message.uid.replacingOccurrences(of: "drone-", with: "")
+        
+        isLoadingFAA = true
+        Task {
+            if let data = await faaService.queryFAAData(mac: mac, remoteId: remoteId) {
+                faaData = data
+                showingFAAInfo = true
+            } else if let error = faaService.error {
+                faaError = error
+                showingFAAError = true
+            }
+            isLoadingFAA = false
         }
     }
     
@@ -332,6 +382,31 @@ struct DroneDetailView: View {
                 Text("Drone Information")
                     .font(.headline)
                 Spacer()
+                
+                // Add FAA lookup button for eligible drones
+                if !message.isFPVDetection && 
+                   (message.idType.contains("Serial Number") ||
+                    message.idType.contains("ANSI") ||
+                    message.idType.contains("CTA-2063-A")) {
+                    Button(action: triggerFAALookup) {
+                        HStack(spacing: 4) {
+                            if isLoadingFAA {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "airplane.departure")
+                            }
+                            Text("FAA Lookup")
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                    }
+                    .disabled(isLoadingFAA || message.mac == nil)
+                }
             }
             
             VStack(spacing: 4) {

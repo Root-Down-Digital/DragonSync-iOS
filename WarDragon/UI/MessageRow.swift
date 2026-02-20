@@ -139,7 +139,13 @@ struct MessageRow: View, Equatable {
     @State private var activeSheet: SheetType?
     @State private var showingSaveConfirmation = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingFAAInfo = false
+    @State private var showingFAAError = false
+    @State private var faaData: [String: Any]?
+    @State private var faaError: String?
+    @State private var isLoadingFAA = false
     @ObservedObject private var editorManager: DroneEditorManager = .shared
+    @StateObject private var faaService = FAAService.shared
     
     // Computed property to check if this row's drone is being edited
     private var isEditingThisDrone: Bool {
@@ -294,8 +300,24 @@ struct MessageRow: View, Equatable {
         }
     }
 
-    // No longer needed - removed findEncounterForID
     // MARK: - Helper Methods
+    
+    private func triggerFAALookup() {
+        guard let mac = message.mac else { return }
+        let remoteId = message.uid.replacingOccurrences(of: "drone-", with: "")
+        
+        isLoadingFAA = true
+        Task {
+            if let data = await faaService.queryFAAData(mac: mac, remoteId: remoteId) {
+                faaData = data
+                showingFAAInfo = true
+            } else if let error = faaService.error {
+                faaError = error
+                showingFAAError = true
+            }
+            isLoadingFAA = false
+        }
+    }
     
     private func rssiColor(_ rssi: Double) -> Color {
         // FPV RX5808 RSSI Pin
@@ -512,6 +534,7 @@ struct MessageRow: View, Equatable {
                     message.idType.contains("ANSI") ||
                     message.idType.contains("CTA-2063-A") {
                     FAALookupButton(mac: message.mac, remoteId: message.uid.replacingOccurrences(of: "drone-", with: ""))
+                        .buttonStyle(.plain)
                 }
                 
                 Menu {
@@ -525,7 +548,17 @@ struct MessageRow: View, Equatable {
                         Label("Live Map", systemImage: "map")
                     }
                     
-                   
+                    // Add FAA lookup to menu when there are multiple items
+                    if message.idType.contains("Serial Number") ||
+                        message.idType.contains("ANSI") ||
+                        message.idType.contains("CTA-2063-A") {
+                        Button(action: { 
+                            // Trigger the FAA lookup through a state variable
+                            triggerFAALookup()
+                        }) {
+                            Label("FAA Lookup", systemImage: "airplane.departure")
+                        }
+                    }
                     
                     Divider()
                     
@@ -1199,6 +1232,29 @@ struct MessageRow: View, Equatable {
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
         }
+        .sheet(isPresented: $showingFAAInfo) {
+            if let data = faaData {
+                NavigationStack {
+                    FAAInfoView(faaData: data)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") {
+                                    showingFAAInfo = false
+                                }
+                            }
+                        }
+                        .navigationTitle("FAA Lookup")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.height(350)])
+                .presentationDragIndicator(.visible)
+            }
+        }
+        .alert("FAA Lookup Error", isPresented: $showingFAAError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(faaError ?? "Unknown error occurred")
+        }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
         } message: {
@@ -1286,6 +1342,29 @@ struct MessageRow: View, Equatable {
         }
         .sheet(item: $activeSheet) { sheetType in
             sheetContent(for: sheetType)
+        }
+        .sheet(isPresented: $showingFAAInfo) {
+            if let data = faaData {
+                NavigationStack {
+                    FAAInfoView(faaData: data)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") {
+                                    showingFAAInfo = false
+                                }
+                            }
+                        }
+                        .navigationTitle("FAA Lookup")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.height(350)])
+                .presentationDragIndicator(.visible)
+            }
+        }
+        .alert("FAA Lookup Error", isPresented: $showingFAAError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(faaError ?? "Unknown error occurred")
         }
         .alert("Delete Drone", isPresented: $showingDeleteConfirmation) {
             deleteConfirmationButtons
