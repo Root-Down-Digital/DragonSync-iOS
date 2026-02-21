@@ -4,7 +4,7 @@ FRAMEWORK_SEARCH_PATHS = $(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/SwiftyZer
 GCC_PREPROCESSOR_DEFINITIONS = $(inherited) COCOAPODS=1
 HEADER_SEARCH_PATHS = $(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/SwiftyZeroMQ5/SwiftyZeroMQ5.framework/Headers"
 LD_RUNPATH_SEARCH_PATHS = $(inherited) /usr/lib/swift '@executable_path/Frameworks' '@loader_path/Frameworks'
-LIBRARY_SEARCH_PATHS = $(inherited) "${PODS_ROOT}/SwiftyZeroMQ5/Libraries" "${TOOLCHAIN_DIR}/usr/lib/swift/${PLATFORM_NAME}" /usr/lib/swift
+LIBRARY_SEARCH_PATHS = $(inherited) "${PODS_ROOT}/SwiftyZeroMQ5/Libraries" /usr/lib/swift
 OTHER_LDFLAGS = $(inherited) -ObjC -l"c++" -framework "SwiftyZeroMQ5"
 OTHER_MODULE_VERIFIER_FLAGS = $(inherited) "-F${PODS_CONFIGURATION_BUILD_DIR}/SwiftyZeroMQ5"
 OTHER_SWIFT_FLAGS = $(inherited) -D COCOAPODS
