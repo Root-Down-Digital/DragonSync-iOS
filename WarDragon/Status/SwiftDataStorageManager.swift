@@ -188,16 +188,35 @@ class SwiftDataStorageManager: ObservableObject {
         
         if !(lat == 0 && lon == 0) && !message.isFPVDetection {
             logger.info("Adding regular flight point for \(droneId): lat=\(lat), lon=\(lon), isFPV=\(message.isFPVDetection)")
+            
+            // Extract movement data from message
+            let heading = Double(message.trackCourse ?? message.direction ?? "0") ?? 0
+            let groundSpeed = Double(message.speed) ?? 0
+            let verticalSpeed = Double(message.vspeed) ?? 0
+            
+            // Extract height data
+            let heightAGL = Double(message.height ?? "0") ?? 0
+            let altPressure = message.alt_pressure ?? (Double(message.alt) ?? 0)
+            
             let newPoint = StoredFlightPoint(
                 latitude: lat,
                 longitude: lon,
-                altitude: Double(message.alt) ?? 0.0,
+                altitude: altPressure,
                 timestamp: Date().timeIntervalSince1970,
                 homeLatitude: Double(message.homeLat),
                 homeLongitude: Double(message.homeLon),
                 isProximityPoint: false,
                 proximityRssi: nil,
-                proximityRadius: nil
+                proximityRadius: nil,
+                heading: heading != 0 ? heading : nil,
+                groundSpeed: groundSpeed != 0 ? groundSpeed : nil,
+                verticalSpeed: verticalSpeed != 0 ? verticalSpeed : nil,
+                climbRate: nil,
+                turnRate: nil,
+                heightAboveGround: heightAGL != 0 ? heightAGL : nil,
+                heightAboveTakeoff: nil,
+                heightReferenceType: message.heightType,
+                heightConsistencyScore: nil
             )
             
             let lastValidPoint = encounter.flightPoints.last(where: { 
@@ -269,6 +288,85 @@ class SwiftDataStorageManager: ObservableObject {
             }
         }
         
+        // Track operator location over time
+        if let pilotLat = Double(message.pilotLat),
+           let pilotLon = Double(message.pilotLon),
+           pilotLat != 0 || pilotLon != 0 {
+            
+            // Update latest coordinates
+            encounter.operatorLatitude = pilotLat
+            encounter.operatorLongitude = pilotLon
+            
+            // Track historical operator movement
+            let shouldAddOpLocation: Bool
+            if let lastOpLocation = encounter.operatorLocations.last {
+                let dist = calculateDistance(
+                    from: CLLocationCoordinate2D(latitude: lastOpLocation.latitude, longitude: lastOpLocation.longitude),
+                    to: CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+                )
+                let timeGap = Date().timeIntervalSince1970 - lastOpLocation.timestamp
+                shouldAddOpLocation = dist > 5.0 || timeGap > 30.0
+            } else {
+                shouldAddOpLocation = true
+            }
+            
+            if shouldAddOpLocation {
+                let opLoc = StoredOperatorLocation(
+                    latitude: pilotLat,
+                    longitude: pilotLon,
+                    altitude: nil,
+                    timestamp: Date().timeIntervalSince1970
+                )
+                encounter.operatorLocations.append(opLoc)
+                
+                // Limit operator location history
+                if encounter.operatorLocations.count > 100 {
+                    let toRemove = Array(encounter.operatorLocations.prefix(20))
+                    toRemove.forEach { context.delete($0) }
+                    encounter.operatorLocations.removeFirst(20)
+                }
+            }
+        }
+        
+        // Track home location changes
+        if let homeLat = Double(message.homeLat),
+           let homeLon = Double(message.homeLon),
+           homeLat != 0 || homeLon != 0 {
+            
+            // Update latest coordinates
+            encounter.homeLatitude = homeLat
+            encounter.homeLongitude = homeLon
+            
+            // Track home location changes (different from operator - home shouldn't move much)
+            let shouldAddHomeLocation: Bool
+            if let lastHomeLocation = encounter.homeLocations.last {
+                let dist = calculateDistance(
+                    from: CLLocationCoordinate2D(latitude: lastHomeLocation.latitude, longitude: lastHomeLocation.longitude),
+                    to: CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+                )
+                shouldAddHomeLocation = dist > 1.0 // Only add if home actually moved
+            } else {
+                shouldAddHomeLocation = true
+            }
+            
+            if shouldAddHomeLocation {
+                let homeLoc = StoredHomeLocation(
+                    latitude: homeLat,
+                    longitude: homeLon,
+                    altitude: nil,
+                    timestamp: Date().timeIntervalSince1970
+                )
+                encounter.homeLocations.append(homeLoc)
+                
+                // Limit home location history
+                if encounter.homeLocations.count > 50 {
+                    let toRemove = Array(encounter.homeLocations.prefix(10))
+                    toRemove.forEach { context.delete($0) }
+                    encounter.homeLocations.removeFirst(10)
+                }
+            }
+        }
+        
         if let mac = message.mac, !mac.isEmpty && !encounter.macAddresses.contains(mac) {
             encounter.macAddresses.append(mac)
             macToIdCache[mac] = encounter.id
@@ -291,12 +389,17 @@ class SwiftDataStorageManager: ObservableObject {
             }
             
             if shouldAdd {
+                // Create full DroneSignature for complete data retention
+                let droneSignature = createDroneSignature(from: message, encounter: encounter)
+                let signatureData = droneSignature.flatMap { try? JSONEncoder().encode($0) }
+                
                 let sig = StoredSignature(
                     timestamp: Date().timeIntervalSince1970,
                     rssi: Double(rssi),
                     speed: Double(message.speed) ?? 0.0,
                     height: Double(message.height ?? "0.0") ?? 0.0,
-                    mac: message.mac
+                    mac: message.mac,
+                    signatureData: signatureData
                 )
                 encounter.signatures.append(sig)
                 

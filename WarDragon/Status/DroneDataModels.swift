@@ -24,6 +24,12 @@ final class StoredDroneEncounter {
     var metadata: [String: String]
     var macAddresses: [String]
     
+    // Structured coordinate storage (replaces string-based metadata)
+    var operatorLatitude: Double?
+    var operatorLongitude: Double?
+    var homeLatitude: Double?
+    var homeLongitude: Double?
+    
     // Cached computed values for performance
     var cachedMaxAltitude: Double = 0
     var cachedMaxSpeed: Double = 0
@@ -33,6 +39,8 @@ final class StoredDroneEncounter {
     
     @Relationship(deleteRule: .cascade) var flightPoints: [StoredFlightPoint] = []
     @Relationship(deleteRule: .cascade) var signatures: [StoredSignature] = []
+    @Relationship(deleteRule: .cascade) var operatorLocations: [StoredOperatorLocation] = []
+    @Relationship(deleteRule: .cascade) var homeLocations: [StoredHomeLocation] = []
     
     // Computed property for compatibility with legacy code
     var flightPath: [FlightPathPoint] {
@@ -76,8 +84,14 @@ final class StoredDroneEncounter {
          trustStatusRaw: String = "unknown",
          metadata: [String: String] = [:],
          macAddresses: [String] = [],
+         operatorLatitude: Double? = nil,
+         operatorLongitude: Double? = nil,
+         homeLatitude: Double? = nil,
+         homeLongitude: Double? = nil,
          flightPoints: [StoredFlightPoint] = [],
-         signatures: [StoredSignature] = []) {
+         signatures: [StoredSignature] = [],
+         operatorLocations: [StoredOperatorLocation] = [],
+         homeLocations: [StoredHomeLocation] = []) {
         self.id = id
         self.firstSeen = firstSeen
         self.lastSeen = lastSeen
@@ -85,14 +99,33 @@ final class StoredDroneEncounter {
         self.trustStatusRaw = trustStatusRaw
         self.metadata = metadata
         self.macAddresses = macAddresses
+        self.operatorLatitude = operatorLatitude
+        self.operatorLongitude = operatorLongitude
+        self.homeLatitude = homeLatitude
+        self.homeLongitude = homeLongitude
         self.flightPoints = flightPoints
         self.signatures = signatures
+        self.operatorLocations = operatorLocations
+        self.homeLocations = homeLocations
         
         self.cachedFlightPointCount = 0
         self.cachedSignatureCount = 0
         self.cachedMaxAltitude = 0
         self.cachedMaxSpeed = 0
         self.cachedAverageRSSI = 0
+    }
+    
+    // Computed properties for easy access
+    var operatorLocation: CLLocationCoordinate2D? {
+        guard let lat = operatorLatitude, let lon = operatorLongitude,
+              lat != 0 || lon != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    var homeLocation: CLLocationCoordinate2D? {
+        guard let lat = homeLatitude, let lon = homeLongitude,
+              lat != 0 || lon != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
     
     func updateCachedStats() {
@@ -259,6 +292,19 @@ final class StoredFlightPoint {
     var proximityRssi: Double?
     var proximityRadius: Double?
     
+    // Movement vector data from DroneSignature
+    var heading: Double?
+    var groundSpeed: Double?
+    var verticalSpeed: Double?
+    var climbRate: Double?
+    var turnRate: Double?
+    
+    // Height info from DroneSignature
+    var heightAboveGround: Double?
+    var heightAboveTakeoff: Double?
+    var heightReferenceType: String?
+    var heightConsistencyScore: Double?
+    
     @Relationship(inverse: \StoredDroneEncounter.flightPoints) 
     var encounter: StoredDroneEncounter?
     
@@ -270,7 +316,16 @@ final class StoredFlightPoint {
          homeLongitude: Double? = nil,
          isProximityPoint: Bool = false,
          proximityRssi: Double? = nil,
-         proximityRadius: Double? = nil) {
+         proximityRadius: Double? = nil,
+         heading: Double? = nil,
+         groundSpeed: Double? = nil,
+         verticalSpeed: Double? = nil,
+         climbRate: Double? = nil,
+         turnRate: Double? = nil,
+         heightAboveGround: Double? = nil,
+         heightAboveTakeoff: Double? = nil,
+         heightReferenceType: String? = nil,
+         heightConsistencyScore: Double? = nil) {
         self.latitude = latitude
         self.longitude = longitude
         self.altitude = altitude
@@ -280,6 +335,15 @@ final class StoredFlightPoint {
         self.isProximityPoint = isProximityPoint
         self.proximityRssi = proximityRssi
         self.proximityRadius = proximityRadius
+        self.heading = heading
+        self.groundSpeed = groundSpeed
+        self.verticalSpeed = verticalSpeed
+        self.climbRate = climbRate
+        self.turnRate = turnRate
+        self.heightAboveGround = heightAboveGround
+        self.heightAboveTakeoff = heightAboveTakeoff
+        self.heightReferenceType = heightReferenceType
+        self.heightConsistencyScore = heightConsistencyScore
     }
     
     var coordinate: CLLocationCoordinate2D {
@@ -295,6 +359,52 @@ final class StoredFlightPoint {
     }
 }
 
+// New model for tracking operator movement over time
+@Model
+final class StoredOperatorLocation {
+    var latitude: Double
+    var longitude: Double
+    var altitude: Double?
+    var timestamp: TimeInterval
+    
+    @Relationship(inverse: \StoredDroneEncounter.operatorLocations)
+    var encounter: StoredDroneEncounter?
+    
+    init(latitude: Double, longitude: Double, altitude: Double? = nil, timestamp: TimeInterval) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.timestamp = timestamp
+    }
+    
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+// New model for tracking home/takeoff point changes over time
+@Model
+final class StoredHomeLocation {
+    var latitude: Double
+    var longitude: Double
+    var altitude: Double?
+    var timestamp: TimeInterval
+    
+    @Relationship(inverse: \StoredDroneEncounter.homeLocations)
+    var encounter: StoredDroneEncounter?
+    
+    init(latitude: Double, longitude: Double, altitude: Double? = nil, timestamp: TimeInterval) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.timestamp = timestamp
+    }
+    
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
 @Model
 final class StoredSignature {
     var timestamp: TimeInterval
@@ -303,6 +413,14 @@ final class StoredSignature {
     var height: Double
     var mac: String?
     
+    // Store serialized DroneSignature for full data retention
+    var signatureData: Data?
+    
+    // Spoof detection result
+    var isSpoofed: Bool = false
+    var spoofConfidence: Double = 0.0
+    var spoofReasons: [String] = []
+    
     @Relationship(inverse: \StoredDroneEncounter.signatures) 
     var encounter: StoredDroneEncounter?
     
@@ -310,16 +428,30 @@ final class StoredSignature {
          rssi: Double,
          speed: Double,
          height: Double,
-         mac: String? = nil) {
+         mac: String? = nil,
+         signatureData: Data? = nil,
+         isSpoofed: Bool = false,
+         spoofConfidence: Double = 0.0,
+         spoofReasons: [String] = []) {
         self.timestamp = timestamp
         self.rssi = rssi
         self.speed = speed
         self.height = height
         self.mac = mac
+        self.signatureData = signatureData
+        self.isSpoofed = isSpoofed
+        self.spoofConfidence = spoofConfidence
+        self.spoofReasons = spoofReasons
     }
     
     var isValid: Bool {
         rssi != 0
+    }
+    
+    // Deserialize full DroneSignature
+    var fullSignature: DroneSignature? {
+        guard let data = signatureData else { return nil }
+        return try? JSONDecoder().decode(DroneSignature.self, from: data)
     }
 }
 

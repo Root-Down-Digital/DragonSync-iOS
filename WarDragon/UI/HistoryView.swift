@@ -638,6 +638,11 @@ struct StoredEncountersView: View {
         @State private var hasAppeared = false
         @ObservedObject private var editorManager = DroneEditorManager.shared
         
+        // Cache map items to prevent constant recomputation
+        @State private var cachedPilotItems: [MapPointItem] = []
+        @State private var cachedHomeItems: [MapPointItem] = []
+        @State private var lastSignatureHash: Int = 0
+        
         enum MapStyle {
             case standard, satellite, hybrid
         }
@@ -908,8 +913,25 @@ struct StoredEncountersView: View {
                 !(point.latitude == 0 && point.longitude == 0)
             }
             
-            let pilotItems = buildPilotItems()
-            let homeItems = buildHomeItems()
+            // Update cached items only if signatures changed
+            let currentHash = signatures.map { $0.id }.hashValue
+            let pilotItems: [MapPointItem]
+            let homeItems: [MapPointItem]
+            
+            if currentHash != lastSignatureHash {
+                pilotItems = buildPilotItems()
+                homeItems = buildHomeItems()
+                // Update cache asynchronously to avoid modifying state during view update
+                DispatchQueue.main.async {
+                    cachedPilotItems = pilotItems
+                    cachedHomeItems = homeItems
+                    lastSignatureHash = currentHash
+                }
+            } else {
+                pilotItems = cachedPilotItems
+                homeItems = cachedHomeItems
+            }
+            
             let alertRings = cotViewModel.alertRings.filter { ring in
                 ring.droneId == encounter.id ||
                 ring.droneId.hasPrefix("\(encounter.id)-")
@@ -989,22 +1011,33 @@ struct StoredEncountersView: View {
                     }
                 }
                 
-                // Pilot locations
+                // Pilot location (flight path trail + marker)
                 Group {
                     let pilotCoordinates = pilotItems.map { $0.coordinate }
+                    
+                    // Draw operator movement trail if multiple positions
                     if pilotCoordinates.count > 1 {
-                        let smoothedPilotPath = FlightPathSmoother.smoothPath(pilotCoordinates, smoothness: 4)
-                        MapPolyline(coordinates: smoothedPilotPath)
-                            .stroke(.purple, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        let smoothedPath = FlightPathSmoother.smoothPath(pilotCoordinates, smoothness: 4)
+                        MapPolyline(coordinates: smoothedPath)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [.purple.opacity(0.6), .orange.opacity(0.8)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                ),
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round, dash: [5, 3])
+                            )
                     }
                     
-                    ForEach(pilotItems) { item in
-                        Annotation(item.title, coordinate: item.coordinate) {
+                    // Show latest pilot marker only
+                    if let latestPilot = pilotItems.last {
+                        Annotation(latestPilot.title, coordinate: latestPilot.coordinate) {
                             ZStack {
                                 Circle()
-                                    .fill(item.tintColor)
+                                    .fill(latestPilot.tintColor)
                                     .frame(width: 30, height: 30)
-                                Image(systemName: item.systemImageName)
+                                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                Image(systemName: latestPilot.systemImageName)
                                     .foregroundStyle(.white)
                                     .font(.body)
                             }
@@ -1012,20 +1045,15 @@ struct StoredEncountersView: View {
                     }
                 }
                 
-                // Home locations
+                // Home locations (multiple markers with time-based colors)
                 Group {
-                    let homeCoordinates = homeItems.map { $0.coordinate }
-                    if homeCoordinates.count > 1 {
-                        MapPolyline(coordinates: homeCoordinates)
-                            .stroke(.yellow, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    }
-                    
                     ForEach(homeItems) { item in
                         Annotation(item.title, coordinate: item.coordinate) {
                             ZStack {
                                 Circle()
                                     .fill(item.tintColor)
                                     .frame(width: 30, height: 30)
+                                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
                                 Image(systemName: item.systemImageName)
                                     .foregroundStyle(.white)
                                     .font(.body)
@@ -1048,116 +1076,99 @@ struct StoredEncountersView: View {
         }
         
         private func buildPilotItems() -> [MapPointItem] {
-            var items: [MapPointItem] = []
-            var seenCoordinates = Set<String>()
+            // FPV detections don't have pilot data
+            guard !isFPVDetection else { return [] }
             
-            if let pilotLatStr = encounter.metadata["pilotLat"],
-               let pilotLonStr = encounter.metadata["pilotLon"],
-               let lat = Double(pilotLatStr), let lon = Double(pilotLonStr),
-               lat != 0 || lon != 0 {
-                let coordKey = "\(lat),\(lon)"
-                if !seenCoordinates.contains(coordKey) {
-                    items.append(MapPointItem(
-                        title: "Latest Pilot",
-                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+            // Return all operator locations from structured data for path display
+            let operatorLocs = encounter.operatorLocations.sorted { $0.timestamp < $1.timestamp }
+            
+            if !operatorLocs.isEmpty {
+                return operatorLocs.map { opLoc in
+                    MapPointItem(
+                        title: "Pilot",
+                        coordinate: opLoc.coordinate,
                         systemImageName: "person.fill",
-                        tintColor: .blue
-                    ))
-                    seenCoordinates.insert(coordKey)
+                        tintColor: .orange
+                    )
                 }
             }
             
-            if let pilotHistory = encounter.metadata["pilotHistory"] {
-                let entries = pilotHistory.components(separatedBy: ";")
-                var historicalLocations: [(timestamp: TimeInterval, coordinate: CLLocationCoordinate2D)] = []
-                
-                for entry in entries {
-                    let parts = entry.components(separatedBy: ":")
-                    guard parts.count == 2 else { continue }
-                    let coords = parts[1].components(separatedBy: ",")
-                    guard coords.count >= 2,
-                          let timestamp = Double(parts[0]),
-                          let lat = Double(coords[0]),
-                          let lon = Double(coords[1]),
-                          lat != 0 || lon != 0 else { continue }
-                    
-                    let coordKey = "\(lat),\(lon)"
-                    if !seenCoordinates.contains(coordKey) {
-                        historicalLocations.append((timestamp, CLLocationCoordinate2D(latitude: lat, longitude: lon)))
-                        seenCoordinates.insert(coordKey)
-                    }
-                }
-                
-                historicalLocations.sort { $0.timestamp < $1.timestamp }
-                
-                for (idx, location) in historicalLocations.enumerated() {
-                    items.append(MapPointItem(
-                        title: "Pilot \(idx + 1)",
-                        coordinate: location.coordinate,
-                        systemImageName: "person.circle",
-                        tintColor: Color.orange.opacity(0.7)
-                    ))
-                }
+            // Fallback to legacy metadata if no structured data
+            guard let pilotLatStr = encounter.metadata["pilotLat"],
+                  let pilotLonStr = encounter.metadata["pilotLon"],
+                  let pilotLat = Double(pilotLatStr),
+                  let pilotLon = Double(pilotLonStr),
+                  !(pilotLat == 0 && pilotLon == 0) else {
+                return []
             }
             
-            return items
+            let pilotCoord = CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+            return [MapPointItem(
+                title: "Pilot",
+                coordinate: pilotCoord,
+                systemImageName: "person.fill",
+                tintColor: .orange
+            )]
         }
 
         
         private func buildHomeItems() -> [MapPointItem] {
-            var items: [MapPointItem] = []
-            var seenCoordinates = Set<String>()
+            // FPV detections don't have home data
+            guard !isFPVDetection else { return [] }
             
-            if let latStr = encounter.metadata["homeLat"],
-               let lonStr = encounter.metadata["homeLon"],
-               let lat = Double(latStr), let lon = Double(lonStr),
-               lat != 0 || lon != 0 {
-                let coordKey = "\(lat),\(lon)"
-                if !seenCoordinates.contains(coordKey) {
-                    items.append(MapPointItem(
-                        title: "Latest Home",
-                        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                        systemImageName: "house.fill",
-                        tintColor: .green
-                    ))
-                    seenCoordinates.insert(coordKey)
-                }
-            }
+            // Return ALL home locations from structured data for time-coded display
+            let homeLocs = encounter.homeLocations.sorted { $0.timestamp < $1.timestamp }
             
-            if let homeHistory = encounter.metadata["homeHistory"] {
-                let entries = homeHistory.components(separatedBy: ";")
-                var historicalLocations: [(timestamp: TimeInterval, coordinate: CLLocationCoordinate2D)] = []
-                
-                for entry in entries {
-                    let parts = entry.components(separatedBy: ":")
-                    guard parts.count == 2 else { continue }
-                    let coords = parts[1].components(separatedBy: ",")
-                    guard coords.count >= 2,
-                          let timestamp = Double(parts[0]),
-                          let lat = Double(coords[0]),
-                          let lon = Double(coords[1]),
-                          lat != 0 || lon != 0 else { continue }
+            if !homeLocs.isEmpty {
+                // Map to items with time-based colors
+                return homeLocs.enumerated().map { index, homeLoc in
+                    let progress = Double(index) / Double(max(1, homeLocs.count - 1))
+                    let color = colorForProgress(progress)
                     
-                    let coordKey = "\(lat),\(lon)"
-                    if !seenCoordinates.contains(coordKey) {
-                        historicalLocations.append((timestamp, CLLocationCoordinate2D(latitude: lat, longitude: lon)))
-                        seenCoordinates.insert(coordKey)
-                    }
-                }
-                
-                historicalLocations.sort { $0.timestamp < $1.timestamp }
-                
-                for (idx, location) in historicalLocations.enumerated() {
-                    items.append(MapPointItem(
-                        title: "Home \(idx + 1)",
-                        coordinate: location.coordinate,
-                        systemImageName: "house.circle",
-                        tintColor: Color.yellow.opacity(0.7)
-                    ))
+                    return MapPointItem(
+                        title: "Home \(index + 1)",
+                        coordinate: homeLoc.coordinate,
+                        systemImageName: "house.fill",
+                        tintColor: color
+                    )
                 }
             }
             
-            return items
+            // Fallback to legacy metadata if no structured data
+            guard let homeLatStr = encounter.metadata["homeLat"],
+                  let homeLonStr = encounter.metadata["homeLon"],
+                  let homeLat = Double(homeLatStr),
+                  let homeLon = Double(homeLonStr),
+                  !(homeLat == 0 && homeLon == 0) else {
+                return []
+            }
+            
+            let homeCoord = CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+            return [MapPointItem(
+                title: "Home",
+                coordinate: homeCoord,
+                systemImageName: "house.fill",
+                tintColor: .green
+            )]
+        }
+        
+        // Helper to generate time-based colors (green -> yellow -> red)
+        private func colorForProgress(_ progress: Double) -> Color {
+            if progress < 0.5 {
+                // Green to Yellow
+                return Color(
+                    red: progress * 2.0,
+                    green: 1.0,
+                    blue: 0.0
+                )
+            } else {
+                // Yellow to Red
+                return Color(
+                    red: 1.0,
+                    green: 1.0 - ((progress - 0.5) * 2.0),
+                    blue: 0.0
+                )
+            }
         }
         
         @MapContentBuilder
