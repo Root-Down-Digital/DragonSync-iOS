@@ -26,6 +26,10 @@ class SwiftDataStorageManager: ObservableObject {
     private var saveTimer: Timer?
     private var cacheUpdateCounter = 0
     
+    // Performance: Batch cache updates to reduce view re-renders
+    private var pendingCacheUpdates: Set<String> = []
+    private var cacheUpdateTimer: Timer?
+    
     nonisolated private init() {
         // Setup auto-save timer - will be initialized when first accessed
     }
@@ -73,6 +77,50 @@ class SwiftDataStorageManager: ObservableObject {
             logger.info("Force saved all changes")
         } catch {
             logger.error("Force save failed: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - Batched Cache Updates (Performance Optimization)
+    
+    /// Schedule a cache update for a specific encounter
+    /// Updates are batched and sent at most once per second to prevent excessive view re-renders
+    private func scheduleCacheUpdate(for encounterId: String) {
+        pendingCacheUpdates.insert(encounterId)
+        
+        // Only schedule timer if not already running
+        if cacheUpdateTimer == nil {
+            cacheUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    self?.flushPendingCacheUpdates()
+                }
+            }
+            RunLoop.main.add(cacheUpdateTimer!, forMode: .common)
+        }
+    }
+    
+    /// Flush all pending cache updates and notify observers once
+    private func flushPendingCacheUpdates() {
+        guard !self.pendingCacheUpdates.isEmpty else {
+            self.cacheUpdateTimer = nil
+            return
+        }
+        
+        logger.info("Flushing \(self.pendingCacheUpdates.count) pending cache updates")
+        
+        // Update all pending encounters at once
+        for encounterId in self.pendingCacheUpdates {
+            if let encounter = fetchEncounter(id: encounterId) {
+                self.encounters[encounterId] = encounter
+            }
+        }
+        
+        self.pendingCacheUpdates.removeAll()
+        self.cacheUpdateTimer = nil
+        
+        // Single notification for all batched updates
+        Task { @MainActor in
+            self.objectWillChange.send()
+            DroneStorageManager.shared.objectWillChange.send()
         }
     }
     
@@ -423,13 +471,13 @@ class SwiftDataStorageManager: ObservableObject {
                                !message.isFPVDetection
         
         if shouldUpdateCache {
-            let shouldNotify = didAddPoint || !message.isFPVDetection
-            updateInMemoryCacheForEncounterFast(encounter, sendChangeNotification: shouldNotify)
+            // Performance: Schedule batched cache update instead of immediate notification
+            scheduleCacheUpdate(for: encounter.id)
         }
         
         // Update in-memory cache with SwiftData encounter directly
         if didAddPoint {
-            updateInMemoryCacheForEncounterFast(encounter, sendChangeNotification: true)
+            scheduleCacheUpdate(for: encounter.id)
         }
     }
     // MARK: - Query Operations
@@ -1193,5 +1241,178 @@ class SwiftDataStorageManager: ObservableObject {
         } catch {
             logger.error("Failed to cleanup invalid flight points: \(error.localizedDescription)")
         }
+    }
+    
+    // MARK: - DroneSignature Creation
+    
+    /// Create a complete DroneSignature from a CoT message for storage
+    /// This preserves all available data in a structured format
+    private func createDroneSignature(from message: CoTViewModel.CoTMessage, encounter: StoredDroneEncounter) -> DroneSignature? {
+        // Build ID info
+        let idInfo = DroneSignature.IdInfo(
+            id: message.id,
+            type: parseIdType(message.idType),
+            protocolVersion: message.protocolVersion ?? "1.0",
+            uaType: message.uaType,
+            macAddress: message.mac
+        )
+        
+        // Parse coordinates
+        let lat = Double(message.lat) ?? 0
+        let lon = Double(message.lon) ?? 0
+        let alt = Double(message.alt) ?? 0
+        
+        guard lat != 0 || lon != 0 else {
+            logger.warning("Cannot create DroneSignature: invalid coordinates for \(message.id)")
+            return nil
+        }
+        
+        // Parse operator location
+        let opLat = Double(message.pilotLat) ?? 0
+        let opLon = Double(message.pilotLon) ?? 0
+        let operatorLoc = (opLat != 0 || opLon != 0) ? CLLocationCoordinate2D(latitude: opLat, longitude: opLon) : nil
+        
+        // Parse home location
+        let homeLat = Double(message.homeLat) ?? 0
+        let homeLon = Double(message.homeLon) ?? 0
+        let homeLoc = (homeLat != 0 || homeLon != 0) ? CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon) : nil
+        
+        // Build position info
+        let position = DroneSignature.PositionInfo(
+            coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+            altitude: alt,
+            altitudeReference: parseAltitudeRef(message.heightType),
+            lastKnownGoodPosition: nil,
+            operatorLocation: operatorLoc,
+            homeLocation: homeLoc,
+            horizontalAccuracy: Double(message.horizontal_accuracy ?? "0") ?? 0,
+            verticalAccuracy: Double(message.vertical_accuracy ?? "0") ?? 0,
+            timestamp: Date().timeIntervalSince1970
+        )
+        
+        // Build movement vector
+        let movement = DroneSignature.MovementVector(
+            groundSpeed: Double(message.speed) ?? 0,
+            verticalSpeed: Double(message.vspeed) ?? 0,
+            heading: Double(message.trackCourse ?? message.direction ?? "0") ?? 0,
+            climbRate: nil,
+            turnRate: nil,
+            flightPath: nil,
+            timestamp: Date().timeIntervalSince1970
+        )
+        
+        // Build height info
+        let heightInfo = DroneSignature.HeightInfo(
+            heightAboveGround: Double(message.height ?? "0") ?? 0,
+            heightAboveTakeoff: nil,
+            referenceType: parseHeightRef(message.heightType),
+            horizontalAccuracy: Double(message.horizontal_accuracy ?? "0") ?? 0,
+            verticalAccuracy: Double(message.vertical_accuracy ?? "0") ?? 0,
+            consistencyScore: 1.0,
+            lastKnownGoodHeight: nil,
+            timestamp: Date().timeIntervalSince1970
+        )
+        
+        // Build transmission info
+        let transmissionInfo = DroneSignature.TransmissionInfo(
+            transmissionType: parseTransmissionType(message),
+            signalStrength: message.rssi.map { Double($0) },
+            expectedSignalStrength: nil,
+            macAddress: message.mac,
+            frequency: message.freq,
+            protocolType: .openDroneID,
+            messageTypes: inferMessageTypes(from: message),
+            timestamp: Date().timeIntervalSince1970,
+            metadata: nil,
+            channel: message.channel,
+            advMode: message.advMode,
+            advAddress: message.adv_mac,
+            did: message.did,
+            sid: message.sid,
+            accessAddress: message.aa,
+            phy: message.phy
+        )
+        
+        // Build broadcast pattern (minimal for now)
+        let broadcastPattern = DroneSignature.BroadcastPattern(
+            messageSequence: [],
+            intervalPattern: [],
+            consistency: 0.0,
+            startTime: Date().timeIntervalSince1970,
+            lastUpdate: Date().timeIntervalSince1970
+        )
+        
+        return DroneSignature(
+            primaryId: idInfo,
+            secondaryId: nil,
+            operatorId: message.operator_id,
+            sessionId: nil,
+            position: position,
+            movement: movement,
+            heightInfo: heightInfo,
+            transmissionInfo: transmissionInfo,
+            broadcastPattern: broadcastPattern,
+            timestamp: Date().timeIntervalSince1970,
+            firstSeen: encounter.firstSeen.timeIntervalSince1970,
+            messageInterval: nil
+        )
+    }
+    
+    // MARK: - Parsing Helpers
+    
+    private func parseIdType(_ typeStr: String) -> DroneSignature.IdInfo.IdType {
+        let lower = typeStr.lowercased()
+        if lower.contains("serial") { return .serialNumber }
+        if lower.contains("caa") { return .caaRegistration }
+        if lower.contains("utm") { return .utmAssigned }
+        if lower.contains("session") { return .sessionId }
+        return .unknown
+    }
+    
+    private func parseAltitudeRef(_ heightType: String?) -> DroneSignature.PositionInfo.AltitudeReference {
+        guard let type = heightType?.lowercased() else { return .wgs84 }
+        if type.contains("takeoff") { return .takeoff }
+        if type.contains("ground") { return .ground }
+        return .wgs84
+    }
+    
+    private func parseHeightRef(_ heightType: String?) -> DroneSignature.HeightInfo.HeightReferenceType {
+        guard let type = heightType?.lowercased() else { return .ground }
+        if type.contains("takeoff") { return .takeoff }
+        if type.contains("pressure") { return .pressureAltitude }
+        if type.contains("wgs") { return .wgs84 }
+        return .ground
+    }
+    
+    private func parseTransmissionType(_ message: CoTViewModel.CoTMessage) -> DroneSignature.TransmissionInfo.TransmissionType {
+        if message.isFPVDetection { return .fpv }
+        if message.seenBy?.contains("ESP32") == true { return .esp32 }
+        if message.channel != nil { return .ble }
+        return .wifi
+    }
+    
+    private func inferMessageTypes(from message: CoTViewModel.CoTMessage) -> Set<DroneSignature.TransmissionInfo.MessageType> {
+        var types: Set<DroneSignature.TransmissionInfo.MessageType> = []
+        
+        // Infer from available data
+        if message.channel != nil {
+            types.insert(.bt45) // BLE message
+        }
+        
+        // Check for specific message content
+        if message.lat != "0" && message.lon != "0" {
+            types.insert(.bt45) // Has location
+        }
+        
+        if message.pilotLat != "0" && message.pilotLon != "0" {
+            types.insert(.bt45) // Has operator location
+        }
+        
+        // Default if nothing specific found
+        if types.isEmpty {
+            types.insert(.bt45)
+        }
+        
+        return types
     }
 }

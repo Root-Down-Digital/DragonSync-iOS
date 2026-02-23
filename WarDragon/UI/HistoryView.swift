@@ -29,6 +29,10 @@ struct StoredEncountersView: View {
     // Cache for expensive computed values
     @State private var cachedEncounterStats: [String: EncounterStats] = [:]
     
+    // Performance: Cache sorted encounters to avoid recomputing on every render
+    @State private var sortedEncounters: [StoredDroneEncounter] = []
+    @State private var lastEncountersHash: Int = 0
+    
     enum SortOrder {
         case lastSeen, firstSeen, maxAltitude, maxSpeed
     }
@@ -41,7 +45,25 @@ struct StoredEncountersView: View {
         let signatureCount: Int
     }
     
-    var sortedEncounters: [StoredDroneEncounter] {
+    // Helper to detect when we need to recompute sorted encounters
+    private func encountersHash() -> Int {
+        var hasher = Hasher()
+        hasher.combine(encounters.count)
+        hasher.combine(searchText)
+        hasher.combine(sortOrder)
+        return hasher.finalize()
+    }
+    
+    // Compute sorted encounters only when data actually changes
+    private func updateSortedEncounters() {
+        let currentHash = encountersHash()
+        guard currentHash != lastEncountersHash else { return }
+        lastEncountersHash = currentHash
+        
+        computeSortedEncounters()
+    }
+    
+    private func computeSortedEncounters() {
         let validEncounters = encounters.filter { encounter in
             encounter.modelContext != nil
         }
@@ -75,7 +97,7 @@ struct StoredEncountersView: View {
             }
         }
         
-        return filtered.sorted { first, second in
+        self.sortedEncounters = filtered.sorted { first, second in
             guard first.modelContext != nil, second.modelContext != nil else {
                 return first.modelContext != nil
             }
@@ -303,6 +325,18 @@ struct StoredEncountersView: View {
         }
         .sheet(isPresented: $editorManager.isPresented) {
             DroneInfoEditorSheet()
+        }
+        .onAppear {
+            updateSortedEncounters()
+        }
+        .onChange(of: encounters.count) {
+            updateSortedEncounters()
+        }
+        .onChange(of: searchText) {
+            updateSortedEncounters()
+        }
+        .onChange(of: sortOrder) {
+            updateSortedEncounters()
         }
     }
     
