@@ -814,9 +814,7 @@ struct DroneDetailView: View {
         
         var totalDistance: Double = 0
         for i in 1..<flightPath.count {
-            let location1 = CLLocation(latitude: flightPath[i-1].latitude, longitude: flightPath[i-1].longitude)
-            let location2 = CLLocation(latitude: flightPath[i].latitude, longitude: flightPath[i].longitude)
-            totalDistance += location1.distance(from: location2)
+            totalDistance += flightPath[i-1].distance(to: flightPath[i])
         }
         return totalDistance
     }

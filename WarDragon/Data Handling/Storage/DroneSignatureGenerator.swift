@@ -279,11 +279,9 @@ public final class DroneSignatureGenerator {
     func detectSpoof(_ signature: DroneSignature, fromMonitor monitorStatus: StatusViewModel.StatusMessage) -> SpoofDetectionResult? {
         guard let rssi = signature.transmissionInfo.signalStrength else { return nil }
         
-        let monitorPoint = CLLocation(latitude: monitorStatus.gpsData.latitude,
-                                      longitude: monitorStatus.gpsData.longitude)
-        let dronePoint = CLLocation(latitude: signature.position.coordinate.latitude,
-                                    longitude: signature.position.coordinate.longitude)
-        let distance = monitorPoint.distance(from: dronePoint)
+        let monitorCoord = CLLocationCoordinate2D(latitude: monitorStatus.gpsData.latitude,
+                                                   longitude: monitorStatus.gpsData.longitude)
+        let distance = signature.position.coordinate.distance(to: monitorCoord)
         
         // Get expected distance for drones with no GPS
         let expectedDistance = calculateDistance(rssi)
@@ -300,7 +298,6 @@ public final class DroneSignatureGenerator {
             confidenceScore += 0.2
         }
         
-        // Check for impossible speeds
         if let history = signatureCache[signature.primaryId.id] {
             let speeds = calculateSpeedsBetweenPoints(history.signatures)
             if let maxSpeed = speeds.max(), maxSpeed > 100 {
@@ -308,14 +305,10 @@ public final class DroneSignatureGenerator {
                 confidenceScore += 0.3
             }
             
-            // Check for static RSSI while moving
             if let previousSignature = history.signatures.last,
                let previousRssi = previousSignature.transmissionInfo.signalStrength {
                 let rssiChange = abs(rssi - previousRssi)
-                let positionChange = dronePoint.distance(from: CLLocation(
-                    latitude: previousSignature.position.coordinate.latitude,
-                    longitude: previousSignature.position.coordinate.longitude
-                ))
+                let positionChange = signature.position.coordinate.distance(to: previousSignature.position.coordinate)
                 
                 if positionChange > 10 && rssiChange < 1 {
                     reasons.append(String(format: "Static RSSI (%.1f dB) while moving %.1fm", rssiChange, positionChange))
@@ -323,12 +316,8 @@ public final class DroneSignatureGenerator {
                 }
             }
             
-            // Check for position jumps
             if let lastPosition = history.signatures.last?.position {
-                let positionDelta = CLLocation(
-                    latitude: lastPosition.coordinate.latitude,
-                    longitude: lastPosition.coordinate.longitude
-                ).distance(from: dronePoint)
+                let positionDelta = signature.position.coordinate.distance(to: lastPosition.coordinate)
                 let timeDelta = signature.timestamp - history.signatures.last!.timestamp
                 
                 if positionDelta > 1000 && timeDelta < 5 {
@@ -357,16 +346,11 @@ public final class DroneSignatureGenerator {
             let prev = signatures[i-1]
             let curr = signatures[i]
             
-            let prevLocation = CLLocation(latitude: prev.position.coordinate.latitude,
-                                          longitude: prev.position.coordinate.longitude)
-            let currLocation = CLLocation(latitude: curr.position.coordinate.latitude,
-                                          longitude: curr.position.coordinate.longitude)
-            
-            let distance = prevLocation.distance(from: currLocation)
+            let distance = prev.position.coordinate.distance(to: curr.position.coordinate)
             let timeInterval = curr.timestamp - prev.timestamp
             
             if timeInterval > 0 {
-                let speed = distance / timeInterval // m/s
+                let speed = distance / timeInterval
                 speeds.append(speed)
             }
         }
@@ -411,25 +395,16 @@ public final class DroneSignatureGenerator {
             return nil
         }
         
-        let location1 = CLLocation(latitude: currentOp.latitude, longitude: currentOp.longitude)
-        let location2 = CLLocation(latitude: candidateOp.latitude, longitude: candidateOp.longitude)
-        
-        let distance = location1.distance(from: location2)
+        let distance = currentOp.distance(to: candidateOp)
         return max(0, 1 - (distance / Thresholds.operatorDistanceMeters))
     }
     
     private func matchPositionAndMovement(_ current: DroneSignature, _ candidate: DroneSignature) -> Double? {
-        if current.position.coordinate.latitude == 0 || current.position.coordinate.longitude == 0 ||
-            candidate.position.coordinate.latitude == 0 || candidate.position.coordinate.longitude == 0 {
+        guard current.position.coordinate.isValid && candidate.position.coordinate.isValid else {
             return nil
         }
         
-        let currentLocation = CLLocation(latitude: current.position.coordinate.latitude,
-                                         longitude: current.position.coordinate.longitude)
-        let candidateLocation = CLLocation(latitude: candidate.position.coordinate.latitude,
-                                           longitude: candidate.position.coordinate.longitude)
-        
-        let distance = currentLocation.distance(from: candidateLocation)
+        let distance = current.position.coordinate.distance(to: candidate.position.coordinate)
         let speedDelta = abs(current.movement.groundSpeed - candidate.movement.groundSpeed)
         let vspeedDelta = abs(current.movement.verticalSpeed - candidate.movement.verticalSpeed)
         
@@ -725,19 +700,12 @@ public final class DroneSignatureGenerator {
         let lat = Double(message["lat"] as? String ?? "0.0")!
         let lon = Double(message["lon"] as? String ?? "0.0")!
         
-        if lat != 0.0 && lon != 0.0 {
-            if let monitorLoc = monitorLocation {
-                let droneLocation = CLLocation(latitude: lat, longitude: lon)
-                let distance = droneLocation.distance(from: monitorLoc)
-                expectedSignalStrength = calculateExpectedRSSI(distance: distance)
-//                print("DEBUG extractTransmissionInfo Distance: \(distance) meters")
-//                print("DEBUG extractTransmissionInfo Lat/Lon: \(lat), \(lon)")
-//                print("DEBUG extractTransmissionInfo Monitor Location: \(monitorLoc.coordinate.latitude), \(monitorLoc.coordinate.longitude)")
-//                print("DEBUG extractTransmissionInfo Actual RSSI: \(String(describing: signalStrength)))")
-//                print("DEBUG extractTransmissionInfo Expected RSSI: \(String(describing: expectedSignalStrength)))")
-            } else {
-                expectedSignalStrength = nil
-            }
+        if lat != 0.0 && lon != 0.0, let monitorLoc = monitorLocation {
+            let droneCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let distance = droneCoord.distance(to: monitorLoc.coordinate)
+            expectedSignalStrength = calculateExpectedRSSI(distance: distance)
+        } else {
+            expectedSignalStrength = nil
         }
         
         if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any],
@@ -788,8 +756,8 @@ public final class DroneSignatureGenerator {
            let lat = location["latitude"] as? Double,
            let lon = location["longitude"] as? Double,
            let monitorLoc = monitorLocation {
-            let droneLocation = CLLocation(latitude: lat, longitude: lon)
-            let distance = droneLocation.distance(from: monitorLoc)
+            let droneCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let distance = droneCoord.distance(to: monitorLoc.coordinate)
             expectedSignalStrength = calculateExpectedRSSI(distance: distance)
         } else if let point = message["point"] as? [String: Any],
                   let lat = point["lat"] as? String,

@@ -64,8 +64,13 @@ class Config:
         self.opensky_username = None  # Optional: for authenticated requests
         self.opensky_password = None
         
+        # Spoof testing settings
+        self.spoof_mode = None  # None, 'rssi', 'speed', 'teleport', 'altitude', 'all'
+        self.spoof_intensity = 'medium'  # low, medium, high, extreme
+        
 class DroneMessageGenerator:
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = config or Config()
         self.lat_range = (37.2, 37.3)
         self.lon_range = (-115.8, -115.7)  
         self.msg_index = 0
@@ -85,10 +90,85 @@ class DroneMessageGenerator:
         # CAA registration IDs for testing
         self.caa_ids = ["123456", "789ABC", "XYZ999"]
         self.current_caa_index = 0
+        
+        # Spoof testing state
+        self.last_spoofed_position = None
+        self.spoof_counter = 0
 
 
     def random_mac(self):
         return ":".join(f"{random.randint(0, 255):02X}" for _ in range(6))
+    
+    def apply_spoofing(self, lat, lon, alt, speed, vspeed, rssi, course):
+        """Apply spoofing modifications to trigger spoof detection
+        
+        Spoof modes:
+        - rssi: RSSI doesn't match distance (too weak for close drone or too strong for far drone)
+        - speed: Impossible speeds (>100 m/s for consumer drones)
+        - teleport: Random position jumps (teleportation)
+        - altitude: Inconsistent altitude reporting
+        - all: Random mix of all spoof types
+        """
+        mode = self.config.spoof_mode
+        intensity = self.config.spoof_intensity
+        
+        # Intensity multipliers
+        intensity_map = {
+            'low': 1.5,
+            'medium': 3.0,
+            'high': 5.0,
+            'extreme': 10.0
+        }
+        multiplier = intensity_map.get(intensity, 3.0)
+        
+        if mode == 'rssi' or (mode == 'all' and self.spoof_counter % 4 == 0):
+            # RSSI mismatch: Signal too weak or too strong for the distance
+            if random.choice([True, False]):
+                # Too weak: drone reports close but RSSI says it's far
+                rssi = -90 - int(multiplier * 5)  # Very weak signal
+                print(f"🎭 SPOOF: RSSI mismatch (too weak): {rssi}dBm")
+            else:
+                # Too strong: drone reports far but RSSI says it's close
+                rssi = -30 + int(multiplier * 2)  # Very strong signal
+                print(f"🎭 SPOOF: RSSI mismatch (too strong): {rssi}dBm")
+        
+        if mode == 'speed' or (mode == 'all' and self.spoof_counter % 4 == 1):
+            # Impossible speed: Commercial drones max ~20-25 m/s
+            speed = 50 + (multiplier * 20)  # 80-250 m/s depending on intensity
+            vspeed = 20 + (multiplier * 5)  # Vertical speed also impossible
+            print(f"🎭 SPOOF: Impossible speed: {speed:.1f} m/s (vert: {vspeed:.1f} m/s)")
+        
+        if mode == 'teleport' or (mode == 'all' and self.spoof_counter % 4 == 2):
+            # Position jump: Suddenly appear elsewhere
+            if self.last_spoofed_position and random.random() < 0.3:  # 30% chance
+                # Jump to random position (simulating replay attack or GPS spoofing)
+                lat = random.uniform(self.lat_range[0], self.lat_range[1])
+                lon = random.uniform(self.lon_range[0], self.lon_range[1])
+                old_lat, old_lon, _ = self.last_spoofed_position
+                distance = self.calculate_distance(old_lat, old_lon, lat, lon)
+                print(f"🎭 SPOOF: Position jump (teleport): {distance:.0f}m in 1 second")
+        
+        if mode == 'altitude' or (mode == 'all' and self.spoof_counter % 4 == 3):
+            # Altitude inconsistency: Jump altitude dramatically
+            alt_change = random.choice([-1, 1]) * multiplier * 100  # ±150-1000m jump
+            alt += alt_change
+            alt = max(0, alt)  # Don't go below ground
+            print(f"🎭 SPOOF: Altitude jump: {alt_change:+.0f}m (new: {alt:.0f}m)")
+        
+        return lat, lon, alt, speed, vspeed, rssi, course
+    
+    def calculate_distance(self, lat1, lon1, lat2, lon2):
+        """Calculate distance between two coordinates in meters"""
+        R = 6371000  # Earth radius in meters
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_phi = math.radians(lat2 - lat1)
+        delta_lambda = math.radians(lon2 - lon1)
+        
+        a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        
+        return R * c
         
     def get_timestamps(self):
         now = datetime.now(timezone.utc)
@@ -129,6 +209,16 @@ class DroneMessageGenerator:
         
         # Calculate course (direction of movement)
         course = (math.degrees(math.atan2(dx, dy))) % 360
+        
+        # ========== SPOOF TESTING MODE ==========
+        if self.config.spoof_mode:
+            lat, lon, alt, speed, vspeed, rssi, course = self.apply_spoofing(
+                lat, lon, alt, speed, vspeed, rssi, course
+            )
+            # Store position for teleport detection
+            self.last_spoofed_position = (lat, lon, alt)
+            self.spoof_counter += 1
+        # ========================================
         
         self.current_drone_index = (self.current_drone_index + 1) % len(self.drone_ids)
         uid = self.drone_ids[self.current_drone_index]
@@ -1058,6 +1148,66 @@ def configure_opensky_settings(config):
     
     input("\nPress Enter to continue...")
 
+def configure_spoof_settings(config):
+    """Configure spoof testing mode"""
+    clear_screen()
+    print("🎭 Spoof Detection Testing Configuration")
+    print(f"\nCurrent Settings:")
+    print(f"  Mode: {config.spoof_mode or 'Disabled'}")
+    print(f"  Intensity: {config.spoof_intensity}")
+    
+    print("\n📝 Spoof Mode simulates spoofed/fake drone broadcasts to test")
+    print("   your app's spoof detection capabilities.\n")
+    
+    print("Available Spoof Modes:")
+    print("  1. RSSI Mismatch - Signal strength doesn't match distance")
+    print("  2. Impossible Speed - Speeds >100 m/s (fighter jet speeds)")
+    print("  3. Position Jump - Teleportation/GPS spoofing")
+    print("  4. Altitude Jump - Sudden impossible altitude changes")
+    print("  5. All Modes - Random mix of all spoof types")
+    print("  6. Disable - Normal testing (no spoofing)")
+    
+    choice = input("\nEnter choice (1-6): ")
+    
+    if choice == '1':
+        config.spoof_mode = 'rssi'
+    elif choice == '2':
+        config.spoof_mode = 'speed'
+    elif choice == '3':
+        config.spoof_mode = 'teleport'
+    elif choice == '4':
+        config.spoof_mode = 'altitude'
+    elif choice == '5':
+        config.spoof_mode = 'all'
+    elif choice == '6':
+        config.spoof_mode = None
+        print("\n✅ Spoof mode disabled")
+        input("\nPress Enter to continue...")
+        return
+    
+    if config.spoof_mode:
+        print("\nSpoof Intensity:")
+        print("  1. Low - Subtle anomalies")
+        print("  2. Medium - Obvious anomalies")
+        print("  3. High - Extreme anomalies")
+        print("  4. Extreme - Impossible values")
+        
+        intensity_choice = input("\nEnter intensity (1-4): ")
+        if intensity_choice == '1':
+            config.spoof_intensity = 'low'
+        elif intensity_choice == '2':
+            config.spoof_intensity = 'medium'
+        elif intensity_choice == '3':
+            config.spoof_intensity = 'high'
+        elif intensity_choice == '4':
+            config.spoof_intensity = 'extreme'
+        
+        print(f"\n✅ Spoof mode set to: {config.spoof_mode.upper()} ({config.spoof_intensity})")
+        print("\n⚠️  When broadcasting, you'll see 🎭 SPOOF messages indicating")
+        print("   what type of spoofing is being applied to each message.")
+    
+    input("\nPress Enter to continue...")
+
 # ============================================================================
 # OPENSKY NETWORK TEST FUNCTIONS
 # ============================================================================
@@ -1699,7 +1849,7 @@ def quick_test_mode(config, generator):
 
 def main_menu():
     config = Config()
-    generator = DroneMessageGenerator()
+    generator = DroneMessageGenerator(config)  # Pass config to generator
     
     while True:
         clear_screen()
@@ -1711,10 +1861,18 @@ def main_menu():
         print(f"  TAK: {config.tak_protocol.upper()}://{config.tak_host}:{config.tak_port}")
         print(f"  ADS-B: HTTP Port {config.adsb_port}")
         print(f"  OpenSky: {'Authenticated (' + config.opensky_username + ')' if config.opensky_username else 'Anonymous (rate limited)'}")
+        
+        # Show spoof mode if enabled
+        if config.spoof_mode:
+            print(f"  🎭 SPOOF MODE: {config.spoof_mode.upper()} ({config.spoof_intensity})")
+        
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         
         print("\n🚀 QUICK TEST (No External Services Required)")
         print("  X. Quick Test Mode - Test App Directly")
+        
+        print("\n🎭 SPOOF TESTING")
+        print("  S. Configure Spoof Mode (Test Spoof Detection)")
         
         print("\nDEBUG:  MULTICAST/ZMQ TESTS")
         print("  1. Multicast: DragonSync Drone CoT XML (with Track)")
@@ -1743,7 +1901,7 @@ def main_menu():
         print("  Q. Configure MQTT Settings")
         print("  K. Configure TAK Settings")
         print("  B. Configure ADS-B Settings")
-        print("  S. Configure OpenSky Network Settings")
+        print("  Y. Configure OpenSky Network Settings")
         
         print("\n  0. Exit")
         
@@ -1771,8 +1929,11 @@ def main_menu():
         elif choice == 'B':
             configure_adsb_settings(config)
             continue
-        elif choice == 'S':
+        elif choice == 'Y':  # Changed from 'S' to 'Y'
             configure_opensky_settings(config)
+            continue
+        elif choice == 'S':  # NEW: Spoof configuration
+            configure_spoof_settings(config)
             continue
         
         # MQTT test

@@ -65,12 +65,10 @@ struct LiveMapView: View {
         // Try to fit all visible targets (drones + aircraft) based on filter mode
         var allCoords: [CLLocationCoordinate2D] = []
         
-        // Add drone coordinates (only if not filtering to aircraft only)
         if filterMode != .aircraft {
             allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
-                guard let coord = message.coordinate else { return nil }
-                let hasValidCoord = coord.latitude != 0 || coord.longitude != 0
-                return hasValidCoord ? coord : nil
+                guard let coord = message.coordinate, coord.isValid else { return nil }
+                return coord
             }
         }
         
@@ -195,25 +193,12 @@ struct LiveMapView: View {
         guard !newMessages.isEmpty else { return }
         
         for message in newMessages {
-            guard let coordinate = message.coordinate else { continue }
-            
-            // Both lat and lon must be non-zero (use AND not OR)
-            let hasValidLat = coordinate.latitude != 0
-            let hasValidLon = coordinate.longitude != 0
-            guard hasValidLat && hasValidLon else { continue }
+            guard let coordinate = message.coordinate, coordinate.isValid else { continue }
             
             var path = flightPaths[message.uid] ?? []
             
             if let lastPoint = path.last {
-                let lastLocation = CLLocation(
-                    latitude: lastPoint.coordinate.latitude,
-                    longitude: lastPoint.coordinate.longitude
-                )
-                let currentLocation = CLLocation(
-                    latitude: coordinate.latitude,
-                    longitude: coordinate.longitude
-                )
-                let distance = lastLocation.distance(from: currentLocation)
+                let distance = lastPoint.coordinate.distance(to: coordinate)
                 let timeDiff = Date().timeIntervalSince(lastPoint.timestamp)
                 
                 if distance < 1.0 && timeDiff < 5.0 {
@@ -235,29 +220,17 @@ struct LiveMapView: View {
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
         guard let path = flightPaths[uid] else { return [] }
-        return path.compactMap { pathPoint in
-            let coord = pathPoint.coordinate
-            let hasValidLat = coord.latitude != 0
-            let hasValidLon = coord.longitude != 0
-            // Both coordinates must be non-zero (use AND not OR)
-            guard hasValidLat && hasValidLon else { return nil }
-            return coord
-        }
+        return path.compactMap { $0.coordinate.isValid ? $0.coordinate : nil }
     }
     
     /// Get flight path for a drone and ensure it ends at current position
     private func getValidFlightPathWithCurrent(for drone: CoTViewModel.CoTMessage) -> [CLLocationCoordinate2D] {
         var validPath = getValidFlightPath(for: drone.uid)
         
-        // Ensure path ends at current position
         if let currentCoord = drone.coordinate, validPath.count > 0 {
-            if let lastPathCoord = validPath.last {
-                let latDiff = abs(currentCoord.latitude - lastPathCoord.latitude)
-                let lonDiff = abs(currentCoord.longitude - lastPathCoord.longitude)
-                // If moved at all, append current position
-                if latDiff > 0.0000001 || lonDiff > 0.0000001 {
-                    validPath.append(currentCoord)
-                }
+            if let lastPathCoord = validPath.last,
+               !currentCoord.isApproximatelyEqual(to: lastPathCoord, tolerance: 0.0000001) {
+                validPath.append(currentCoord)
             }
         }
         
@@ -293,13 +266,9 @@ struct LiveMapView: View {
         // Collect coordinates from both drones and aircraft based on filter mode
         var validCoords: [CLLocationCoordinate2D] = []
         
-        // Add drone coordinates (only if not filtering to aircraft only)
         if filterMode != .aircraft {
             validCoords += uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
-                guard let coord = drone.coordinate else { return nil }
-                let hasValidLat = coord.latitude != 0
-                let hasValidLon = coord.longitude != 0
-                guard hasValidLat || hasValidLon else { return nil }
+                guard let coord = drone.coordinate, coord.isValid else { return nil }
                 return coord
             }
         }
@@ -365,15 +334,11 @@ struct LiveMapView: View {
                     }
                 }
                 
-                // Show drone markers only if showing drones
                 if filterMode != .aircraft {
                     ForEach(uniqueDrones, id: \.uid) { message in
-                        if let coordinate = message.coordinate {
-                            let hasValidLat = coordinate.latitude != 0
-                            let hasValidLon = coordinate.longitude != 0
-                            if hasValidLat || hasValidLon {
-                                let isLastDrone = message.uid == uniqueDrones.last?.uid
-                                let color = isLastDrone ? Color.red : Color.blue
+                        if let coordinate = message.coordinate, coordinate.isValid {
+                            let isLastDrone = message.uid == uniqueDrones.last?.uid
+                            let color = isLastDrone ? Color.red : Color.blue
                                 
                                 Annotation("", coordinate: coordinate) {
                                     VStack(spacing: 2) {
@@ -401,7 +366,6 @@ struct LiveMapView: View {
                                             .cornerRadius(4)
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -624,12 +588,8 @@ struct LiveMapView: View {
                 // Collect coordinates from both drones and aircraft
                 var validCoords: [CLLocationCoordinate2D] = []
                 
-                // Add drone coordinates
                 validCoords += uniqueDrones.compactMap { drone -> CLLocationCoordinate2D? in
-                    guard let coord = drone.coordinate else { return nil }
-                    let hasValidLat = coord.latitude != 0
-                    let hasValidLon = coord.longitude != 0
-                    guard hasValidLat || hasValidLon else { return nil }
+                    guard let coord = drone.coordinate, coord.isValid else { return nil }
                     return coord
                 }
                 
