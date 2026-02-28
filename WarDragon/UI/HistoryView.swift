@@ -189,9 +189,10 @@ struct StoredEncountersView: View {
             }
             
             // MARK: - Drone Encounters Section
-            // Group encounters by type
-            let fpvEncounters = sortedEncounters.filter { $0.id.hasPrefix("fpv-") || $0.metadata["isFPVDetection"] == "true" }
-            let regularEncounters = sortedEncounters.filter { !$0.id.hasPrefix("fpv-") && $0.metadata["isFPVDetection"] != "true" }
+            // Group encounters by type - filter out any detached objects first
+            let validEncounters = sortedEncounters.filter { $0.modelContext != nil }
+            let fpvEncounters = validEncounters.filter { $0.id.hasPrefix("fpv-") || $0.metadata["isFPVDetection"] == "true" }
+            let regularEncounters = validEncounters.filter { !$0.id.hasPrefix("fpv-") && $0.metadata["isFPVDetection"] != "true" }
             
             // FPV Detections Section
             if !fpvEncounters.isEmpty {
@@ -319,7 +320,15 @@ struct StoredEncountersView: View {
         }
         .alert("Delete All Encounters", isPresented: $showingDeleteConfirmation) {
             Button("Delete", role: .destructive) {
-                storage.deleteAllEncounters()
+                // Clear UI
+                Task { @MainActor in
+                    withAnimation(.none) {
+                        sortedEncounters = []
+                        cachedEncounterStats.removeAll()
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                    storage.deleteAllEncounters()
+                }
             }
             Button("Cancel", role: .cancel) {}
         }
