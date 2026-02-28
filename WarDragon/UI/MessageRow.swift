@@ -28,10 +28,14 @@ class DroneEditorManager: ObservableObject {
         self.customName = encounter?.customName ?? ""
         self.trustStatus = encounter?.trustStatus ?? .unknown
         self.isPresented = true
+
+        NotificationCenter.default.post(name: Notification.Name("DroneEditorPresented"), object: nil)
     }
     
     func dismiss() {
         isPresented = false
+        
+        NotificationCenter.default.post(name: Notification.Name("DroneEditorDismissed"), object: nil)
         
         // Clear state after a short delay to allow sheet animation to complete
         Task {
@@ -144,17 +148,21 @@ struct MessageRow: View, Equatable {
     @State private var faaData: [String: Any]?
     @State private var faaError: String?
     @State private var isLoadingFAA = false
-    @ObservedObject private var editorManager: DroneEditorManager = .shared
+    @State private var isEditingThisDrone = false
     @StateObject private var faaService = FAAService.shared
-    
-    // Computed property to check if this row's drone is being edited
-    private var isEditingThisDrone: Bool {
-        editorManager.isPresented && editorManager.editingDroneId == message.uid
-    }
+
+    @State private var cachedDisplayName: String = ""
+    @State private var cachedDisplayDetails: String = ""
+    @State private var cachedDisplayRSSI: String = ""
+    @State private var cachedTrustStatus: DroneSignature.UserDefinedInfo.TrustStatus = .unknown
     
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
         lhs.message.uid == rhs.message.uid && 
-        lhs.isCompact == rhs.isCompact
+        lhs.isCompact == rhs.isCompact &&
+        lhs.message.lastUpdated == rhs.message.lastUpdated &&
+        lhs.message.rssi == rhs.message.rssi &&
+        lhs.message.alt == rhs.message.alt &&
+        lhs.message.speed == rhs.message.speed
     }
     
     init(message: CoTViewModel.CoTMessage, cotViewModel: CoTViewModel, isCompact: Bool = false) {
@@ -193,6 +201,27 @@ struct MessageRow: View, Equatable {
             return message.fpvDisplayName
         }
         return message.description.isEmpty ? "Unnamed Drone" : message.description
+    }
+    
+    private var spoofDetectionInfo: (isSpoofed: Bool, confidence: Double, reasons: [String])? {
+        guard let encounter = currentEncounter,
+              let latest = encounter.signatures.last,
+              latest.isSpoofed else {
+            return nil
+        }
+        return (latest.isSpoofed, latest.spoofConfidence, latest.spoofReasons)
+    }
+    
+    private var shouldShowSpoofWarning: Bool {
+        guard let info = spoofDetectionInfo else { return false }
+        return info.confidence > 0.6
+    }
+    
+    private var spoofIndicatorColor: Color {
+        guard let info = spoofDetectionInfo else { return .gray }
+        if info.confidence >= 0.85 { return .red }
+        if info.confidence >= 0.7 { return .orange }
+        return .yellow
     }
 
     private var displayDetails: String {
@@ -320,40 +349,23 @@ struct MessageRow: View, Equatable {
     }
     
     private func rssiColor(_ rssi: Double) -> Color {
-        // FPV RX5808 RSSI Pin
-        if rssi >= 1000 {
-            switch rssi {
-            case 1000..<2000: return .red    // Weak signal
-            case 2000..<2800: return .yellow // Medium signal
-            case 2800...3500: return .green  // Strong signal
-            default: return .gray
-            }
-        }
-        
-        // Handle standard drone dBm
         switch rssi {
-        case ..<(-75): return .red
-        case -75..<(-50): return .yellow
-        case 0...0: return .red
-        default: return .green
+        case -50...0: return .green
+        case -70..<(-50): return .yellow
+        case -80..<(-70): return .orange
+        default: return .red
         }
     }
     
     private func getRSSI() -> Double? {
-        // First check signal sources for strongest RSSI
-        if !message.signalSources.isEmpty {
-            let strongestSource = message.signalSources.max(by: { $0.rssi < $1.rssi })
-            if let rssi = strongestSource?.rssi {
-                return Double(rssi)
-            }
-        }
-        
-        // Get RSSI from transmission info
         if let signature = signature, let rssi = signature.transmissionInfo.signalStrength {
             return rssi
         }
         
-        // Fallback to raw message parsing
+        if let rssi = message.rssi {
+            return Double(rssi)
+        }
+        
         if let basicId = message.rawMessage["Basic ID"] as? [String: Any] {
             if let rssi = basicId["RSSI"] as? Double {
                 return rssi
@@ -363,61 +375,23 @@ struct MessageRow: View, Equatable {
             }
         }
         
-        if let auxAdvInd = message.rawMessage["AUX_ADV_IND"] as? [String: Any],
-           let rssi = auxAdvInd["rssi"] as? Double {
-            return rssi
-        }
-        
-        if let rssi = message.rssi {
-            return Double(rssi)
-        }
-        
-        // Check remarks field for RSSI
-        if let details = message.rawMessage["detail"] as? [String: Any],
-           let remarks = details["remarks"] as? String,
-           let match = remarks.firstMatch(of: /RSSI[: ]*(-?\d+)/) {
-            return Double(match.1)
-        }
-        
         return nil
     }
     
     private func getMAC() -> String? {
-        // Function to validate MAC format
-        func isValidMAC(_ mac: String) -> Bool {
-            return mac.range(of: "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$", options: .regularExpression) != nil
-        }
-        
-        // Check signature for MAC
         if let signature = signature,
            let mac = signature.transmissionInfo.macAddress,
-           isValidMAC(mac) {
-            return mac
+           !mac.isEmpty {
+            return mac.uppercased()
         }
         
-        // Check Basic ID in raw message
+        if let mac = message.mac, !mac.isEmpty {
+            return mac.uppercased()
+        }
+        
         if let basicId = message.rawMessage["Basic ID"] as? [String: Any] {
-            if let mac = basicId["MAC"] as? String, isValidMAC(mac) {
-                return mac
-            }
-            if let mac = basicId["mac"] as? String, isValidMAC(mac) {
-                return mac
-            }
-        }
-        
-        // Check AUX_ADV_IND in raw message
-        if let auxAdvInd = message.rawMessage["AUX_ADV_IND"] as? [String: Any],
-           let mac = auxAdvInd["mac"] as? String,
-           isValidMAC(mac) {
-            return mac
-        }
-        
-        // Check remarks field for MAC address
-        if let details = message.rawMessage["detail"] as? [String: Any],
-           let remarks = details["remarks"] as? String {
-            if let match = remarks.firstMatch(of: /MAC[: ]*([0-9a-fA-F:]+)/),
-               isValidMAC(String(match.1)) {
-                return String(match.1)
+            if let mac = basicId["MAC"] as? String, !mac.isEmpty {
+                return mac.uppercased()
             }
         }
         
@@ -433,14 +407,20 @@ struct MessageRow: View, Equatable {
             let trustStatus = currentEncounter?.trustStatus ?? .unknown
             
             VStack(alignment: .leading) {
-                // Show custom name if available
-                if !customName.isEmpty {
-                    Text(customName)
-                        .font(.system(.title3, design: .monospaced))
-                        .foregroundColor(.primary)
+                HStack(spacing: 6) {
+                    if shouldShowSpoofWarning {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(spoofIndicatorColor)
+                            .font(.caption)
+                    }
+                    
+                    if !customName.isEmpty {
+                        Text(customName)
+                            .font(.system(.title3, design: .monospaced))
+                            .foregroundColor(.primary)
+                    }
                 }
                 
-                // FPV Detection with Channel Info
                 if message.isFPVDetection {
                     if let freq = message.fpvFrequency,
                        let channel = FPVChannel.detectChannel(fromFrequency: String(freq)) {
@@ -539,7 +519,7 @@ struct MessageRow: View, Equatable {
                 
                 Menu {
                     Button(action: { 
-                        editorManager.present(droneId: message.uid)
+                        DroneEditorManager.shared.present(droneId: message.uid)
                     }) {
                         Label("Edit Info", systemImage: "pencil")
                     }
@@ -864,24 +844,34 @@ struct MessageRow: View, Equatable {
             
             let validCoordinate: CLLocationCoordinate2D? = {
                 guard let coord = message.coordinate else { return nil }
-                guard coord.latitude != 0 || coord.longitude != 0 else { return nil }
+                let lat = coord.latitude
+                let lon = coord.longitude
+                guard lat != 0 || lon != 0,
+                      lat >= -90, lat <= 90,
+                      lon >= -180, lon <= 180 else { return nil }
                 return coord
             }()
             
-            // Filter out 0/0 coordinates from flight path
             let flightCoords: [CLLocationCoordinate2D] = {
                 var coords = encounter?.flightPoints.compactMap { point -> CLLocationCoordinate2D? in
                     let coord = point.coordinate
-                    guard coord.latitude != 0 || coord.longitude != 0 else { return nil }
+                    let lat = coord.latitude
+                    let lon = coord.longitude
+                    guard lat != 0 || lon != 0,
+                          lat >= -90, lat <= 90,
+                          lon >= -180, lon <= 180 else { return nil }
                     return coord
                 } ?? []
                 
-                if let currentCoord = validCoordinate,
-                   !coords.contains(where: { coord in
-                       abs(coord.latitude - currentCoord.latitude) < 0.00001 &&
-                       abs(coord.longitude - currentCoord.longitude) < 0.00001
-                   }) {
-                    coords.append(currentCoord)
+                if let currentCoord = validCoordinate {
+                    let isDuplicate = coords.contains { existing in
+                        let latDiff = abs(existing.latitude - currentCoord.latitude)
+                        let lonDiff = abs(existing.longitude - currentCoord.longitude)
+                        return latDiff < 0.0001 && lonDiff < 0.0001
+                    }
+                    if !isDuplicate {
+                        coords.append(currentCoord)
+                    }
                 }
                 
                 return coords
@@ -890,23 +880,19 @@ struct MessageRow: View, Equatable {
             let pilotCoordinate: CLLocationCoordinate2D? = {
                 guard let pilotLatStr = encounter?.metadata["pilotLat"],
                       let pilotLonStr = encounter?.metadata["pilotLon"],
-                      let pilotLat = Double(pilotLatStr),
-                      let pilotLon = Double(pilotLonStr),
-                      pilotLat != 0 || pilotLon != 0 else {
-                    return nil
-                }
-                return CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon)
+                      let lat = Double(pilotLatStr),
+                      let lon = Double(pilotLonStr),
+                      lat != 0 || lon != 0 else { return nil }
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
             }()
             
             let takeoffCoordinate: CLLocationCoordinate2D? = {
                 guard let homeLatStr = encounter?.metadata["homeLat"],
                       let homeLonStr = encounter?.metadata["homeLon"],
-                      let homeLat = Double(homeLatStr),
-                      let homeLon = Double(homeLonStr),
-                      homeLat != 0 || homeLon != 0 else {
-                    return nil
-                }
-                return CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon)
+                      let lat = Double(homeLatStr),
+                      let lon = Double(homeLonStr),
+                      lat != 0 || lon != 0 else { return nil }
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
             }()
             
             let centerCoordinate = validCoordinate ?? pilotCoordinate ?? takeoffCoordinate
@@ -1077,26 +1063,30 @@ struct MessageRow: View, Equatable {
     
     @ViewBuilder
     private func spoofDetectionView() -> some View {
-        if message.isSpoofed, let details = message.spoofingDetails {
+        if let info = spoofDetectionInfo, info.isSpoofed {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
+                        .foregroundColor(spoofIndicatorColor)
                     Text("Possible Spoofed Signal")
+                        .font(.appDefault)
                         .foregroundColor(.primary)
                     Spacer()
-                    Text(String(format: "Confidence: %.0f%%", details.confidence * 100))
-                        .foregroundColor(.primary)
+                    Text(String(format: "%.0f%%", info.confidence * 100))
+                        .font(.appCaption)
+                        .foregroundColor(.secondary)
                 }
                 
-                ForEach(details.reasons, id: \.self) { reason in
-                    Text("• \(reason)")
-                        .font(.appCaption)
-                        .foregroundColor(.primary)
+                if !info.reasons.isEmpty {
+                    ForEach(info.reasons, id: \.self) { reason in
+                        Text("• \(reason)")
+                            .font(.appCaption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
-            .padding(.vertical, 4)
-            .background(Color.yellow.opacity(0.1))
+            .padding(8)
+            .background(spoofIndicatorColor.opacity(0.1))
             .cornerRadius(8)
         }
     }
@@ -1376,10 +1366,32 @@ struct MessageRow: View, Equatable {
     // MARK: - Helper Functions
     
     private func updateEncounterData() {
+        isEditingThisDrone = (DroneEditorManager.shared.isPresented && 
+                              DroneEditorManager.shared.editingDroneId == message.uid)
+        
         guard !isEditingThisDrone else { return }
         
-        droneEncounter = SwiftDataStorageManager.shared.encounters[message.uid]
-        droneSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        // Update encounter and signature data
+        let newEncounter = SwiftDataStorageManager.shared.encounters[message.uid]
+        if droneEncounter?.id != newEncounter?.id || 
+           droneEncounter?.customName != newEncounter?.customName ||
+           droneEncounter?.trustStatus != newEncounter?.trustStatus {
+            droneEncounter = newEncounter
+        }
+        
+        let newSignature = cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid })
+        if droneSignature?.primaryId.id != newSignature?.primaryId.id {
+            droneSignature = newSignature
+        }
+
+        updateCachedValues()
+    }
+    
+    private func updateCachedValues() {
+        cachedDisplayName = displayName
+        cachedDisplayDetails = displayDetails
+        cachedDisplayRSSI = displayRSSI
+        cachedTrustStatus = currentEncounter?.trustStatus ?? .unknown
     }
     
     @ViewBuilder

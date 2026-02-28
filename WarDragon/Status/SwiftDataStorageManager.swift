@@ -17,16 +17,18 @@ class SwiftDataStorageManager: ObservableObject {
     
     private let logger = Logger(subsystem: "com.wardragon", category: "Storage")
     var cotViewModel: CoTViewModel?
+    var statusViewModel: StatusViewModel?
     var encounters: [String: StoredDroneEncounter] = [:]
     var modelContext: ModelContext?
     private var macToIdCache: [String: String] = [:]
     private var caaToIdCache: [String: String] = [:]
     
+    // DroneSignatureGenerator for advanced tracking and spoof detection
+    private let signatureGenerator = DroneSignatureGenerator()
+    
     private var needsSave = false
     private var saveTimer: Timer?
     private var cacheUpdateCounter = 0
-    
-    // Performance: Batch cache updates to reduce view re-renders
     private var pendingCacheUpdates: Set<String> = []
     private var cacheUpdateTimer: Timer?
     
@@ -441,13 +443,35 @@ class SwiftDataStorageManager: ObservableObject {
                 let droneSignature = createDroneSignature(from: message, encounter: encounter)
                 let signatureData = droneSignature.flatMap { try? JSONEncoder().encode($0) }
                 
+                // Spoof detection if we have a StatusViewModel available
+                var isSpoofed = false
+                var spoofConfidence = 0.0
+                var spoofReasons: [String] = []
+                
+                if let signature = droneSignature,
+                   let statusVM = statusViewModel,
+                   let monitorStatus = statusVM.statusMessages.last {
+                    if let spoofResult = signatureGenerator.detectSpoof(signature, fromMonitor: monitorStatus) {
+                        isSpoofed = spoofResult.isSpoofed
+                        spoofConfidence = spoofResult.confidence
+                        spoofReasons = spoofResult.reasons
+                        
+                        if isSpoofed {
+                            logger.warning("⚠️ Spoofed drone detected: \(encounter.id) - Confidence: \(String(format: "%.1f%%", spoofConfidence * 100)) - Reasons: \(spoofReasons.joined(separator: ", "))")
+                        }
+                    }
+                }
+                
                 let sig = StoredSignature(
                     timestamp: Date().timeIntervalSince1970,
                     rssi: Double(rssi),
                     speed: Double(message.speed) ?? 0.0,
                     height: Double(message.height ?? "0.0") ?? 0.0,
                     mac: message.mac,
-                    signatureData: signatureData
+                    signatureData: signatureData,
+                    isSpoofed: isSpoofed,
+                    spoofConfidence: spoofConfidence,
+                    spoofReasons: spoofReasons
                 )
                 encounter.signatures.append(sig)
                 
@@ -471,7 +495,7 @@ class SwiftDataStorageManager: ObservableObject {
                                !message.isFPVDetection
         
         if shouldUpdateCache {
-            // Performance: Schedule batched cache update instead of immediate notification
+            // Schedule batched cache update instead of immediate notification
             scheduleCacheUpdate(for: encounter.id)
         }
         

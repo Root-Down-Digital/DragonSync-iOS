@@ -106,6 +106,7 @@ struct ContentView: View {
         }
         .onAppear {
             SwiftDataStorageManager.shared.modelContext = modelContext
+            SwiftDataStorageManager.shared.statusViewModel = statusViewModel
             statusViewModel.modelContext = modelContext
             
             OpenSkyService.shared.configure(with: modelContext)
