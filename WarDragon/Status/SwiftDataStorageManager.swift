@@ -626,32 +626,51 @@ class SwiftDataStorageManager: ObservableObject {
     func deleteAllEncounters() {
         guard let context = modelContext else { return }
         
-        do {
-            let descriptor = FetchDescriptor<StoredDroneEncounter>()
-            let encounters = try context.fetch(descriptor)
-            
-            logger.info("Deleting \(encounters.count) drone encounters...")
-            
-            for encounter in encounters {
-                context.delete(encounter)
-            }
-            
-            try context.save()
-            
+        // Clear in-memory caches
+        Task { @MainActor in
+            self.encounters.removeAll()
             macToIdCache.removeAll()
             caaToIdCache.removeAll()
             doNotTrackCache.removeAll()
+        }
+        
+        do {
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            let encountersToDelete = try context.fetch(descriptor)
+            let count = encountersToDelete.count
             
-            self.encounters.removeAll()
+            logger.info("Deleting \(count) drone encounters...")
             
-            logger.info("Successfully deleted all encounters and cleared all caches")
+            // Delete in batches to avoid memory issues
+            let batchSize = 50
+            for batchStart in stride(from: 0, to: encountersToDelete.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, encountersToDelete.count)
+                let batch = Array(encountersToDelete[batchStart..<batchEnd])
+                
+                for encounter in batch {
+                    // Explicitly clear relationships to avoid faulting during deletion
+                    encounter.flightPoints.removeAll()
+                    encounter.signatures.removeAll()
+                    encounter.homeLocations.removeAll()
+                    encounter.operatorLocations.removeAll()
+                    
+                    context.delete(encounter)
+                }
+                
+                // Save after each batch to free memory
+                try context.save()
+                logger.info("Deleted batch \(batchStart/batchSize + 1) of \((count + batchSize - 1) / batchSize)")
+            }
+            
+            logger.info("Successfully deleted all \(count) encounters and cleared all caches")
             
         } catch {
             logger.error("Failed to delete all encounters: \(error.localizedDescription)")
             
-            // On error, just clear the in-memory cache
-            self.encounters.removeAll()
-            logger.error("Failed to update cache after deletion error, cleared cache")
+            if let nsError = error as NSError? {
+                logger.error("Error domain: \(nsError.domain), code: \(nsError.code)")
+                logger.error("Error details: \(nsError.userInfo)")
+            }
         }
     }
     
