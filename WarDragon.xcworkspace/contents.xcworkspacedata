@@ -10,7 +10,4 @@
    <FileRef
       location = "group:PRIVACY.md">
    </FileRef>
-   <FileRef
-      location = "group:CLLocationCoordinate2D+Extensions.swift">
-   </FileRef>
 </Workspace>
