@@ -2,7 +2,7 @@
   
   # DragonSync iOS
   
-  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Join-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
+  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Closed-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
   [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
 
