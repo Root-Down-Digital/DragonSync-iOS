@@ -152,6 +152,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
+**DOES NOT WORK OUT OF THE BOX, MODS NEEDED TO SERVICE/WRAPPER FILES**
 
 **Quick Start:**
 1. Power on device
@@ -160,6 +161,8 @@ Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 4. Start monitoring
 
 **Troubleshooting:**
+
+> Since alphafox02 lost interest in this app last year, there's no sustainable way (or reason) to keep trying to support the WarDragon. And since you have to wipe the system to update a wardragon, you'll need to use the DroneID repo that can actully parse all the data from a full RID. Try these tips to get it running on his DragonOS WarDragon Pro build:
 
 No Network Connection/Data: 
 
