@@ -18,6 +18,10 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 </div>
 
 ---
+
+> [!NOTE]
+> The rapid AI code development of DroneID and Dragonsync by alphafox02 are not something I intend to try to keep pace with. You can use my fork of DroneID as described below or write a new wrapper yourself. Alphafox initially supported this app, that is no more, so i do my best to make it work with WarDragon, though your best bet is using your own mind and gear.
+
 ## What It Detects
 
 
