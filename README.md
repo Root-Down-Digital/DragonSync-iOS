@@ -1,7 +1,11 @@
+> [!IMPORTANT]
+> TestFlight is currently only for internal testers. If you have feedback please open an issue
+
+
 <div align="center">
-  
+
   # DragonSync iOS
-  
+
   [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Closed-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
   [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
@@ -17,10 +21,13 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 </div>
 
+
 ---
 
 > [!NOTE]
-> The rapid AI code development of DroneID and Dragonsync by alphafox02 are not something I intend to try to keep pace with. You can use my fork of DroneID as described below or write a new wrapper yourself. Alphafox initially supported this app, that is no more, so i do my best to make it work with WarDragon, though your best bet is using your own mind and gear.
+> Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use a fork of DroneID for FPV and ESP32 as described below, or write a new wrapper.
+>
+> **A wardragon is not required**: a WiFi adapter or ESP32 will see about 80% of consumer drones (WiFI RID). The SDR adds the ability to decode parts of Ocusync Drone-ID. 
 
 ## What It Detects
 
