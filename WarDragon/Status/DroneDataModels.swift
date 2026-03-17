@@ -190,10 +190,18 @@ final class StoredDroneEncounter {
     
     var sessionHistory: [String] {
         get {
+            guard modelContext != nil else {
+                Self.logger.warning("Cannot access sessionHistory for detached encounter: \(self.id)")
+                return []
+            }
             let historyString = metadata["sessionHistory"] ?? ""
             return historyString.components(separatedBy: ";").filter { !$0.isEmpty }
         }
         set {
+            guard modelContext != nil else {
+                Self.logger.warning("Cannot set sessionHistory for detached encounter: \(self.id)")
+                return
+            }
             metadata["sessionHistory"] = newValue.joined(separator: ";")
         }
     }
@@ -201,6 +209,16 @@ final class StoredDroneEncounter {
     // Activity log tracks when drone was actively transmitting data
     var activityLog: [ActivityLogEntry] {
         get {
+            // Safety check: ensure we can safely access metadata
+            guard modelContext != nil else {
+                Self.logger.warning("Cannot access activityLog for detached encounter: \(self.id)")
+                // Return a fallback based on firstSeen/lastSeen if available
+                if firstSeen != lastSeen {
+                    return [ActivityLogEntry(startTime: firstSeen, endTime: lastSeen)]
+                }
+                return []
+            }
+            
             let logString = metadata["activityLog"] ?? ""
             let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
             let parsedEntries = entries.compactMap { ActivityLogEntry.fromString($0) }
@@ -214,11 +232,21 @@ final class StoredDroneEncounter {
             return parsedEntries
         }
         set {
+            // Safety check: ensure we can safely modify metadata
+            guard modelContext != nil else {
+                Self.logger.warning("Cannot set activityLog for detached encounter: \(self.id)")
+                return
+            }
             metadata["activityLog"] = newValue.map { $0.toString() }.joined(separator: ";")
         }
     }
     
     func addCurrentSession() {
+        guard modelContext != nil else {
+            Self.logger.warning("Cannot add session for detached encounter: \(self.id)")
+            return
+        }
+        
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH"
         let sessionKey = formatter.string(from: Date())
@@ -232,6 +260,13 @@ final class StoredDroneEncounter {
     
     // Log when drone was active (received data)
     func logActivity(timestamp: Date) {
+        // Safety check: ensure the encounter is still attached to a context
+        guard modelContext != nil else {
+            Self.logger.warning("Cannot log activity for detached encounter: \(self.id)")
+            return
+        }
+        
+        // Safely access current activity log
         var logs = activityLog
         
         if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].endTime) < 120 {
@@ -245,6 +280,11 @@ final class StoredDroneEncounter {
     }
     
     func backfillActivityLog() {
+        guard modelContext != nil else {
+            Self.logger.warning("Cannot backfill activity log for detached encounter: \(self.id)")
+            return
+        }
+        
         guard metadata["activityLog"] == nil || metadata["activityLog"]?.isEmpty == true else {
             return
         }
