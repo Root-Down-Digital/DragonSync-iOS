@@ -1,5 +1,4 @@
-> [!IMPORTANT]
-> TestFlight is currently only for internal testers. If you have feedback please open an issue
+
 
 
 <div align="center">
