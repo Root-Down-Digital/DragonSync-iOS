@@ -1,8 +1,11 @@
+
+
+
 <div align="center">
-  
+
   # DragonSync iOS
-  
-  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Join-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
+
+  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Closed-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
   [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
 
@@ -17,7 +20,14 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 </div>
 
+
 ---
+
+> [!NOTE]
+> Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use a fork of DroneID for FPV and ESP32 as described below, or write a new wrapper.
+>
+> **A wardragon is not required**: a WiFi adapter or ESP32 will see about 80% of consumer drones (WiFI RID). The SDR adds the ability to decode parts of Ocusync Drone-ID. 
+
 ## What It Detects
 
 
@@ -148,6 +158,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
+**DOES NOT WORK OUT OF THE BOX, MODS NEEDED TO SERVICE/WRAPPER FILES**
 
 **Quick Start:**
 1. Power on device
@@ -156,6 +167,8 @@ Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 4. Start monitoring
 
 **Troubleshooting:**
+
+> Since alphafox02 lost interest in this app last year, there's no sustainable way (or reason) to keep trying to support the WarDragon. And since you have to wipe the system to update a wardragon, you'll need to use the DroneID repo that can actully parse all the data from a full RID. Try these tips to get it running on his DragonOS WarDragon Pro build:
 
 No Network Connection/Data: 
 
