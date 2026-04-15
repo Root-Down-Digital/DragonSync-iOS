@@ -899,8 +899,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         Task { @MainActor in
             if let index = self.parsedMessages.firstIndex(where: { $0.uid == droneId }) {
                 // Get fresh encounter data from storage
-                let encounters = DroneStorageManager.shared.encounters
-                if let encounter = encounters[droneId] {
+                if let encounter = DroneStorageManager.shared.fetchEncounter(id: droneId) {
                     let updatedMessage = self.parsedMessages[index]
                     
                     // Update the metadata from storage
@@ -1326,12 +1325,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             message.uid.replacingOccurrences(of: "drone-", with: "")
         ]
         
-        // Get encounters on MainActor
-        let encounters = DroneStorageManager.shared.encounters
-        
         // Check each possible ID format
         for id in possibleIds {
-            if let encounter = encounters[id],
+            if let encounter = DroneStorageManager.shared.fetchEncounter(id: id),
                encounter.metadata["doNotTrack"] == "true" {
                 print("BLOCKED message with ID \(id) - marked as do not track")
                 return true
@@ -1339,13 +1335,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             
             // Also check the "drone-" and fpv- prefixed version
             let droneFormatId = id.hasPrefix("drone-") ? id : "drone-\(id)"
-            if let encounter = encounters[droneFormatId],
+            if let encounter = DroneStorageManager.shared.fetchEncounter(id: droneFormatId),
                encounter.metadata["doNotTrack"] == "true" {
                 print("BLOCKED message with drone ID \(droneFormatId) - marked as do not track")
                 return true
             }
             let fpvFormatId = id.hasPrefix("fpv-") ? id : "fpv-\(id)"
-            if let encounter = encounters[fpvID],
+            if let encounter = DroneStorageManager.shared.fetchEncounter(id: fpvID),
                encounter.metadata["doNotTrack"] == "true" {
                 print(" BLOCKED message with drone ID \(fpvFormatId) - marked as do not track")
                 return true
@@ -1878,11 +1874,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             // Clear existing alert rings
             alertRings.removeAll()
             
-            // Get encounters from storage
-            let encounters = DroneStorageManager.shared.encounters
+            // Get all encounters from storage
+            let allEncounters = DroneStorageManager.shared.fetchAllEncounters()
             
             // Restore alert rings for FPV and encrypted signals from storage
-            for (droneId, encounter) in encounters {
+            for encounter in allEncounters {
+                let droneId = encounter.id
                 // Only process encounters that have proximity points
                 guard encounter.metadata["hasProximityPoints"] == "true" else { continue }
                 
@@ -2734,8 +2731,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         // Get the encounter from storage
-        let encounters = DroneStorageManager.shared.encounters
-        guard let encounter = encounters[droneId],
+        guard let encounter = DroneStorageManager.shared.fetchEncounter(id: droneId),
               encounter.flightPath.count > 0 else {
             return nil
         }
@@ -2926,32 +2922,23 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         Task { @MainActor in
             let currentMonitorStatus = self.statusViewModel.statusMessages.last
             
-            // Save encounter first (synchronously within this Task)
             DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)
             
-            // Re-fetch encounters after save to ensure we have the latest data
-            let updatedEncounters = DroneStorageManager.shared.encounters
+            SwiftDataStorageManager.shared.logActivityForEncounter(id: signature.primaryId.id, timestamp: Date())
             
-            if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: signature.primaryId.id) {
-                storedEncounter.logActivity(timestamp: Date())
-                
-                // Safe unwrap with guard to prevent crash
-                guard let existing = updatedEncounters[signature.primaryId.id] else {
-                    print("⚠️ Encounter not found for signature: \(signature.primaryId.id) - skipping position check")
-                    return
-                }
-                
-                let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
-                existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
-                existing.flightPath.last?.altitude != signature.position.altitude
-                
-                if hasNewPosition {
-                    print("DEBUG:  Added new position to existing encounter: \(signature.primaryId.id)")
-                } else {
-                    print("DEBUG:  Updated existing encounter data: \(signature.primaryId.id)")
-                }
+            guard let existing = DroneStorageManager.shared.fetchEncounter(id: signature.primaryId.id) else {
+                print("⚠️ Encounter not found for signature: \(signature.primaryId.id) - skipping position check")
+                return
+            }
+            
+            let hasNewPosition = existing.flightPath.last?.latitude != signature.position.coordinate.latitude ||
+            existing.flightPath.last?.longitude != signature.position.coordinate.longitude ||
+            existing.flightPath.last?.altitude != signature.position.altitude
+            
+            if hasNewPosition {
+                print("DEBUG:  Added new position to existing encounter: \(signature.primaryId.id)")
             } else {
-                print("DEBUG:  Created new encounter: \(signature.primaryId.id)")
+                print("DEBUG:  Updated existing encounter data: \(signature.primaryId.id)")
             }
         }
     }

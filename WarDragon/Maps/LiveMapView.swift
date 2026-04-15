@@ -52,7 +52,8 @@ struct LiveMapView: View {
         let lon = Double(initialMessage.lon) ?? 0
         
         var initialFlightPaths: [String: [(coordinate: CLLocationCoordinate2D, timestamp: Date)]] = [:]
-        for (droneId, encounter) in DroneStorageManager.shared.encounters {
+        for encounter in DroneStorageManager.shared.fetchAllEncounters() {
+            let droneId = encounter.id
             let pathPoints = encounter.flightPath.map { point in
                 (coordinate: point.coordinate, timestamp: Date(timeIntervalSince1970: point.timestamp))
             }

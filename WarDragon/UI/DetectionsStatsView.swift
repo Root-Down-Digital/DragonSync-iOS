@@ -784,7 +784,7 @@ struct DetectionsStatsView: View {
     
     private var totalDronesSeen: Int {
         // Count all drone encounters (not aircraft) from storage
-        DroneStorageManager.shared.encounters.filter { !$0.key.hasPrefix("aircraft-") }.count
+        DroneStorageManager.shared.fetchAllEncounters().filter { !$0.id.hasPrefix("aircraft-") }.count
     }
     
     private var totalAircraftSeen: Int {

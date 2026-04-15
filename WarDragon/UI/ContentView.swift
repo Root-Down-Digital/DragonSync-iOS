@@ -366,7 +366,7 @@ struct ContentView: View {
             return []
         }
         
-        guard let encounter = DroneStorageManager.shared.encounters[uid] else {
+        guard let encounter = DroneStorageManager.shared.fetchEncounter(id: uid) else {
             return []
         }
         return encounter.flightPath.map { point in
@@ -879,7 +879,7 @@ struct ContentView: View {
         // Count drones that have recent updates (not stale)
         // You can adjust this logic based on your DroneEncounter structure
         cotViewModel.parsedMessages.filter { message in
-            guard let encounter = DroneStorageManager.shared.encounters[message.uid] else {
+            guard let encounter = DroneStorageManager.shared.fetchEncounter(id: message.uid) else {
                 return true // If no encounter, assume active (just detected)
             }
             // Consider active if last seen within 30 seconds
@@ -1044,7 +1044,7 @@ private struct LiveMapPreview: View {
         }
         
         // Get flight path from DroneStorageManager
-        guard let encounter = DroneStorageManager.shared.encounters[uid] else {
+        guard let encounter = DroneStorageManager.shared.fetchEncounter(id: uid) else {
             return []
         }
         

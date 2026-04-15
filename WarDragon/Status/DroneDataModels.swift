@@ -219,7 +219,9 @@ final class StoredDroneEncounter {
                 return []
             }
             
+            // Access metadata - this may return nil if the model has been faulted/deleted
             let logString = metadata["activityLog"] ?? ""
+            
             let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
             let parsedEntries = entries.compactMap { ActivityLogEntry.fromString($0) }
             
@@ -237,6 +239,7 @@ final class StoredDroneEncounter {
                 Self.logger.warning("Cannot set activityLog for detached encounter: \(self.id)")
                 return
             }
+            
             metadata["activityLog"] = newValue.map { $0.toString() }.joined(separator: ";")
         }
     }
@@ -260,23 +263,29 @@ final class StoredDroneEncounter {
     
     // Log when drone was active (received data)
     func logActivity(timestamp: Date) {
-        // Safety check: ensure the encounter is still attached to a context
-        guard modelContext != nil else {
-            Self.logger.warning("Cannot log activity for detached encounter: \(self.id)")
+        // Don't even check modelContext - just try and fail gracefully if the model is invalid
+        // SwiftData can crash on ANY property access if the model is deleted/detached
+        
+        guard let logString = metadata["activityLog"] else {
+            // Initialize new activity log
+            metadata["activityLog"] = ActivityLogEntry(startTime: timestamp, endTime: timestamp).toString()
             return
         }
         
-        // Safely access current activity log
-        var logs = activityLog
+        // Parse existing logs
+        let entries = logString.components(separatedBy: ";").filter { !$0.isEmpty }
+        var parsedEntries = entries.compactMap { ActivityLogEntry.fromString($0) }
         
-        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].endTime) < 120 {
-            logs[lastIndex].endTime = timestamp
+        // Update or append
+        if let lastIndex = parsedEntries.indices.last, 
+           timestamp.timeIntervalSince(parsedEntries[lastIndex].endTime) < 120 {
+            parsedEntries[lastIndex].endTime = timestamp
         } else {
-            let entry = ActivityLogEntry(startTime: timestamp, endTime: timestamp)
-            logs.append(entry)
+            parsedEntries.append(ActivityLogEntry(startTime: timestamp, endTime: timestamp))
         }
         
-        activityLog = logs
+        // Save back
+        metadata["activityLog"] = parsedEntries.map { $0.toString() }.joined(separator: ";")
     }
     
     func backfillActivityLog() {

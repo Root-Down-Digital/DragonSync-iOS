@@ -333,9 +333,27 @@ class DroneStorageManager: ObservableObject {
     // Reference to SwiftData manager (single source of truth)
     private let swiftDataManager = SwiftDataStorageManager.shared
     
-    // Direct access to SwiftData encounters (no conversion!)
+    /// Returns all encounters as a dictionary for backward compatibility
+    /// - Warning: This creates a new dictionary on every access. Prefer `fetchEncounter(id:)` instead.
+    /// - Note: This property is deprecated and will be removed in a future version.
+    @available(*, deprecated, message: "Use fetchEncounter(id:) or fetchAllEncounters() instead for better performance")
     var encounters: [String: StoredDroneEncounter] {
-        swiftDataManager.encounters
+        let allEncounters = swiftDataManager.fetchAllEncountersLightweight()
+        var dict: [String: StoredDroneEncounter] = [:]
+        for encounter in allEncounters {
+            dict[encounter.id] = encounter
+        }
+        return dict
+    }
+    
+    /// Fetch a specific encounter by ID (preferred method)
+    func fetchEncounter(id: String) -> StoredDroneEncounter? {
+        return swiftDataManager.fetchEncounter(id: id)
+    }
+    
+    /// Fetch all encounters from SwiftData
+    func fetchAllEncounters() -> [StoredDroneEncounter] {
+        return swiftDataManager.fetchAllEncounters()
     }
     
     init() {
@@ -386,12 +404,12 @@ class DroneStorageManager: ObservableObject {
         // Check if migration has been completed
         let migrationCompleted = UserDefaults.standard.bool(forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
         
-        let swiftDataCount = encounters.count
+        let swiftDataCount = fetchAllEncounters().count
         print("📊 Loaded \(swiftDataCount) encounters from SwiftData")
         
-        if encounters.isEmpty && !migrationCompleted {
+        if swiftDataCount == 0 && !migrationCompleted {
             print("⚠️ SwiftData empty - migration may not be complete yet")
-        } else if encounters.isEmpty && migrationCompleted {
+        } else if swiftDataCount == 0 && migrationCompleted {
             print("✅ Migration completed - SwiftData is empty (fresh start or all deleted)")
         } else {
             print("✅ Using \(swiftDataCount) encounters from SwiftData")
@@ -399,7 +417,7 @@ class DroneStorageManager: ObservableObject {
     }
     
     func updatePilotLocation(droneId: String, latitude: Double, longitude: Double) {
-        guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
+        guard let storedEncounter = fetchEncounter(id: droneId) else {
             print("Encounter not found: \(droneId)")
             return
         }
@@ -424,7 +442,7 @@ class DroneStorageManager: ObservableObject {
     }
 
     func updateHomeLocation(droneId: String, latitude: Double, longitude: Double) {
-        guard let storedEncounter = swiftDataManager.fetchEncounter(id: droneId) else {
+        guard let storedEncounter = fetchEncounter(id: droneId) else {
             print("Encounter not found: \(droneId)")
             return
         }

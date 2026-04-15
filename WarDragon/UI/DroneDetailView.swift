@@ -353,7 +353,7 @@ struct DroneDetailView: View {
                     }
 
                     let cleanFlightPath = DroneStorageManager.shared
-                        .encounters[message.uid]?.flightPath
+                        .fetchEncounter(id: message.uid)?.flightPath
                         .filter { !$0.isProximityPoint }
                         .map { $0.coordinate } ?? flightPath
                     

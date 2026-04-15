@@ -22,29 +22,25 @@ struct DroneInfoEditor: View {
         var customName = ""
         var trustStatus = DroneSignature.UserDefinedInfo.TrustStatus.unknown
         
+        // Try to fetch the encounter with the given ID first
         if let storedEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: droneId) {
             customName = storedEncounter.customName
             trustStatus = storedEncounter.trustStatus
         } else {
+            // If not found, try alternate ID formats
             let baseId = droneId.replacingOccurrences(of: "drone-", with: "")
             let possibleIds = [
-                droneId,
                 "drone-\(droneId)",
                 baseId,
                 "drone-\(baseId)"
             ]
             
-            var encounter: StoredDroneEncounter? = nil
             for id in possibleIds {
-                if let found = SwiftDataStorageManager.shared.encounters[id] {
-                    encounter = found
+                if let found = SwiftDataStorageManager.shared.fetchEncounter(id: id) {
+                    customName = found.customName
+                    trustStatus = found.trustStatus
                     break
                 }
-            }
-            
-            if let encounter = encounter {
-                customName = encounter.customName
-                trustStatus = encounter.trustStatus
             }
         }
         

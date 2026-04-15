@@ -22,7 +22,7 @@ class DroneEditorManager: ObservableObject {
     private init() {}
     
     func present(droneId: String) {
-        let encounter = SwiftDataStorageManager.shared.encounters[droneId]
+        let encounter = SwiftDataStorageManager.shared.fetchEncounter(id: droneId)
         
         self.editingDroneId = droneId
         self.customName = encounter?.customName ?? ""
@@ -169,7 +169,7 @@ struct MessageRow: View, Equatable {
         self.message = message
         self.cotViewModel = cotViewModel
         self.isCompact = isCompact
-        _droneEncounter = State(initialValue: SwiftDataStorageManager.shared.encounters[message.uid])
+        _droneEncounter = State(initialValue: SwiftDataStorageManager.shared.fetchEncounter(id: message.uid))
         _droneSignature = State(initialValue: cotViewModel.droneSignatures.first(where: { $0.primaryId.id == message.uid }))
     }
     
@@ -840,7 +840,7 @@ struct MessageRow: View, Equatable {
 //                .frame(height: 80)
             }
         } else {
-            let encounter = SwiftDataStorageManager.shared.encounters[message.uid]
+            let encounter = SwiftDataStorageManager.shared.fetchEncounter(id: message.uid)
             
             let validCoordinate: CLLocationCoordinate2D? = {
                 guard let coord = message.coordinate else { return nil }
@@ -1372,7 +1372,7 @@ struct MessageRow: View, Equatable {
         guard !isEditingThisDrone else { return }
         
         // Update encounter and signature data
-        let newEncounter = SwiftDataStorageManager.shared.encounters[message.uid]
+        let newEncounter = SwiftDataStorageManager.shared.fetchEncounter(id: message.uid)
         if droneEncounter?.id != newEncounter?.id || 
            droneEncounter?.customName != newEncounter?.customName ||
            droneEncounter?.trustStatus != newEncounter?.trustStatus {
@@ -1447,7 +1447,7 @@ struct MessageRow: View, Equatable {
                 DroneDetailView(
                     message: message,
                     flightPath: SwiftDataStorageManager.shared
-                        .encounters[message.uid]?.flightPoints
+                        .fetchEncounter(id: message.uid)?.flightPoints
                         .map { $0.coordinate } ?? [],
                     cotViewModel: cotViewModel
                 )

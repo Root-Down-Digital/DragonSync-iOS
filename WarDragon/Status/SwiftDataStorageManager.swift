@@ -18,22 +18,155 @@ class SwiftDataStorageManager: ObservableObject {
     private let logger = Logger(subsystem: "com.wardragon", category: "Storage")
     var cotViewModel: CoTViewModel?
     var statusViewModel: StatusViewModel?
-    var encounters: [String: StoredDroneEncounter] = [:]
+    
     var modelContext: ModelContext?
     private var macToIdCache: [String: String] = [:]
     private var caaToIdCache: [String: String] = [:]
     
-    // DroneSignatureGenerator for advanced tracking and spoof detection
     private let signatureGenerator = DroneSignatureGenerator()
+    
+    // MARK: - Dictionary Access (Deprecated)
+    
+    /// Provides dictionary-style access to encounters for backward compatibility
+    /// - Warning: This creates a new dictionary on every access. Prefer `fetchEncounter(id:)` instead.
+    /// - Note: This property is deprecated and will be removed in a future version.
+    @available(*, deprecated, message: "Use fetchEncounter(id:) or fetchAllEncounters() instead for better performance")
+    var encounters: [String: StoredDroneEncounter] {
+        let allEncounters = fetchAllEncountersLightweight()
+        var dict: [String: StoredDroneEncounter] = [:]
+        for encounter in allEncounters {
+            dict[encounter.id] = encounter
+        }
+        return dict
+    }
     
     private var needsSave = false
     private var saveTimer: Timer?
-    private var cacheUpdateCounter = 0
     private var pendingCacheUpdates: Set<String> = []
     private var cacheUpdateTimer: Timer?
     
+    // MARK: - Performance Monitoring (Enhancement)
+    
+    /// Storage operation metrics tracking
+    private struct StorageMetrics {
+        var operationName: String
+        var startTime: Date
+        var duration: TimeInterval {
+            return Date().timeIntervalSince(startTime)
+        }
+    }
+    
+    /// Performance thresholds (configurable)
+    private struct PerformanceThresholds {
+        static let slowOperation: TimeInterval = 0.1      // 100ms - warn if slower
+        static let moderateOperation: TimeInterval = 0.05 // 50ms - log if slower
+        static let criticalOperation: TimeInterval = 0.5  // 500ms - critical warning
+    }
+    
+    /// Track operation metrics for debugging and optimization
+    private var operationMetrics: [String: [TimeInterval]] = [:]
+    private let maxMetricsPerOperation = 100 // Keep last 100 samples
+    
+    /// Log storage operation performance with enhanced metrics
+    private func logStorageOperation(_ operation: String, duration: TimeInterval) {
+        // Track metrics
+        if operationMetrics[operation] == nil {
+            operationMetrics[operation] = []
+        }
+        operationMetrics[operation]?.append(duration)
+        
+        // Keep only recent samples
+        if operationMetrics[operation]!.count > maxMetricsPerOperation {
+            operationMetrics[operation]?.removeFirst()
+        }
+        
+        // Log based on severity
+        if duration > PerformanceThresholds.criticalOperation {
+            logger.error("CRITICAL: Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
+        } else if duration > PerformanceThresholds.slowOperation {
+            logger.warning("SLOW: Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
+        } else if duration > PerformanceThresholds.moderateOperation {
+            logger.info("Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
+        }
+        // Fast operations (< 50ms) are not logged to reduce noise
+    }
+    
+    /// Measure and log storage operation performance
+    @discardableResult
+    private func measureOperation<T>(_ operation: String, block: () throws -> T) rethrows -> T {
+        let startTime = Date()
+        defer {
+            let duration = Date().timeIntervalSince(startTime)
+            logStorageOperation(operation, duration: duration)
+        }
+        return try block()
+    }
+    
+    /// Get average performance for an operation (for debugging)
+    func getAveragePerformance(for operation: String) -> TimeInterval? {
+        guard let metrics = operationMetrics[operation], !metrics.isEmpty else {
+            return nil
+        }
+        return metrics.reduce(0, +) / Double(metrics.count)
+    }
+    
+    /// Get performance statistics for all operations
+    func getAllPerformanceStats() -> [String: (avg: TimeInterval, min: TimeInterval, max: TimeInterval, count: Int)] {
+        var stats: [String: (avg: TimeInterval, min: TimeInterval, max: TimeInterval, count: Int)] = [:]
+        
+        for (operation, metrics) in operationMetrics {
+            guard !metrics.isEmpty else { continue }
+            
+            let avg = metrics.reduce(0, +) / Double(metrics.count)
+            let min = metrics.min() ?? 0
+            let max = metrics.max() ?? 0
+            
+            stats[operation] = (avg: avg, min: min, max: max, count: metrics.count)
+        }
+        
+        return stats
+    }
+    
+    /// Print performance report to console (useful for debugging)
+    func printPerformanceReport() {
+        let stats = getAllPerformanceStats()
+        
+        guard !stats.isEmpty else {
+            logger.info("No performance data collected yet")
+            return
+        }
+        
+        logger.info("===================================================")
+        logger.info("Storage Performance Report")
+        logger.info("===================================================")
+        
+        // Sort by average duration (slowest first)
+        let sorted = stats.sorted { $0.value.avg > $1.value.avg }
+        
+        for (operation, stat) in sorted {
+            let avgMs = stat.avg * 1000
+            let minMs = stat.min * 1000
+            let maxMs = stat.max * 1000
+            
+            let severity: String
+            if stat.avg > PerformanceThresholds.criticalOperation {
+                severity = "CRITICAL"
+            } else if stat.avg > PerformanceThresholds.slowOperation {
+                severity = "SLOW"
+            } else if stat.avg > PerformanceThresholds.moderateOperation {
+                severity = "MODERATE"
+            } else {
+                severity = "FAST"
+            }
+            
+            logger.info("[\(severity)] \(operation)")
+            logger.info("   Avg: \(String(format: "%.1f", avgMs))ms | Min: \(String(format: "%.1f", minMs))ms | Max: \(String(format: "%.1f", maxMs))ms | Samples: \(stat.count)")
+        }
+        
+        logger.info("===================================================")
+    }
+    
     nonisolated private init() {
-        // Setup auto-save timer - will be initialized when first accessed
     }
     
     nonisolated private static func startTimer() -> Timer {
@@ -57,39 +190,34 @@ class SwiftDataStorageManager: ObservableObject {
     private func saveIfNeeded() {
         guard needsSave, let context = modelContext else { return }
         
-        do {
-            try context.save()
-            needsSave = false
-            
-            cacheUpdateCounter += 1
-            if cacheUpdateCounter >= 5 {
-                updateInMemoryCache()
-                cacheUpdateCounter = 0
+        measureOperation("Auto-save") {
+            do {
+                try context.save()
+                needsSave = false
+            } catch {
+                logger.error("Auto-save failed: \(error.localizedDescription)")
             }
-        } catch {
-            logger.error("Auto-save failed: \(error.localizedDescription)")
         }
     }
     
     func forceSave() {
         guard let context = modelContext else { return }
-        do {
-            try context.save()
-            needsSave = false
-            logger.info("Force saved all changes")
-        } catch {
-            logger.error("Force save failed: \(error.localizedDescription)")
+        measureOperation("Force save") {
+            do {
+                try context.save()
+                needsSave = false
+                logger.info("Force saved all changes")
+            } catch {
+                logger.error("Force save failed: \(error.localizedDescription)")
+            }
         }
     }
     
     // MARK: - Batched Cache Updates (Performance Optimization)
     
-    /// Schedule a cache update for a specific encounter
-    /// Updates are batched and sent at most once per second to prevent excessive view re-renders
     private func scheduleCacheUpdate(for encounterId: String) {
         pendingCacheUpdates.insert(encounterId)
         
-        // Only schedule timer if not already running
         if cacheUpdateTimer == nil {
             cacheUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
@@ -100,7 +228,6 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    /// Flush all pending cache updates and notify observers once
     private func flushPendingCacheUpdates() {
         guard !self.pendingCacheUpdates.isEmpty else {
             self.cacheUpdateTimer = nil
@@ -108,15 +235,6 @@ class SwiftDataStorageManager: ObservableObject {
         }
         
         logger.info("Flushing \(self.pendingCacheUpdates.count) pending cache updates")
-        
-        for encounterId in self.pendingCacheUpdates {
-            if let encounter = fetchEncounter(id: encounterId), encounter.modelContext != nil {
-                self.encounters[encounterId] = encounter
-            } else {
-                self.encounters.removeValue(forKey: encounterId)
-                logger.debug("Removed stale encounter \(encounterId) from cache during flush")
-            }
-        }
         
         self.pendingCacheUpdates.removeAll()
         self.cacheUpdateTimer = nil
@@ -132,23 +250,24 @@ class SwiftDataStorageManager: ObservableObject {
     // REMOVED: saveEncounterDirect() - no longer needed, we work with SwiftData directly
     
     func saveEncounter(_ message: CoTViewModel.CoTMessage, monitorStatus: StatusViewModel.StatusMessage? = nil) {
-        guard let context = modelContext else {
-            logger.error("ModelContext not set")
-            return
-        }
-        
-        let droneId = message.uid
-        
-        if isMarkedAsDoNotTrack(id: droneId) {
-            return
-        }
-        
-        ensureTimerStarted()
-        
-        let lat = Double(message.lat) ?? 0
-        let lon = Double(message.lon) ?? 0
-        
-        var targetId: String = droneId
+        measureOperation("saveEncounter(\(message.uid))") {
+            guard let context = modelContext else {
+                logger.error("ModelContext not set")
+                return
+            }
+            
+            let droneId = message.uid
+            
+            if isMarkedAsDoNotTrack(id: droneId) {
+                return
+            }
+            
+            ensureTimerStarted()
+            
+            let lat = Double(message.lat) ?? 0
+            let lon = Double(message.lon) ?? 0
+            
+            var targetId: String = droneId
         
         logger.info("saveEncounter: Processing \(droneId), idType: \(message.idType), MAC: \(message.mac ?? "none")")
         
@@ -227,7 +346,7 @@ class SwiftDataStorageManager: ObservableObject {
             logger.info("Added session \(sessionKey) to drone \(targetId)")
         }
         
-        logDroneActivity(encounter: encounter, timestamp: now)
+        logActivityForEncounter(id: encounter.id, timestamp: now)
 
         var didAddPoint = false
         
@@ -458,7 +577,7 @@ class SwiftDataStorageManager: ObservableObject {
                         spoofReasons = spoofResult.reasons
                         
                         if isSpoofed {
-                            logger.warning("⚠️ Spoofed drone detected: \(encounter.id) - Confidence: \(String(format: "%.1f%%", spoofConfidence * 100)) - Reasons: \(spoofReasons.joined(separator: ", "))")
+                            logger.warning("SPOOFED DRONE: \(encounter.id) - Confidence: \(String(format: "%.1f%%", spoofConfidence * 100)) - Reasons: \(spoofReasons.joined(separator: ", "))")
                         }
                     }
                 }
@@ -496,72 +615,76 @@ class SwiftDataStorageManager: ObservableObject {
                                !message.isFPVDetection
         
         if shouldUpdateCache {
-            // Schedule batched cache update instead of immediate notification
             scheduleCacheUpdate(for: encounter.id)
         }
         
-        // Update in-memory cache with SwiftData encounter directly
         if didAddPoint {
             scheduleCacheUpdate(for: encounter.id)
         }
+        } // End measureOperation
     }
-    // MARK: - Query Operations
     
     func fetchAllEncounters() -> [StoredDroneEncounter] {
-        guard let context = modelContext else { return [] }
-        
-        var descriptor = FetchDescriptor<StoredDroneEncounter>(
-            sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
-        )
-        descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
-        
-        do {
-            return try context.fetch(descriptor)
-        } catch {
-            logger.error("Failed to fetch encounters: \(error.localizedDescription)")
-            return []
+        return measureOperation("fetchAllEncounters") {
+            guard let context = modelContext else { return [] }
+            
+            var descriptor = FetchDescriptor<StoredDroneEncounter>(
+                sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
+            )
+            descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
+            
+            do {
+                return try context.fetch(descriptor)
+            } catch {
+                logger.error("Failed to fetch encounters: \(error.localizedDescription)")
+                return []
+            }
         }
     }
     
     func fetchAllEncountersLightweight() -> [StoredDroneEncounter] {
-        guard let context = modelContext else { return [] }
-        
-        let descriptor = FetchDescriptor<StoredDroneEncounter>(
-            sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
-        )
-        
-        do {
-            return try context.fetch(descriptor)
-        } catch {
-            logger.error("Failed to fetch encounters: \(error.localizedDescription)")
-            return []
+        return measureOperation("fetchAllEncountersLightweight") {
+            guard let context = modelContext else { return [] }
+            
+            let descriptor = FetchDescriptor<StoredDroneEncounter>(
+                sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
+            )
+            
+            do {
+                return try context.fetch(descriptor)
+            } catch {
+                logger.error("Failed to fetch encounters: \(error.localizedDescription)")
+                return []
+            }
         }
     }
     
     func fetchEncounter(id: String) -> StoredDroneEncounter? {
-        guard let context = modelContext else { return nil }
-        
-        let predicate = #Predicate<StoredDroneEncounter> { encounter in
-            encounter.id == id
-        }
-        var descriptor = FetchDescriptor(predicate: predicate)
-        descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
-        
-        do {
-            let result = try context.fetch(descriptor).first
+        return measureOperation("fetchEncounter(\(id))") {
+            guard let context = modelContext else { return nil }
             
-            // Verify the encounter is still attached to a context
-            if let encounter = result {
-                guard encounter.modelContext != nil else {
-                    logger.warning("Fetched encounter \(id) is detached from context")
-                    return nil
-                }
+            let predicate = #Predicate<StoredDroneEncounter> { encounter in
+                encounter.id == id
             }
+            var descriptor = FetchDescriptor(predicate: predicate)
+            descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
             
-            return result
-        } catch {
-            logger.error("Failed to fetch encounter \(id): \(error.localizedDescription)")
-            return nil
+            do {
+                let result = try context.fetch(descriptor).first
+                
+                // Verify the encounter is still attached to a context
+                if let encounter = result {
+                    guard encounter.modelContext != nil else {
+                        logger.warning("Fetched encounter \(id) is detached from context")
+                        return nil
+                    }
+                }
+                
+                return result
+            } catch {
+                logger.error("Failed to fetch encounter \(id): \(error.localizedDescription)")
+                return nil
+            }
         }
     }
 
@@ -592,25 +715,11 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     func getEncounterSafely(id: String) -> StoredDroneEncounter? {
-        if let cachedEncounter = encounters[id] {
-            if cachedEncounter.modelContext != nil {
-                return cachedEncounter
-            } else {
-                logger.warning("Cached encounter \(id) is detached, removing from cache and refetching")
-                encounters.removeValue(forKey: id)
-            }
-        }
-        
-        guard let freshEncounter = fetchEncounter(id: id) else {
-            return nil
-        }
-        
-        encounters[id] = freshEncounter
-        return freshEncounter
+        return fetchEncounter(id: id)
     }
     
     func withEncounterSafely(id: String, perform: (StoredDroneEncounter) -> Void) {
-        guard let encounter = getEncounterSafely(id: id) else {
+        guard let encounter = fetchEncounter(id: id) else {
             logger.warning("Cannot perform operation: encounter \(id) not found or detached")
             return
         }
@@ -644,7 +753,6 @@ class SwiftDataStorageManager: ObservableObject {
         
         for possibleId in possibleIds {
             doNotTrackCache.remove(possibleId)
-            encounters.removeValue(forKey: possibleId)
             macToIdCache = macToIdCache.filter { $0.value != possibleId }
             caaToIdCache = caaToIdCache.filter { $0.value != possibleId }
         }
@@ -670,9 +778,7 @@ class SwiftDataStorageManager: ObservableObject {
     func deleteAllEncounters() {
         guard let context = modelContext else { return }
         
-        // Clear in-memory caches
         Task { @MainActor in
-            self.encounters.removeAll()
             macToIdCache.removeAll()
             caaToIdCache.removeAll()
             doNotTrackCache.removeAll()
@@ -701,7 +807,6 @@ class SwiftDataStorageManager: ObservableObject {
                     context.delete(encounter)
                 }
                 
-                // Save after each batch to free memory
                 try context.save()
                 logger.info("Deleted batch \(batchStart/batchSize + 1) of \((count + batchSize - 1) / batchSize)")
             }
@@ -846,7 +951,6 @@ class SwiftDataStorageManager: ObservableObject {
             do {
                 try modelContext?.save()
                 doNotTrackCache.removeAll()
-                updateInMemoryCache()
                 logger.info("Cleared do not track for \(clearedCount) encounters")
             } catch {
                 logger.error("Failed to save after clearing all do not track: \(error.localizedDescription)")
@@ -856,10 +960,6 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    // MARK: - Export Operations
-    
-    /// Repair cached stats for all encounters that have missing or zero cached values
-    /// This should be called on app startup or as a maintenance operation
     func repairCachedStats() {
         guard let context = modelContext else { return }
         
@@ -907,9 +1007,6 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    // MARK: - Export Operations
-    
-    /// Export encounters to CSV using stored SwiftData models
     func exportToCSV() -> String {
         let encounters = fetchAllEncounters().filter { $0.modelContext != nil }
         var csv = DroneEncounter.csvHeaders() + "\n"
@@ -993,21 +1090,18 @@ class SwiftDataStorageManager: ObservableObject {
     }
     
     private func fetchOrCreateEncounter(id: String, message: CoTViewModel.CoTMessage?, context: ModelContext) -> StoredDroneEncounter {
-        if let existing = getEncounterSafely(id: id) {
+        if let existing = fetchEncounter(id: id) {
             logger.info("Found existing encounter for ID: \(id)")
             return existing
         }
         
-        let existingCustomName = encounters[id]?.customName ?? ""
-        let existingTrustStatus = encounters[id]?.trustStatus ?? .unknown
-        
-        logger.info("Creating NEW encounter for ID: \(id), preserving customName: '\(existingCustomName)', trustStatus: \(existingTrustStatus.rawValue)")
+        logger.info("Creating NEW encounter for ID: \(id)")
         let new = StoredDroneEncounter(
             id: id,
             firstSeen: Date(),
             lastSeen: Date(),
-            customName: existingCustomName,
-            trustStatusRaw: existingTrustStatus.rawValue,
+            customName: "",
+            trustStatusRaw: DroneSignature.UserDefinedInfo.TrustStatus.unknown.rawValue,
             metadata: [:],
             macAddresses: []
         )
@@ -1091,94 +1185,41 @@ class SwiftDataStorageManager: ObservableObject {
         return location1.distance(from: location2)
     }
     
-    /// Log when drone was actively transmitting data
-    private func logDroneActivity(encounter: StoredDroneEncounter, timestamp: Date) {
-        // Safety check: ensure the encounter is still attached to a context
-        guard encounter.modelContext != nil else {
-            logger.warning("Cannot log activity for detached encounter: \(encounter.id)")
+    func logActivityForEncounter(id: String, timestamp: Date) {
+        guard let context = modelContext else { return }
+        
+        let predicate = #Predicate<StoredDroneEncounter> { encounter in
+            encounter.id == id
+        }
+        let descriptor = FetchDescriptor(predicate: predicate)
+        
+        guard let encounter = try? context.fetch(descriptor).first,
+              encounter.modelContext != nil else {
             return
         }
         
-        var logs = encounter.activityLog
+        let logString = encounter.metadata["activityLog"]
         
-        if let lastIndex = logs.indices.last, timestamp.timeIntervalSince(logs[lastIndex].endTime) < 120 {
-            logs[lastIndex].endTime = timestamp
-            logger.info("Extended activity log for \(encounter.id) to \(timestamp)")
+        if logString == nil {
+            encounter.metadata["activityLog"] = ActivityLogEntry(startTime: timestamp, endTime: timestamp).toString()
+            needsSave = true
+            return
+        }
+        
+        let entries = logString!.components(separatedBy: ";").filter { !$0.isEmpty }
+        var parsedEntries = entries.compactMap { ActivityLogEntry.fromString($0) }
+        
+        if let lastIndex = parsedEntries.indices.last, 
+           timestamp.timeIntervalSince(parsedEntries[lastIndex].endTime) < 120 {
+            parsedEntries[lastIndex].endTime = timestamp
         } else {
-            let entry = ActivityLogEntry(startTime: timestamp, endTime: timestamp)
-            logs.append(entry)
-            logger.info("Added new activity log entry for \(encounter.id) at \(timestamp)")
+            parsedEntries.append(ActivityLogEntry(startTime: timestamp, endTime: timestamp))
         }
         
-        encounter.activityLog = logs
+        encounter.metadata["activityLog"] = parsedEntries.map { $0.toString() }.joined(separator: ";")
+        needsSave = true
     }
     
-    private func updateInMemoryCache() {
-        guard modelContext != nil else {
-            logger.warning("Cannot update cache: ModelContext not set")
-            return
-        }
-        
-        let stored = fetchAllEncounters()
-        
-        // Store SwiftData models directly - NO CONVERSION
-        var convertedEncounters: [String: StoredDroneEncounter] = [:]
-        for encounter in stored {
-            guard encounter.modelContext != nil else {
-                logger.warning("Skipping deleted/detached encounter during cache update (no context)")
-                continue
-            }
-            
-            convertedEncounters[encounter.id] = encounter
-        }
-        
-        self.encounters = convertedEncounters
-        logger.info("Updated in-memory cache: \(convertedEncounters.count) encounters")
-        
-        Task { @MainActor in
-            self.objectWillChange.send()
-            DroneStorageManager.shared.objectWillChange.send()
-        }
-    }
-    
-    private func updateInMemoryCacheForEncounter(_ encounter: StoredDroneEncounter) {
-        guard encounter.modelContext != nil else {
-            logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounter")
-            return
-        }
-        
-        // Store SwiftData model directly - NO CONVERSION
-        encounters[encounter.id] = encounter
-        
-        // Manually notify observers since encounters is not @Published
-        Task { @MainActor in
-            self.objectWillChange.send()
-            DroneStorageManager.shared.objectWillChange.send()
-        }
-    }
-    
-    private func updateInMemoryCacheForEncounterFast(_ encounter: StoredDroneEncounter, sendChangeNotification: Bool = true) {
-        guard encounter.modelContext != nil else {
-            logger.warning("Skipping deleted/detached encounter \(encounter.id) in updateInMemoryCacheForEncounterFast")
-            return
-        }
-        
-        // Store SwiftData model directly - NO CONVERSION
-        encounters[encounter.id] = encounter
-        
-        // Only manually notify observers when requested
-        if sendChangeNotification {
-            Task { @MainActor in
-                // Notify both storage managers
-                self.objectWillChange.send()
-                DroneStorageManager.shared.objectWillChange.send()
-            }
-        }
-    }
-    
-    // MARK: - Aircraft Storage Cleanup
-    
-    /// Cleanup old aircraft encounters to prevent database bloat
     func cleanupOldAircraftEncounters(maxAircraftCount: Int = 200) {
         guard let context = modelContext else { return }
         
@@ -1206,8 +1247,6 @@ class SwiftDataStorageManager: ObservableObject {
             
             try context.save()
             
-            updateInMemoryCache()
-            
             logger.info(" Deleted \(deleteCount) old aircraft encounters")
             
         } catch {
@@ -1215,8 +1254,6 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    /// Delete all aircraft encounters (keeps drone encounters)
-    /// Use this to clear aircraft history without affecting drone data
     func deleteAllAircraftEncounters() {
         guard let context = modelContext else { return }
         
@@ -1233,7 +1270,6 @@ class SwiftDataStorageManager: ObservableObject {
             }
             
             try context.save()
-            updateInMemoryCache()
             
             logger.info(" Deleted all aircraft encounters (drones preserved)")
             
@@ -1329,21 +1365,12 @@ class SwiftDataStorageManager: ObservableObject {
             
             UserDefaults.standard.set(true, forKey: "invalidFlightPointsCleanupCompleted")
             
-            if encountersAffected > 0 {
-                updateInMemoryCache()
-            }
-            
         } catch {
             logger.error("Failed to cleanup invalid flight points: \(error.localizedDescription)")
         }
     }
     
-    // MARK: - DroneSignature Creation
-    
-    /// Create a complete DroneSignature from a CoT message for storage
-    /// This preserves all available data in a structured format
     private func createDroneSignature(from message: CoTViewModel.CoTMessage, encounter: StoredDroneEncounter) -> DroneSignature? {
-        // Build ID info
         let idInfo = DroneSignature.IdInfo(
             id: message.id,
             type: parseIdType(message.idType),
@@ -1352,7 +1379,6 @@ class SwiftDataStorageManager: ObservableObject {
             macAddress: message.mac
         )
         
-        // Parse coordinates
         let lat = Double(message.lat) ?? 0
         let lon = Double(message.lon) ?? 0
         let alt = Double(message.alt) ?? 0
@@ -1362,17 +1388,14 @@ class SwiftDataStorageManager: ObservableObject {
             return nil
         }
         
-        // Parse operator location
         let opLat = Double(message.pilotLat) ?? 0
         let opLon = Double(message.pilotLon) ?? 0
         let operatorLoc = (opLat != 0 || opLon != 0) ? CLLocationCoordinate2D(latitude: opLat, longitude: opLon) : nil
         
-        // Parse home location
         let homeLat = Double(message.homeLat) ?? 0
         let homeLon = Double(message.homeLon) ?? 0
         let homeLoc = (homeLat != 0 || homeLon != 0) ? CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon) : nil
         
-        // Build position info
         let position = DroneSignature.PositionInfo(
             coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
             altitude: alt,
@@ -1385,7 +1408,6 @@ class SwiftDataStorageManager: ObservableObject {
             timestamp: Date().timeIntervalSince1970
         )
         
-        // Build movement vector
         let movement = DroneSignature.MovementVector(
             groundSpeed: Double(message.speed) ?? 0,
             verticalSpeed: Double(message.vspeed) ?? 0,
@@ -1396,7 +1418,6 @@ class SwiftDataStorageManager: ObservableObject {
             timestamp: Date().timeIntervalSince1970
         )
         
-        // Build height info
         let heightInfo = DroneSignature.HeightInfo(
             heightAboveGround: Double(message.height ?? "0") ?? 0,
             heightAboveTakeoff: nil,
@@ -1408,7 +1429,6 @@ class SwiftDataStorageManager: ObservableObject {
             timestamp: Date().timeIntervalSince1970
         )
         
-        // Build transmission info
         let transmissionInfo = DroneSignature.TransmissionInfo(
             transmissionType: parseTransmissionType(message),
             signalStrength: message.rssi.map { Double($0) },
@@ -1428,7 +1448,6 @@ class SwiftDataStorageManager: ObservableObject {
             phy: message.phy
         )
         
-        // Build broadcast pattern (minimal for now)
         let broadcastPattern = DroneSignature.BroadcastPattern(
             messageSequence: [],
             intervalPattern: [],
@@ -1452,8 +1471,6 @@ class SwiftDataStorageManager: ObservableObject {
             messageInterval: nil
         )
     }
-    
-    // MARK: - Parsing Helpers
     
     private func parseIdType(_ typeStr: String) -> DroneSignature.IdInfo.IdType {
         let lower = typeStr.lowercased()
@@ -1489,21 +1506,18 @@ class SwiftDataStorageManager: ObservableObject {
     private func inferMessageTypes(from message: CoTViewModel.CoTMessage) -> Set<DroneSignature.TransmissionInfo.MessageType> {
         var types: Set<DroneSignature.TransmissionInfo.MessageType> = []
         
-        // Infer from available data
         if message.channel != nil {
-            types.insert(.bt45) // BLE message
+            types.insert(.bt45)
         }
         
-        // Check for specific message content
         if message.lat != "0" && message.lon != "0" {
-            types.insert(.bt45) // Has location
+            types.insert(.bt45)
         }
         
         if message.pilotLat != "0" && message.pilotLon != "0" {
-            types.insert(.bt45) // Has operator location
+            types.insert(.bt45)
         }
         
-        // Default if nothing specific found
         if types.isEmpty {
             types.insert(.bt45)
         }
