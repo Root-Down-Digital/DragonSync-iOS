@@ -190,9 +190,9 @@ B. ***SDR temps*** require DJI firmware on ANTSDR (UHD firmware won't report tem
 
 ---
 
-## Option 2: Drag0net ESP32 (Portable)
+## Option 2: Drag0net ESP32 (Portable) [Firmware](https://github.com/Root-Down-Digital/DragonSync-iOS/tree/main/Util)
 
-Flash ESP32-C3/S3 or LilyGO T-Dongle for standalone WiFi RID detection.
+ESP32-C3/S3 (with optional mesh integration) for standalone WiFi RID detection
 
 **Automated Flash:**
 ```bash

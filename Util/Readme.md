@@ -8,8 +8,7 @@ A portable alternative to the full detection stack for [DragonSync iOS & macOS](
 
 ## Supported Hardware
 
-- **ESP32-C3 XIAO** (AP/Mesh)
-- **ESP32-S3 XIAO** (AP/Mesh)
+- **ESP32-S3/C3 Seeed Studio** (AP/Mesh)
 - **ESP32-S3 LilyGO T-Dongle** (AP only)
 
 Additional firmware options available in the `FW` folder.
@@ -80,7 +79,19 @@ IP:       192.168.4.1
 
 <img src="https://github.com/user-attachments/assets/93a034eb-4c81-456c-8457-f604307392f5" width="60%" />
 
-### Option C: Meshtastic Integration
+## Meshtastic Integration
+
+**Wire up** your esp32 to a meshtastic supported board (heltec v3, T114, etc)
+
+> [!NOTE]
+> Mod the firmware as needed for other MCU pin assignments
+
+Seeed Studio C3/S3:
+
+```
+SERIAL1_RX_PIN 7 > MESH TX PIN
+SERIAL1_TX_PIN 6 > MESH RX PIN
+```
 
 **1. Connect to Meshtastic:**
 - Install Meshtastic app on phone or use web interface
@@ -93,19 +104,18 @@ Navigate to: Module Settings → Serial Config
 Set parameters:
 - **Enabled:** ON
 - **Mode:** TEXTMSG
-- **RX GPIO:** 19
-- **TX GPIO:** 20
+- **RX GPIO:** Mesh RX Pin
+- **TX GPIO:** Mesh TX Pin
 - **Baud Rate:** 115200
-- **Timeout:** 5000ms
 
 ---
 
 ## Notes
 
 - This project is not affiliated with WarDragon, DragonOS, or related projects
-- Based on [cemaxecuter WiFi RID firmware](https://github.com/alphafox02/T-Halow/tree/master/firmware)
+- Based on [cemaxecuter WiFi RID firmware](https://github.com/alphafox02/T-Halow/tree/master/firmware) and utilizes OpenDroneID
 
 > [!IMPORTANT]
 > **Work in Progress:** Expect breaking changes and possible stability issues.
 >
-> **Legal Use Only:** Use within legal and ethical bounds. Author is not responsible for misuse of this code or knowledge.
+> **Legal Use Only:** Use within legal and ethical bounds. Author is not responsible for misuse of this code or knowledge. For educational and research purposes only. 
