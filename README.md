@@ -1,14 +1,12 @@
-
-
-
 <div align="center">
 
-  # DragonSync iOS
+
+
+# DragonSync iOS
 
   [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Join-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
   [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
-
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
@@ -22,6 +20,8 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 
 ---
+
+<img width="300" height="300" alt="dragonIcon copy" src="https://github.com/user-attachments/assets/61b82478-b10f-481e-9a34-f3ecc983701d" />
 
 > [!NOTE]
 > Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
