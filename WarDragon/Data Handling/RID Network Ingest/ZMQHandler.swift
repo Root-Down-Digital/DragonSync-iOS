@@ -150,16 +150,22 @@ class ZMQHandler: ObservableObject {
             // Setup telemetry socket
             telemetrySocket = try context?.socket(.subscribe)
             try telemetrySocket?.setSubscribe("")
-            try configureSocket(telemetrySocket!)
-            try telemetrySocket?.connect("tcp://\(host):\(zmqTelemetryPort)")
-            try poller?.register(socket: telemetrySocket!, flags: .pollIn)
+            guard let telemetrySocket = telemetrySocket else {
+                throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create telemetry socket"])
+            }
+            try configureSocket(telemetrySocket)
+            try telemetrySocket.connect("tcp://\(host):\(zmqTelemetryPort)")
+            try poller?.register(socket: telemetrySocket, flags: .pollIn)
             
             // Setup status socket
             statusSocket = try context?.socket(.subscribe)
             try statusSocket?.setSubscribe("")
-            try configureSocket(statusSocket!)
-            try statusSocket?.connect("tcp://\(host):\(zmqStatusPort)")
-            try poller?.register(socket: statusSocket!, flags: .pollIn)
+            guard let statusSocket = statusSocket else {
+                throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create status socket"])
+            }
+            try configureSocket(statusSocket)
+            try statusSocket.connect("tcp://\(host):\(zmqStatusPort)")
+            try poller?.register(socket: statusSocket, flags: .pollIn)
             
             // Start polling on background queue
             pollingQueue = DispatchQueue(label: "com.wardragon.zmq.polling")
@@ -191,7 +197,9 @@ class ZMQHandler: ObservableObject {
         }
         
         // Make sure the timer runs even when the app is in the background
-        RunLoop.main.add(connectionMonitorTimer!, forMode: .common)
+        if let timer = connectionMonitorTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
     
     private func checkConnectionStatus() {
@@ -539,27 +547,27 @@ class ZMQHandler: ObservableObject {
             opID = "N/A"
         }
         
-        if basicId == nil {
+        guard let basicId = basicId else {
             // Silently skip - this is expected for incomplete message fragments
             return nil
         }
         
         // Basic ID Message Fields
-        let uaType = String(describing: basicId!["ua_type"] ?? "")
-        let droneId = basicId!["id"] as? String ?? UUID().uuidString
+        let uaType = String(describing: basicId["ua_type"] ?? "")
+        let droneId = basicId["id"] as? String ?? UUID().uuidString
         if droneId.contains("NONE"){
             print("SKIPPING THE NONE IN ID")
             return nil
         }
-        let idType = basicId!["id_type"] as? String ?? ""
+        let idType = basicId["id_type"] as? String ?? ""
         var caaReg =  ""
         if idType.contains("CAA") {
             caaReg = droneId.replacingOccurrences(of: "drone-", with: "")
         }
-        var mac = basicId!["MAC"] as? String ?? ""
-        let rssi = basicId!["RSSI"] as? Int ?? 0
-        let desc = basicId!["description"] as? String ?? ""
-        let mProtocol = basicId!["protocol_version"] as? String ?? ""
+        var mac = basicId["MAC"] as? String ?? ""
+        let rssi = basicId["RSSI"] as? Int ?? 0
+        let desc = basicId["description"] as? String ?? ""
+        let mProtocol = basicId["protocol_version"] as? String ?? ""
         
         // SelfID Message Fields
         let selfIDtext = selfID?["text"] as? String ?? ""
@@ -955,8 +963,7 @@ class ZMQHandler: ObservableObject {
         
         return xmlMessages
     }
-    
-    // Helper functions to safely extract values
+
     func extractDouble(from dict: [String: Any]?, key: String) -> Double? {
         guard let dict = dict else { return nil }
         

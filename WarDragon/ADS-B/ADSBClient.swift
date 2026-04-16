@@ -211,7 +211,6 @@ class ADSBClient: ObservableObject {
         }
     }
     
-    /// Stop timer safely
     private func stopTimer() {
         pollTimer?.invalidate()
         pollTimer = nil

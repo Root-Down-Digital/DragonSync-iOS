@@ -59,8 +59,7 @@ struct MapView: View {
                                .foregroundStyle(.blue)
                        }
                 }
-                
-                // Now safely access cotViewModel since we're in the body
+
                 if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }),
                    Double(message.lat) ?? 0 == 0 && Double(message.lon) ?? 0 == 0 {
                     MapCircle(center: ring.centerCoordinate, radius: ring.radius)

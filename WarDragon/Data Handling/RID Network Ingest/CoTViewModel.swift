@@ -401,7 +401,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             
             // Drone Staleout
             else if timeSinceLastUpdate < 30 {
-                return rssi != nil && rssi! > -60 ? .green : rssi != nil && rssi! > -80 ? .yellow : .red
+                if let rssiValue = rssi {
+                    return rssiValue > -60 ? .green : rssiValue > -80 ? .yellow : .red
+                }
+                return .red
             } else if timeSinceLastUpdate < 120 {
                 return .yellow
             } else {
@@ -1265,7 +1268,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             case .ready:
                 print("Successfully joined multicast group \(self.cachedMulticastHost):\(self.cachedMulticastPort)")
                 // Start receiving data immediately after joining
-                self.receiveMessages(from: self.multicastConnection!)
+                guard let connection = self.multicastConnection else {
+                    print("ERROR: Multicast connection is nil after ready state")
+                    return
+                }
+                self.receiveMessages(from: connection)
             case .failed(let error):
                 print("Failed to join multicast group: \(error)")
             case .waiting(let error):
@@ -1859,7 +1866,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
 
     private func formatStaleTimeForCoT() -> String {
-        let staleTime = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
+        guard let staleTime = Calendar.current.date(byAdding: .minute, value: 5, to: Date()) else {
+            // Fallback to 5 minutes from now manually
+            let fallbackDate = Date(timeIntervalSinceNow: 300)
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+            formatter.timeZone = TimeZone(identifier: "UTC")
+            return formatter.string(from: fallbackDate)
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
         formatter.timeZone = TimeZone(identifier: "UTC")
@@ -1885,7 +1899,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 
                 // Get all proximity points with RSSI data
                 let proximityPoints = encounter.flightPath.filter {
-                    $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi! > 0
+                    $0.isProximityPoint && $0.proximityRssi != nil && $0.proximityRssi ?? 0 > 0
                 }
                 
                 guard !proximityPoints.isEmpty else { continue }
@@ -1900,7 +1914,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     }
                     
                     // Get lowest RSSI (weakest signal)
-                    if let lowestPoint = sortedPoints.first {
+                    if let lowestPoint = sortedPoints.first,
+                       let lowestRssi = lowestPoint.proximityRssi {
                         let radius = calculateRadiusForPoint(lowestPoint, isFPV: true)
                         ringsToAdd.append(AlertRing(
                             droneId: "\(droneId)-lowest",
@@ -1909,12 +1924,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                                 longitude: lowestPoint.longitude
                             ),
                             radius: radius,
-                            rssi: Int(lowestPoint.proximityRssi!)
+                            rssi: Int(lowestRssi)
                         ))
                     }
                     
                     // Get highest RSSI (strongest signal)
-                    if sortedPoints.count > 1, let highestPoint = sortedPoints.last {
+                    if sortedPoints.count > 1, 
+                       let highestPoint = sortedPoints.last,
+                       let highestRssi = highestPoint.proximityRssi {
                         let radius = calculateRadiusForPoint(highestPoint, isFPV: true)
                         ringsToAdd.append(AlertRing(
                             droneId: "\(droneId)-highest",
@@ -1923,7 +1940,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                                 longitude: highestPoint.longitude
                             ),
                             radius: radius,
-                            rssi: Int(highestPoint.proximityRssi!)
+                            rssi: Int(highestRssi)
                         ))
                     }
                     
@@ -1931,16 +1948,18 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     if sortedPoints.count > 2 {
                         let medianIndex = sortedPoints.count / 2
                         let medianPoint = sortedPoints[medianIndex]
-                        let radius = calculateRadiusForPoint(medianPoint, isFPV: true)
-                        ringsToAdd.append(AlertRing(
-                            droneId: "\(droneId)-median",
-                            centerCoordinate: CLLocationCoordinate2D(
-                                latitude: medianPoint.latitude,
-                                longitude: medianPoint.longitude
-                            ),
-                            radius: radius,
-                            rssi: Int(medianPoint.proximityRssi!)
-                        ))
+                        if let medianRssi = medianPoint.proximityRssi {
+                            let radius = calculateRadiusForPoint(medianPoint, isFPV: true)
+                            ringsToAdd.append(AlertRing(
+                                droneId: "\(droneId)-median",
+                                centerCoordinate: CLLocationCoordinate2D(
+                                    latitude: medianPoint.latitude,
+                                    longitude: medianPoint.longitude
+                                ),
+                                radius: radius,
+                                rssi: Int(medianRssi)
+                            ))
+                        }
                     }
                     
                     print("FPV Detection \(droneId): Found \(proximityPoints.count) detections, showing \(ringsToAdd.count) rings (highest/lowest/median)")
@@ -1950,6 +1969,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     let recentPoints = Array(proximityPoints.suffix(3))
                     
                     for point in recentPoints {
+                        guard let pointRssi = point.proximityRssi else { continue }
                         let radius = calculateRadiusForPoint(point, isFPV: false)
                         ringsToAdd.append(AlertRing(
                             droneId: droneId,
@@ -1958,7 +1978,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                                 longitude: point.longitude
                             ),
                             radius: radius,
-                            rssi: Int(point.proximityRssi!)
+                            rssi: Int(pointRssi)
                         ))
                     }
                 }
@@ -2732,12 +2752,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         // Get the encounter from storage
         guard let encounter = DroneStorageManager.shared.fetchEncounter(id: droneId),
-              encounter.flightPath.count > 0 else {
+              let lastPoint = encounter.flightPath.last else {
             return nil
         }
         
         // Get the last coordinate from flight path
-        let lastPoint = encounter.flightPath.last!
         let lastLat = lastPoint.latitude
         let lastLon = lastPoint.longitude
         
@@ -2971,9 +2990,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
                 
                 // Create alert ring with valid monitor location
-                if let location = monitorLocation {
+                if let location = monitorLocation,
+                   let rssi = message.rssi {
                     let distance: Double
-                    let rssiValue = Double(message.rssi!)
+                    let rssiValue = Double(rssi)
                     
                     // Handle different RSSI scales for FPV vs regular drones
                     if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
@@ -4145,8 +4165,8 @@ extension CoTViewModel {
                     }
                 }
                 // Also handle aircraft with RSSI but no coordinates (similar to drones)
-                else if ac.rssi != nil && ac.rssi! != 0 {
-                    self.updateAircraftAlertRing(for: ac, coordinate: userLocation.coordinate, rssi: ac.rssi!)
+                else if let rssi = ac.rssi, rssi != 0 {
+                    self.updateAircraftAlertRing(for: ac, coordinate: userLocation.coordinate, rssi: rssi)
                     activeAircraftIds.insert(aircraftId)
                 }
             }

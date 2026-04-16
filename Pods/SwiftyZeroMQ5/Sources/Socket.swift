@@ -32,12 +32,12 @@ extension SwiftyZeroMQ {
             // Create socket
             let p : UnsafeMutableRawPointer? = zmq_socket(context.handle,
                                                           type.rawValue)
-            guard p != nil else {
+            guard let socketHandle = p else {
                 throw ZeroMQError.last
             }
             
             // Now we can assign socket handle safely
-            handle = p!
+            handle = socketHandle
             cleanupNeeded = true
         }
         
@@ -116,7 +116,10 @@ extension SwiftyZeroMQ {
             string  : String,
             options : SocketSendRecvOption = .none) throws
         {
-            try send(data: string.data(using: .utf8)!, options: options)
+            guard let data = string.data(using: .utf8) else {
+                throw ZeroMQError.last // Use existing error or create new one
+            }
+            try send(data: data, options: options)
         }
         
         public func send(
@@ -131,10 +134,14 @@ extension SwiftyZeroMQ {
         }
         
         public func sendMultipart(parts: Array<Data>) throws {
+            guard let lastPart = parts.last else {
+                return // Empty array, nothing to send
+            }
+            
             for data in parts.dropLast() {
                 try send(data: data, options: .sendMore)
             }
-            try send(data: parts.last!, options: .none)
+            try send(data: lastPart, options: .none)
         }
         
         public func recvMultipart() throws -> Array<Data> {
@@ -393,7 +400,11 @@ extension SwiftyZeroMQ {
                 throw ZeroMQError.last
             }
             //    return a tuple of public and secret keys as strings
-            return (String(validatingUTF8: publicKey)!, String(validatingUTF8: secretKey)!)
+            guard let pubKey = String(validatingUTF8: publicKey),
+                  let secKey = String(validatingUTF8: secretKey) else {
+                throw ZeroMQError.last // Invalid key data
+            }
+            return (pubKey, secKey)
         }
         
         /// Prepares a socket to use curve security
@@ -533,7 +544,9 @@ extension SwiftyZeroMQ {
         private func setBufferOption(_ name: Int32, _ buffer: Data) throws {
             let pointer: UnsafeRawPointer = buffer.withUnsafeBytes({
                 let unsafeBufferPtr = $0.bindMemory(to: UInt8.self)
-                let u8ptr = unsafeBufferPtr.baseAddress!
+                guard let u8ptr = unsafeBufferPtr.baseAddress else {
+                    fatalError("Buffer base address is nil")
+                }
                 return UnsafeRawPointer(u8ptr)
             })
             try setOption(name, pointer, buffer.count)

@@ -209,7 +209,6 @@ final class StoredDroneEncounter {
     // Activity log tracks when drone was actively transmitting data
     var activityLog: [ActivityLogEntry] {
         get {
-            // Safety check: ensure we can safely access metadata
             guard modelContext != nil else {
                 Self.logger.warning("Cannot access activityLog for detached encounter: \(self.id)")
                 // Return a fallback based on firstSeen/lastSeen if available
@@ -234,7 +233,6 @@ final class StoredDroneEncounter {
             return parsedEntries
         }
         set {
-            // Safety check: ensure we can safely modify metadata
             guard modelContext != nil else {
                 Self.logger.warning("Cannot set activityLog for detached encounter: \(self.id)")
                 return

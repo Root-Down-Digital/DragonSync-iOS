@@ -285,7 +285,7 @@ class TAKEnrollmentManager: ObservableObject {
             throw EnrollmentError.invalidCertificate
         }
         
-        let secIdentity = identity as! SecIdentity
+        let secIdentity = (identity as! SecIdentity)
         
         // Extract certificate from identity
         var certificate: SecCertificate?
@@ -400,7 +400,9 @@ class TAKEnrollmentManager: ObservableObject {
             throw EnrollmentError.certificateNotFound
         }
         
-        return (identity as! SecIdentity)
+        let secIdentity = (identity as! SecIdentity)
+        
+        return secIdentity
     }
     
     func getTruststoreCertificate() throws -> SecCertificate? {
@@ -817,10 +819,15 @@ class TAKEnrollmentManager: ObservableObject {
             throw EnrollmentError.invalidCertificate
         }
         
+        guard let tagData = clientIdentityLabel.data(using: .utf8) else {
+            logger.error("Failed to convert label to data")
+            throw EnrollmentError.invalidCertificate
+        }
+        
         let keyAttrs: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrLabel as String: clientIdentityLabel,
-            kSecAttrApplicationTag as String: clientIdentityLabel.data(using: .utf8)!,
+            kSecAttrApplicationTag as String: tagData,
             kSecValueRef as String: privateKey,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecReturnPersistentRef as String: true
@@ -1048,7 +1055,7 @@ class TAKEnrollmentManager: ObservableObject {
             throw EnrollmentError.invalidCertificate
         }
         
-        let secIdentity = identity as! SecIdentity
+        let secIdentity = (identity as! SecIdentity)
         
         // Extract certificate
         var certificate: SecCertificate?

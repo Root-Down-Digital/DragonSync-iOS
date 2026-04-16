@@ -888,8 +888,7 @@ public final class DroneSignatureGenerator {
         }
         
         info.heightProfile.append(signature.heightInfo.heightAboveGround)
-        
-        // Safely remove first elements if collections have more than 100 items
+
         if info.signatures.count > 100 {
             if !info.signatures.isEmpty { info.signatures.removeFirst() }
             if !info.flightPath.isEmpty { info.flightPath.removeFirst() }

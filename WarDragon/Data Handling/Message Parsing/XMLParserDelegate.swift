@@ -259,8 +259,13 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 dronesBySerial[id]?["index"] = message["index"]
                 dronesBySerial[id]?["runtime"] = message["runtime"]
                 
-                // Store all message data
-                storeDroneMessageData(message: message, into: &dronesBySerial[id]!)
+                // Store all message data 
+                guard var droneData = dronesBySerial[id] else {
+                    print("ERROR: dronesBySerial[\(id)] unexpectedly nil after initialization")
+                    continue
+                }
+                storeDroneMessageData(message: message, into: &droneData)
+                dronesBySerial[id] = droneData
             }
         } else {
             // Process BT split format - each array element has ONE message type

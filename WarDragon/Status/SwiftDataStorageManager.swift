@@ -76,7 +76,7 @@ class SwiftDataStorageManager: ObservableObject {
         operationMetrics[operation]?.append(duration)
         
         // Keep only recent samples
-        if operationMetrics[operation]!.count > maxMetricsPerOperation {
+        if let metrics = operationMetrics[operation], metrics.count > maxMetricsPerOperation {
             operationMetrics[operation]?.removeFirst()
         }
         
@@ -224,7 +224,9 @@ class SwiftDataStorageManager: ObservableObject {
                     self?.flushPendingCacheUpdates()
                 }
             }
-            RunLoop.main.add(cacheUpdateTimer!, forMode: .common)
+            if let timer = cacheUpdateTimer {
+                RunLoop.main.add(timer, forMode: .common)
+            }
         }
     }
     
@@ -413,7 +415,7 @@ class SwiftDataStorageManager: ObservableObject {
         }
         
         // Add proximity point if no flight point added
-        if !didAddPoint && message.rssi != nil && message.rssi != 0 {
+        if !didAddPoint, let rssi = message.rssi, rssi != 0 {
             if let monitorStatus = monitorStatus {
                 let monitorLat = monitorStatus.gpsData.latitude
                 let monitorLon = monitorStatus.gpsData.longitude
@@ -434,7 +436,7 @@ class SwiftDataStorageManager: ObservableObject {
                     homeLatitude: Double(message.homeLat),
                     homeLongitude: Double(message.homeLon),
                     isProximityPoint: true,
-                    proximityRssi: Double(message.rssi!),
+                    proximityRssi: Double(rssi),
                     proximityRadius: nil
                 )
                 
@@ -445,8 +447,8 @@ class SwiftDataStorageManager: ObservableObject {
                     encounter.metadata["hasProximityPoints"] = "true"
                 } else {
                     let rssiValues = proximityPoints.compactMap { $0.proximityRssi }
-                    let minRssi = rssiValues.min() ?? Double(message.rssi!)
-                    let maxRssi = rssiValues.max() ?? Double(message.rssi!)
+                    let minRssi = rssiValues.min() ?? Double(rssi)
+                    let maxRssi = rssiValues.max() ?? Double(rssi)
                     
                     if let replaceIndex = encounter.flightPoints.firstIndex(where: { point in
                         point.isProximityPoint && point.proximityRssi != nil &&

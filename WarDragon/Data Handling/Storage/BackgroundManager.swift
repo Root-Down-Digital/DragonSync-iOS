@@ -135,7 +135,6 @@ final class BackgroundManager {
         running = false
         guard wasRunning else { return }
 
-        // Fix for crash report: Don't access Settings.shared during stop - disconnect both safely
         ZMQHandler.shared.disconnect()
         disconnectMulticast()
 
