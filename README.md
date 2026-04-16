@@ -1,14 +1,12 @@
-
-
-
 <div align="center">
 
-  # DragonSync iOS
 
-  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Closed-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
+
+# DragonSync iOS
+
+  [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Join-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
   [![MobSF](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml/badge.svg)](https://github.com/Root-Down-Digital/DragonSync-iOS/actions/workflows/mobsf.yml)
   [![Latest Release](https://img.shields.io/github/v/release/Root-Down-Digital/DragonSync-iOS?label=Version)](https://github.com/Root-Down-Digital/DragonSync-iOS/releases/latest)
-
 
   <img src="https://github.com/user-attachments/assets/d21ab909-7dba-4b42-8996-a741248e9223" width="70%" alt="DragonSync Logo">
 
@@ -23,10 +21,14 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 ---
 
+<img width="300" height="300" alt="dragonIcon copy" src="https://github.com/user-attachments/assets/61b82478-b10f-481e-9a34-f3ecc983701d" />
+
 > [!NOTE]
-> Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use a fork of DroneID for FPV and ESP32 as described below, or write a new wrapper.
+> Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
 >
-> **A wardragon is not required**: a WiFi adapter or ESP32 will see about 80% of consumer drones (WiFI RID). The SDR adds the ability to decode parts of Ocusync Drone-ID. 
+> **A wardragon is not required**:
+> - A WiFi adapter or ESP32 with antenna will see about 80% of consumer drones (WiFI RID). A 5G adapter is needed to detect Skydio.
+> - The SDR adds the ability to decode parts of Ocusync Drone-ID like RSSI and a few others (a paid subscription from alphafox is available for o4 decryption/decoding)
 
 ## What It Detects
 
@@ -80,6 +82,8 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 ---
 
 ## In Action
+
+### Portable
 ![image](https://github.com/user-attachments/assets/5b4113a0-e227-4a0e-ba83-a761a09a9d1b)
 
 **Features**
@@ -154,7 +158,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 - Use the troubleshooting guide to fix common issues.
 - Multicast/`dragonsync.py` is not a requirement for FPV. Run the `fpv_receiver.py` in this [zmq_decoder fork](https://github.com/lukeswitz/DroneID)
 
-## Option 1: WarDragon Pro
+## Option 1: WarDragon Pro (Powerful)
 
 Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
@@ -168,18 +172,16 @@ Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
 **Troubleshooting:**
 
-> Since alphafox02 lost interest in this app last year, there's no sustainable way (or reason) to keep trying to support the WarDragon. And since you have to wipe the system to update a wardragon, you'll need to use the DroneID repo that can actully parse all the data from a full RID. Try these tips to get it running on his DragonOS WarDragon Pro build:
-
 No Network Connection/Data: 
 
 A. Toggling the in-app connection off and on is sometimes needed first run for Apple to request connections. 
 
-B. Backend ***connection settings*** that may need modification:
+B. Backend ***WarDragon connection settings*** that may need modification:
 
    - Edit the Config file: `/home/dragon/WarDragon/DragonSync/config.ini`
-     - Change if localhost fails to ***listen for zmq**
+     - Change if localhost fails to ***connect to zmq**
      `zmq_host = 0.0.0.0`
-     - Alternative ***multicast*** address 
+     - Alternative ***multicast connection*** address
      `tak_multicast_addr = 224.0.0.1`  
 
 System Status: 
