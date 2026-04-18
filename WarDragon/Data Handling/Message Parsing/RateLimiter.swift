@@ -248,7 +248,7 @@ struct RateLimitConfiguration: Codable, Equatable {
     var webhookPublishInterval: TimeInterval // Minimum interval between webhooks
     
     init(
-        enabled: Bool = true,
+        enabled: Bool = false,
         dronePublishInterval: TimeInterval = 1.0,
         droneMaxPerMinute: Int = 30,
         mqttMaxPerSecond: Int = 10,

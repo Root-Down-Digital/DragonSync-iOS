@@ -54,8 +54,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cachedZmqHost: String = "192.168.2.1"
     private var cachedZmqTelemetryPort: UInt16 = 45454
     private var cachedZmqStatusPort: UInt16 = 4225
-    private var cachedMessageProcessingInterval: TimeInterval = 0.1
-    private var cachedBackgroundMessageInterval: TimeInterval = 1.0
+    private var cachedMessageProcessingInterval: TimeInterval = 0.5
+    private var cachedBackgroundMessageInterval: TimeInterval = 2.0
     private var cachedIsListening: Bool = false
     private var cachedEnableBackgroundDetection: Bool = false
     
@@ -2903,31 +2903,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     
     private func updateDroneSignaturesAndEncounters(_ signature: DroneSignature, message: CoTMessage) {
-        
-        // UNCOMMENT THIS BLOCK TO DISALLOW ZERO COORDINATE DETECTIONS
-        //        guard signature.position.coordinate.latitude != 0 &&
-        //              signature.position.coordinate.longitude != 0 else {
-        //            return // Skip update if coordinates are 0,0
-        //        }
-        
-        // Update drone signatures - wrap in MainActor to prevent background thread publishing
-        Task { @MainActor in
-            if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
-                self.droneSignatures[index] = signature
-                print("Updating existing signature")
-            } else {
-                print("Added new signature")
-                self.droneSignatures.append(signature)
-            }
-        }
-        
-        //        // Validate coordinates first - UNCOMMENT THIS TO DISALLOW ZERO COORDINATE DETECTIONS
-        //        guard signature.position.coordinate.latitude != 0 &&
-        //              signature.position.coordinate.longitude != 0 else {
-        //            return // Skip update if coordinates are 0,0
-        //        }
-        
-        /// Update drone signatures - wrap in MainActor to prevent background thread publishing
         Task { @MainActor in
             if let index = self.droneSignatures.firstIndex(where: { $0.primaryId.id == signature.primaryId.id }) {
                 self.droneSignatures[index] = signature
@@ -2936,9 +2911,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 print("DEBUG:  Added new signature for \(signature.primaryId.id)")
                 self.droneSignatures.append(signature)
             }
-        }
-        
-        Task { @MainActor in
+            
             let currentMonitorStatus = self.statusViewModel.statusMessages.last
             
             DroneStorageManager.shared.saveEncounter(message, monitorStatus: currentMonitorStatus)

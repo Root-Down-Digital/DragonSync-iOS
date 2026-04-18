@@ -261,12 +261,12 @@ class Settings: ObservableObject {
         }
     }
     @AppStorage("enableProximityWarnings") var enableProximityWarnings = true
-    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 50 {
+    @AppStorage("messageProcessingInterval") var messageProcessingInterval: Int = 500 {
         didSet {
             objectWillChange.send()
         }
     }
-    @AppStorage("backgroundMessageInterval") var backgroundMessageInterval: Int = 100 {
+    @AppStorage("backgroundMessageInterval") var backgroundMessageInterval: Int = 2000 {
         didSet {
             objectWillChange.send()
         }
@@ -697,7 +697,7 @@ class Settings: ObservableObject {
     }
     
     // MARK: - Rate Limiting Settings
-    @AppStorage("rateLimitEnabled") var rateLimitEnabled = true {
+    @AppStorage("rateLimitEnabled") var rateLimitEnabled = false {
         didSet { objectWillChange.send() }
     }
     
