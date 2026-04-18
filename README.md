@@ -1,7 +1,5 @@
 <div align="center">
 
-
-
 # DragonSync iOS
 
   [![Join TestFlight Beta](https://img.shields.io/badge/TestFlight-Join-blue.svg?style=f&logo=apple)](https://testflight.apple.com/join/1PGR3fyX)
@@ -14,21 +12,17 @@
 
 Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing & Randomization Sniffers
 
-[Get Started](#installation) • [What It Detects](#what-it-detects) • [In-Action](#in-action) • [Integrations](#integrations)
+[Get Started](#installation) • [What It Detects](#what-it-detects) • [In-Action](#in-action) • [Integrations](#integrations) • [Legal](#legal-disclaimer)
 
 </div>
 
-
 ---
 
-<img width="300" height="300" alt="dragonIcon copy" src="https://github.com/user-attachments/assets/61b82478-b10f-481e-9a34-f3ecc983701d" />
+
 
 > [!NOTE]
-> Due to rapid code development of DroneID and Dragonsync by alphafox02, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
+> Due to rapid code development of DroneID and Dragonsync, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
 >
-> **A wardragon is not required**:
-> - A WiFi adapter or ESP32 with antenna will see about 80% of consumer drones (WiFI RID). A 5G adapter is needed to detect Skydio.
-> - The SDR adds the ability to decode parts of Ocusync Drone-ID like RSSI and a few others (a paid subscription from alphafox is available for o4 decryption/decoding)
 
 ## What It Detects
 
@@ -422,26 +416,49 @@ Starscream
 
 **READ BEFORE USE**
 
-While receiving RF signals is generally legal in most jurisdictions, users are solely responsible for:
+Nature of This Software
 
-- Complying with all applicable local, state, federal, and international laws
-- Ensuring proper authorization before monitoring any communications
-- Understanding that monitoring transmissions you are not authorized to receive may be illegal
-- Obtaining necessary licenses or permissions from local regulatory authorities
-- Using appropriate frequencies and power levels per local regulations
+DragonSync iOS is a passive radio frequency monitoring and data visualization application. It receives and displays publicly broadcast Remote ID (RID) transmissions as mandated by FAA 14 CFR Part 89, FCC regulations, and equivalent international standards (EU 2019/945, EASA, etc.). It transmits no signals of any kind.
 
-**The authors, contributors, and maintainers of this software:**
-- Make NO WARRANTIES, express or implied
-- Accept NO RESPONSIBILITY for any use, misuse, or consequences
-- Accept NO LIABILITY for any legal violations, damages, or harm
-- Provide this software "AS IS" without guarantee of fitness for any purpose
+Remote ID broadcasts are intentionally public by regulatory design. The FAA, FCC, and EASA explicitly require drone operators to continuously broadcast RID data for public safety, airspace awareness, and law enforcement use. Reception and display of these broadcasts is not only legal — it is the intended and stated purpose of the RID mandate.
 
-**By using this software, you acknowledge:**
-- You are solely responsible for your actions and consequences
-- You will use this software only in compliance with applicable laws
-- The authors bear no responsibility for your use
+No Interception. No Decryption. No Transmission.
 
-**USE AT YOUR OWN RISK**
+This application:
+
+- Receives only publicly broadcast, unencrypted radio transmissions
+- Does not intercept, decode, or access any private, encrypted, or protected communications
+- Does not transmit any RF signals
+- Does not interfere with any aircraft, drone, or communications system
+- Does not circumvent any security measure or access control
+- ADS-B data is similarly public by FAA mandate (14 CFR Part 91.225). ADS-B ground station data provided via OpenSky Network is publicly licensed.
+
+Federal Wiretap Act / ECPA
+
+The Electronic Communications Privacy Act (18 U.S.C. § 2511) explicitly exempts radio communications that are:
+
+- Transmitted using frequencies allocated under Part 15 or Part 97 of FCC rules, or
+- Not scrambled, encrypted, or made private by the transmitter, or
+- Transmitted for the use of the general public
+- Remote ID (WiFi 2.4/5GHz, Bluetooth LE) and ADS-B (1090MHz) fall entirely within these exemptions. No provision of ECPA is implicated by passive receipt of these broadcasts.
+
+User Responsibilities
+
+Users are responsible for:
+
+- Compliance with all applicable local, state, federal, and international laws
+- Ensuring any hardware used (SDR, WiFi adapters, Bluetooth sniffers) is operated within licensed parameters
+- Not using detection data to harass, track, or harm any individual
+- Understanding that laws vary by jurisdiction and may change
+- Disclaimer of Warranties and Liability
+
+This software is provided "AS IS" without warranty of any kind, express or implied. The authors, contributors, and maintainers:
+
+- Make no warranty of fitness for any particular purpose
+- Accept no liability for damages, legal consequences, or harm arising from use or misuse
+- Bear no responsibility for actions taken by users based on data displayed
+
+By using this software, you confirm you have read, understood, and accept these terms in full.
 
 ---
 
