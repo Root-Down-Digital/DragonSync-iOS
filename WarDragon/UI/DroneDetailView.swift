@@ -17,9 +17,6 @@ struct DroneDetailView: View {
     @State private var showAllLocations = true
     @State private var showFlightPath = true
     @State private var selectedMapStyle: MapStyleOption = .standard
-    @State private var cachedAlertRings: [CoTViewModel.AlertRing] = []
-    @State private var lastAlertRingUpdateTime: Date = .distantPast
-    @State private var alertRingHash: Int = 0
     
     // FAA Lookup states
     @State private var showingFAAInfo = false
@@ -48,23 +45,8 @@ struct DroneDetailView: View {
         self.flightPath = flightPath
         self.cotViewModel = cotViewModel
         
-        // Cache alert rings to prevent map flashing
-        let initialRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
-        _cachedAlertRings = State(initialValue: initialRings)
-        
-        // Calculate initial hash
-        var hasher = Hasher()
-        for ring in initialRings {
-            hasher.combine(ring.droneId)
-            hasher.combine(ring.centerCoordinate.latitude)
-            hasher.combine(ring.centerCoordinate.longitude)
-            hasher.combine(ring.radius)
-            hasher.combine(ring.rssi)
-        }
-        _alertRingHash = State(initialValue: hasher.finalize())
-        
         if message.isFPVDetection {
-            // For FPV, try to center on alert ring
+            let initialRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
             if let ring = initialRings.first {
                 let span = MKCoordinateSpan(
                     latitudeDelta: max(ring.radius / 55000, 0.01),
@@ -73,7 +55,6 @@ struct DroneDetailView: View {
                 let region = MKCoordinateRegion(center: ring.centerCoordinate, span: span)
                 _mapCameraPosition = State(initialValue: .region(region))
             } else {
-                // Default region if no ring yet
                 _mapCameraPosition = State(initialValue: .region(
                     MKCoordinateRegion(
                         center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
@@ -82,7 +63,6 @@ struct DroneDetailView: View {
                 ))
             }
         } else {
-            // Regular drone handling
             let allCoordinates = Self.getAllRelevantCoordinates(message: message, flightPath: flightPath)
             
             if allCoordinates.isEmpty {
@@ -149,23 +129,6 @@ struct DroneDetailView: View {
         } message: {
             Text(faaError ?? "Unknown error occurred")
         }
-        .onAppear {
-            updateAlertRingCache()
-        }
-        .onReceive(cotViewModel.objectWillChange) { _ in
-            // Only update if alert rings for this drone actually changed
-            let newRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
-            let newHash = calculateAlertRingHash(newRings)
-            
-            // Throttle updates - only update if hash changed and at least 2 seconds have passed
-            let now = Date()
-            if newHash != alertRingHash && now.timeIntervalSince(lastAlertRingUpdateTime) > 5.0 {
-                alertRingHash = newHash
-                lastAlertRingUpdateTime = now
-                cachedAlertRings = newRings
-                print("Updated alert ring cache for \(message.uid): \(cachedAlertRings.count) rings")
-            }
-        }
     }
     
     // MARK: - FAA Lookup
@@ -185,27 +148,6 @@ struct DroneDetailView: View {
             }
             isLoadingFAA = false
         }
-    }
-    
-    // Helper to calculate a hash for alert rings to detect actual changes
-    private func calculateAlertRingHash(_ rings: [CoTViewModel.AlertRing]) -> Int {
-        var hasher = Hasher()
-        for ring in rings {
-            hasher.combine(ring.droneId)
-            hasher.combine(ring.centerCoordinate.latitude)
-            hasher.combine(ring.centerCoordinate.longitude)
-            hasher.combine(ring.radius)
-            hasher.combine(ring.rssi)
-        }
-        return hasher.finalize()
-    }
-    
-    private func updateAlertRingCache() {
-        let newRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
-        cachedAlertRings = newRings
-        alertRingHash = calculateAlertRingHash(newRings)
-        lastAlertRingUpdateTime = Date()
-        print("Initial alert ring cache for \(message.uid): \(cachedAlertRings.count) rings")
     }
     
     private var mapSection: some View {
@@ -246,7 +188,6 @@ struct DroneDetailView: View {
                 if !message.isFPVDetection {
                     Button {
                         showAllLocations.toggle()
-                        updateMapRegion()
                     } label: {
                         Text(showAllLocations ? "Drone Only" : "Show All")
                             .foregroundStyle(.white)
@@ -273,7 +214,8 @@ struct DroneDetailView: View {
 
             Map(position: $mapCameraPosition) {
                 if message.isFPVDetection {
-                    ForEach(cachedAlertRings) { ring in
+                    let alertRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+                    ForEach(alertRings) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .foregroundStyle(.orange.opacity(0.1))
                             .stroke(.orange, lineWidth: 3)
@@ -319,11 +261,9 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    if message.homeLat != "0.0" && message.homeLon != "0.0",
-                       let lat = Double(message.homeLat),
+                    if let lat = Double(message.homeLat),
                        let lon = Double(message.homeLon),
-                       !(lat == 0 && lon == 0)
-                    {
+                       lat != 0 || lon != 0 {
                         Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                             ZStack {
                                 Circle()
@@ -336,11 +276,9 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    if message.pilotLat != "0.0" && message.pilotLon != "0.0",
-                       let plat = Double(message.pilotLat),
+                    if let plat = Double(message.pilotLat),
                        let plon = Double(message.pilotLon),
-                       !(plat == 0 && plon == 0)
-                    {
+                       plat != 0 || plon != 0 {
                         Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
                             ZStack {
                                 Circle()
@@ -366,7 +304,8 @@ struct DroneDetailView: View {
                             .stroke(.purple, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
 
-                    ForEach(cachedAlertRings) { ring in
+                    let alertRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+                    ForEach(alertRings) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .stroke(.red.opacity(0.2), lineWidth: 2)
                     }
@@ -736,16 +675,16 @@ struct DroneDetailView: View {
         }
         
         // Home location
-        if message.homeLat != "0.0" && message.homeLon != "0.0",
-           let homeLat = Double(message.homeLat),
-           let homeLon = Double(message.homeLon) {
+        if let homeLat = Double(message.homeLat),
+           let homeLon = Double(message.homeLon),
+           homeLat != 0 || homeLon != 0 {
             coordinates.append(CLLocationCoordinate2D(latitude: homeLat, longitude: homeLon))
         }
         
         // Pilot location
-        if message.pilotLat != "0.0" && message.pilotLon != "0.0",
-           let pilotLat = Double(message.pilotLat),
-           let pilotLon = Double(message.pilotLon) {
+        if let pilotLat = Double(message.pilotLat),
+           let pilotLon = Double(message.pilotLon),
+           pilotLat != 0 || pilotLon != 0 {
             coordinates.append(CLLocationCoordinate2D(latitude: pilotLat, longitude: pilotLon))
         }
         
@@ -783,32 +722,6 @@ struct DroneDetailView: View {
             center: center,
             span: MKCoordinateSpan(latitudeDelta: deltaLat, longitudeDelta: deltaLon)
         )
-    }
-    
-    private func updateMapRegion() {
-        if message.isFPVDetection {
-            // For FPV, center on cached alert ring if available
-            if let ring = cachedAlertRings.first {
-                let span = MKCoordinateSpan(
-                    latitudeDelta: max(ring.radius / 55000, 0.01),
-                    longitudeDelta: max(ring.radius / 55000, 0.01)
-                )
-                let region = MKCoordinateRegion(center: ring.centerCoordinate, span: span)
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    mapCameraPosition = .region(region)
-                }
-            }
-        } else {
-            // Drone
-            let coords = showAllLocations
-                ? Self.getAllRelevantCoordinates(message: message, flightPath: flightPath)
-                : (message.coordinate.map { [$0] } ?? [])
-
-            let region = Self.calculateRegionForCoordinates(coords)
-            withAnimation(.easeInOut(duration: 0.5)) {
-                mapCameraPosition = .region(region)
-            }
-        }
     }
     
     private func calculateTotalDistance() -> Double {

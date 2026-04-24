@@ -22,6 +22,11 @@ struct LiveMapView: View {
     @State private var userHasMovedMap = false
     @State private var showFlightPaths = true
     @State private var selectedMapStyle: MapStyleOption = .standard
+    @State private var selectedDroneId: String? = nil
+    @State private var animationProgress: Double = 0.0
+    @State private var showPilotMarkers = true
+    @State private var showHomeMarkers = true
+    @State private var showDroneMarkers = true
     let filterMode: FilterMode
     let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
     
@@ -348,7 +353,8 @@ struct LiveMapView: View {
                         if let coordinate = message.coordinate, coordinate.isValid {
                             let isLastDrone = message.uid == uniqueDrones.last?.uid
                             let color = isLastDrone ? Color.red : Color.blue
-                                
+                            
+                            if showDroneMarkers {
                                 Annotation("", coordinate: coordinate) {
                                     VStack(spacing: 2) {
                                         ZStack {
@@ -375,67 +381,68 @@ struct LiveMapView: View {
                                             .cornerRadius(4)
                                     }
                                 }
+                            }
                         }
                         
-                        if message.homeLat != "0.0" && message.homeLon != "0.0",
-                           let lat = Double(message.homeLat),
-                           let lon = Double(message.homeLon),
-                           !(lat == 0 && lon == 0)
-                        {
-                            Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(.green)
-                                            .frame(width: 30, height: 30)
-                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
-                                        Image(systemName: "house.fill")
-                                            .foregroundStyle(.white)
-                                            .font(.body)
-                                    }
-                                    
-                                    if uniqueDrones.count > 1 {
-                                        Text(message.uid)
-                                            .font(.caption2)
-                                            .bold()
-                                            .foregroundColor(.primary)
-                                            .padding(.horizontal, 4)
-                                            .padding(.vertical, 2)
-                                            .background(.green.opacity(0.2))
-                                            .background(.ultraThinMaterial)
-                                            .cornerRadius(4)
+                        if showHomeMarkers {
+                            if let lat = Double(message.homeLat),
+                               let lon = Double(message.homeLon),
+                               lat != 0 || lon != 0 {
+                                Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                                    VStack(spacing: 2) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(.green)
+                                                .frame(width: 30, height: 30)
+                                                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                            Image(systemName: "house.fill")
+                                                .foregroundStyle(.white)
+                                                .font(.body)
+                                        }
+                                        
+                                        if uniqueDrones.count > 1 {
+                                            Text(message.uid)
+                                                .font(.caption2)
+                                                .bold()
+                                                .foregroundColor(.primary)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.green.opacity(0.2))
+                                                .background(.ultraThinMaterial)
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
                             }
                         }
                         
-                        if message.pilotLat != "0.0" && message.pilotLon != "0.0",
-                           let plat = Double(message.pilotLat),
-                           let plon = Double(message.pilotLon),
-                           !(plat == 0 && plon == 0)
-                        {
-                            Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
-                                VStack(spacing: 2) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(.orange)
-                                            .frame(width: 30, height: 30)
-                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
-                                        Image(systemName: "person.fill")
-                                            .foregroundStyle(.white)
-                                            .font(.body)
-                                    }
-                                    
-                                    if uniqueDrones.count > 1 {
-                                        Text(message.uid)
-                                            .font(.caption2)
-                                            .bold()
-                                            .foregroundColor(.primary)
-                                            .padding(.horizontal, 4)
-                                            .padding(.vertical, 2)
-                                            .background(.orange.opacity(0.2))
-                                            .background(.ultraThinMaterial)
-                                            .cornerRadius(4)
+                        if showPilotMarkers {
+                            if let plat = Double(message.pilotLat),
+                               let plon = Double(message.pilotLon),
+                               plat != 0 || plon != 0 {
+                                Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
+                                    VStack(spacing: 2) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(.orange)
+                                                .frame(width: 30, height: 30)
+                                                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                            Image(systemName: "person.fill")
+                                                .foregroundStyle(.white)
+                                                .font(.body)
+                                        }
+                                        
+                                        if uniqueDrones.count > 1 {
+                                            Text(message.uid)
+                                                .font(.caption2)
+                                                .bold()
+                                                .foregroundColor(.primary)
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(.orange.opacity(0.2))
+                                                .background(.ultraThinMaterial)
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
                             }
@@ -545,11 +552,61 @@ struct LiveMapView: View {
                 HStack {
                     Spacer()
                     
+                    // Show Drones Toggle
+                    Button {
+                        print("🔴 DEBUG: Drone button TAPPED - Current state: \(showDroneMarkers)")
+                        showDroneMarkers.toggle()
+                        print("🔴 DEBUG: Drone button state changed to: \(showDroneMarkers)")
+                    } label: {
+                        Label("Drones", systemImage: showDroneMarkers ? "airplane.circle.fill" : "airplane.circle")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
                     // Flight Path Toggle
                     Button {
+                        print("🟠 DEBUG: Flight Path button TAPPED - Current state: \(showFlightPaths)")
                         showFlightPaths.toggle()
+                        print("🟠 DEBUG: Flight Path state changed to: \(showFlightPaths)")
                     } label: {
-                        Label(showFlightPaths ? "Paths" : "Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                        Label("Paths", systemImage: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
+                    // Pilot Markers Toggle
+                    Button {
+                        print("🟡 DEBUG: Pilot button TAPPED - Current state: \(showPilotMarkers)")
+                        showPilotMarkers.toggle()
+                        print("🟡 DEBUG: Pilot state changed to: \(showPilotMarkers)")
+                    } label: {
+                        Label("Pilot", systemImage: showPilotMarkers ? "person.fill" : "person")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                    }
+                    .padding(.top)
+                    
+                    // Home Markers Toggle
+                    Button {
+                        print("🟢 DEBUG: Home button TAPPED - Current state: \(showHomeMarkers)")
+                        showHomeMarkers.toggle()
+                        print("🟢 DEBUG: Home state changed to: \(showHomeMarkers)")
+                    } label: {
+                        Label("Home", systemImage: showHomeMarkers ? "house.fill" : "house")
                             .foregroundStyle(.white)
                             .font(.caption)
                             .padding(.horizontal, 12)
@@ -695,6 +752,63 @@ struct LiveMapView: View {
                 }
             }
         }
+    }
+    
+    // MARK: - Pilot & Home Location Helpers
+    
+    /// Get the pilot location from current message
+    private func getPilotLocation(for drone: CoTViewModel.CoTMessage) -> CLLocationCoordinate2D? {
+        if let plat = Double(drone.pilotLat),
+           let plon = Double(drone.pilotLon),
+           plat != 0 || plon != 0 {
+            return CLLocationCoordinate2D(latitude: plat, longitude: plon)
+        }
+        
+        return nil
+    }
+    
+    private func getHomeLocation(for drone: CoTViewModel.CoTMessage) -> CLLocationCoordinate2D? {
+        if let lat = Double(drone.homeLat),
+           let lon = Double(drone.homeLon),
+           lat != 0 || lon != 0 {
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+        
+        return nil
+    }
+    
+    /// Get unique pilot locations to avoid duplicates on map
+    private func getUniquePilotLocations() -> [(droneId: String, coordinate: CLLocationCoordinate2D)] {
+        var uniqueLocations: [String: (droneId: String, coordinate: CLLocationCoordinate2D)] = [:]
+        
+        for drone in uniqueDrones {
+            if let pilotCoord = getPilotLocation(for: drone) {
+                // Use coordinate as key to deduplicate
+                let key = "\(pilotCoord.latitude),\(pilotCoord.longitude)"
+                if uniqueLocations[key] == nil {
+                    uniqueLocations[key] = (drone.uid, pilotCoord)
+                }
+            }
+        }
+        
+        return Array(uniqueLocations.values)
+    }
+    
+    /// Get unique home locations to avoid duplicates on map
+    private func getUniqueHomeLocations() -> [(droneId: String, coordinate: CLLocationCoordinate2D)] {
+        var uniqueLocations: [String: (droneId: String, coordinate: CLLocationCoordinate2D)] = [:]
+        
+        for drone in uniqueDrones {
+            if let homeCoord = getHomeLocation(for: drone) {
+                // Use coordinate as key to deduplicate
+                let key = "\(homeCoord.latitude),\(homeCoord.longitude)"
+                if uniqueLocations[key] == nil {
+                    uniqueLocations[key] = (drone.uid, homeCoord)
+                }
+            }
+        }
+        
+        return Array(uniqueLocations.values)
     }
 }
 

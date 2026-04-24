@@ -329,20 +329,12 @@ struct ContentView: View {
             if hasDrones {
                 Section("Drones (\(cotViewModel.parsedMessages.count))") {
                     ForEach(cotViewModel.parsedMessages) { item in
-                        NavigationLink {
-                            DroneDetailView(
-                                message: item,
-                                flightPath: getValidFlightPath(for: item.uid),
-                                cotViewModel: cotViewModel
-                            )
-                        } label: {
-                            MessageRow(
-                                message: item,
-                                cotViewModel: cotViewModel,
-                                isCompact: true
-                            )
-                            .id(item.uid)
-                        }
+                        MessageRow(
+                            message: item,
+                            cotViewModel: cotViewModel,
+                            isCompact: true
+                        )
+                        .id(item.uid)
                     }
                 }
             }
@@ -591,44 +583,40 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    List {
-                        Section {
-                            unifiedMapView(showAircraft: false)
-                                .listRowInsets(EdgeInsets())
-                                .listRowBackground(Color.clear)
-                        }
-                        
-                        Section {
-                            ForEach(cotViewModel.parsedMessages) { item in
-                                NavigationLink {
-                                    DroneDetailView(
-                                        message: item,
-                                        flightPath: getValidFlightPath(for: item.uid),
-                                        cotViewModel: cotViewModel
-                                    )
-                                } label: {
-                                    MessageRow(
-                                        message: item,
-                                        cotViewModel: cotViewModel,
-                                        isCompact: true
-                                    )
-                                    .id(item.uid)
-                                }
-                            }
-                        }
+                droneList
+            }
+        }
+    }
+    
+    private var droneList: some View {
+        ScrollViewReader { proxy in
+            List {
+                Section {
+                    unifiedMapView(showAircraft: false)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+                
+                Section {
+                    ForEach(cotViewModel.parsedMessages) { item in
+                        MessageRow(
+                            message: item,
+                            cotViewModel: cotViewModel,
+                            isCompact: true
+                        )
+                        .id(item.uid)
                     }
-                    .listStyle(.inset)
-                    .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
-                        if oldMessages.count < newMessages.count {
-                            if let latest = newMessages.last {
-                                if !oldMessages.contains(where: { $0.id == latest.id }) {
-                                    latestMessage = latest
-                                    showAlert = false
-                                    withAnimation {
-                                        proxy.scrollTo(latest.id, anchor: .bottom)
-                                    }
-                                }
+                }
+            }
+            .listStyle(.inset)
+            .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
+                if oldMessages.count < newMessages.count {
+                    if let latest = newMessages.last {
+                        if !oldMessages.contains(where: { $0.id == latest.id }) {
+                            latestMessage = latest
+                            showAlert = false
+                            withAnimation {
+                                proxy.scrollTo(latest.id, anchor: .bottom)
                             }
                         }
                     }
@@ -638,12 +626,7 @@ struct ContentView: View {
     }
     
     private func unifiedMapView(showAircraft: Bool = true) -> some View {
-        Button(action: {
-            showUnifiedMap = true
-        }) {
-            LiveMapPreview(cotViewModel: cotViewModel, droneCount: cotViewModel.parsedMessages.count, showAircraft: showAircraft)
-        }
-        .buttonStyle(.plain)
+        LiveMapPreview(cotViewModel: cotViewModel, droneCount: cotViewModel.parsedMessages.count, showAircraft: showAircraft, showUnifiedMap: $showUnifiedMap)
     }
     
     // MARK: - Helper Methods
@@ -912,85 +895,252 @@ struct ContentView: View {
 private struct LiveMapPreview: View {
     @ObservedObject var cotViewModel: CoTViewModel
     let droneCount: Int
-    let showAircraft: Bool // New parameter to control whether to show aircraft
+    let showAircraft: Bool
+    @Binding var showUnifiedMap: Bool
+    @State private var showFlightPaths = true
+    @State private var showDroneMarkers = true
+    @State private var showPilotMarkers = true
+    @State private var showHomeMarkers = true
+    @State private var selectedMapStyle: MapStyleOption = .standard
+    @State private var mapCameraPosition: MapCameraPosition = .automatic
+    @State private var lastDroneCount = 0
+    @State private var lastAircraftCount = 0
     
-    init(cotViewModel: CoTViewModel, droneCount: Int, showAircraft: Bool = true) {
+    enum MapStyleOption {
+        case standard
+        case hybrid
+        case satellite
+        
+        var mapStyle: MapStyle {
+            switch self {
+            case .standard: return .standard
+            case .hybrid: return .hybrid
+            case .satellite: return .imagery
+            }
+        }
+    }
+    
+    init(cotViewModel: CoTViewModel, droneCount: Int, showAircraft: Bool = true, showUnifiedMap: Binding<Bool>) {
         self.cotViewModel = cotViewModel
         self.droneCount = droneCount
         self.showAircraft = showAircraft
+        self._showUnifiedMap = showUnifiedMap
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            Map(bounds: MapCameraBounds(centerCoordinateBounds: mapRegion)) {
-                // Drone flight paths
-                ForEach(cotViewModel.parsedMessages) { message in
-                    if !message.isFPVDetection {
-                        let flightPath = getDroneFlightPath(for: message.uid)
-                        if flightPath.count > 1 {
-                            MapPolyline(coordinates: flightPath)
-                                .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            ZStack(alignment: .top) {
+                Map(position: $mapCameraPosition) {
+                    if showFlightPaths {
+                        ForEach(cotViewModel.parsedMessages) { message in
+                            if !message.isFPVDetection {
+                                let flightPath = getDroneFlightPath(for: message.uid)
+                                if flightPath.count > 1 {
+                                    MapPolyline(coordinates: flightPath)
+                                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                                }
+                            }
                         }
                     }
-                }
-                
-                // Aircraft flight paths - only if showAircraft is true
-                if showAircraft {
-                    ForEach(cotViewModel.aircraftTracks) { aircraft in
-                        let flightPath = getAircraftFlightPath(for: aircraft)
-                        if flightPath.count > 1 {
-                            MapPolyline(coordinates: flightPath)
-                                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    
+                    if showAircraft && showFlightPaths {
+                        ForEach(cotViewModel.aircraftTracks) { aircraft in
+                            let flightPath = getAircraftFlightPath(for: aircraft)
+                            if flightPath.count > 1 {
+                                MapPolyline(coordinates: flightPath)
+                                    .stroke(Color.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            }
                         }
                     }
-                }
-                
-                // FPV Alert Rings
-                ForEach(cotViewModel.alertRings) { ring in
-                    if !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
-                        MapCircle(center: ring.centerCoordinate, radius: ring.radius)
-                            .foregroundStyle(.orange.opacity(0.1))
-                            .stroke(.orange, lineWidth: 2)
-                        
-                        Annotation("Monitor", coordinate: ring.centerCoordinate) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .foregroundColor(.orange)
-                                .font(.title2)
-                                .background(Circle().fill(.white).frame(width: 24, height: 24))
+                    
+                    ForEach(cotViewModel.alertRings) { ring in
+                        if !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
+                            MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                                .foregroundStyle(.orange.opacity(0.1))
+                                .stroke(.orange, lineWidth: 2)
+                            
+                            Annotation("Monitor", coordinate: ring.centerCoordinate) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(.orange)
+                                    .font(.title2)
+                                    .background(Circle().fill(.white).frame(width: 24, height: 24))
+                            }
                         }
                     }
-                }
-                
-                // Drone markers
-                ForEach(cotViewModel.parsedMessages) { message in
-                    if let coordinate = message.coordinate,
-                       !message.isFPVDetection,
-                       !(coordinate.latitude == 0 && coordinate.longitude == 0) {
-                        Annotation(message.id, coordinate: coordinate) {
-                            droneAnnotationIcon(for: message)
+                    
+                    if showDroneMarkers {
+                        ForEach(cotViewModel.parsedMessages) { message in
+                            if let coordinate = message.coordinate,
+                               !message.isFPVDetection,
+                               !(coordinate.latitude == 0 && coordinate.longitude == 0) {
+                                Annotation(message.id, coordinate: coordinate) {
+                                    droneAnnotationIcon(for: message)
+                                }
+                            }
                         }
                     }
-                }
-                
-                // Aircraft markers - only if showAircraft is true
-                if showAircraft {
-                    ForEach(cotViewModel.aircraftTracks) { aircraft in
-                        if let coordinate = aircraft.coordinate {
-                            Annotation(aircraft.callsign, coordinate: coordinate) {
-                                aircraftAnnotationIcon(for: aircraft)
+                    
+                    if showHomeMarkers {
+                        ForEach(cotViewModel.parsedMessages) { message in
+                            if let lat = Double(message.homeLat),
+                               let lon = Double(message.homeLon),
+                               lat != 0 || lon != 0 {
+                                Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.green)
+                                            .frame(width: 24, height: 24)
+                                        Image(systemName: "house.fill")
+                                            .foregroundStyle(.white)
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if showPilotMarkers {
+                        ForEach(cotViewModel.parsedMessages) { message in
+                            if let plat = Double(message.pilotLat),
+                               let plon = Double(message.pilotLon),
+                               plat != 0 || plon != 0 {
+                                Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.orange)
+                                            .frame(width: 24, height: 24)
+                                        Image(systemName: "person.fill")
+                                            .foregroundStyle(.white)
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if showAircraft {
+                        ForEach(cotViewModel.aircraftTracks) { aircraft in
+                            if let coordinate = aircraft.coordinate {
+                                Annotation(aircraft.callsign, coordinate: coordinate) {
+                                    aircraftAnnotationIcon(for: aircraft)
+                                }
                             }
                         }
                     }
                 }
+                .mapStyle(selectedMapStyle.mapStyle)
+                .frame(height: 250)
+                .allowsHitTesting(true)
+                
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation {
+                            showDroneMarkers.toggle()
+                        }
+                    } label: {
+                        Image(systemName: showDroneMarkers ? "airplane.circle.fill" : "airplane.circle")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Button {
+                        withAnimation {
+                            showFlightPaths.toggle()
+                        }
+                    } label: {
+                        Image(systemName: showFlightPaths ? "arrow.triangle.turn.up.right.diamond.fill" : "arrow.triangle.turn.up.right.diamond")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Button {
+                        withAnimation {
+                            showPilotMarkers.toggle()
+                        }
+                    } label: {
+                        Image(systemName: showPilotMarkers ? "person.fill" : "person")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Button {
+                        withAnimation {
+                            showHomeMarkers.toggle()
+                        }
+                    } label: {
+                        Image(systemName: showHomeMarkers ? "house.fill" : "house")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Button {
+                        withAnimation {
+                            recenterMap()
+                        }
+                    } label: {
+                        Image(systemName: "scope")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    
+                    Spacer()
+                    
+                    Menu {
+                        Button {
+                            selectedMapStyle = .standard
+                        } label: {
+                            Label("Standard", systemImage: selectedMapStyle == .standard ? "checkmark" : "map")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .hybrid
+                        } label: {
+                            Label("Hybrid", systemImage: selectedMapStyle == .hybrid ? "checkmark" : "map.fill")
+                        }
+                        
+                        Button {
+                            selectedMapStyle = .satellite
+                        } label: {
+                            Label("Satellite", systemImage: selectedMapStyle == .satellite ? "checkmark" : "globe.americas.fill")
+                        }
+                    } label: {
+                        Image(systemName: "map")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
             }
-            .mapStyle(.standard)
-            .frame(height: 250)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.gray.opacity(0.3), lineWidth: 1)
             )
-            .overlay(alignment: .topTrailing) {
+            .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 4) {
                     HStack(spacing: 4) {
                         Image(systemName: "airplane.circle.fill")
@@ -1019,22 +1169,44 @@ private struct LiveMapPreview: View {
                 .allowsHitTesting(false)
             }
             .overlay(alignment: .bottom) {
-                HStack {
-                    Image(systemName: "map")
-                        .font(.caption)
-                    Text("Tap to view full map")
-                        .font(.caption)
+                Button {
+                    showUnifiedMap = true
+                } label: {
+                    HStack {
+                        Image(systemName: "map")
+                            .font(.caption)
+                        Text("Tap to view full map")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
                 }
-                .foregroundColor(.secondary)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 12)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
+                .buttonStyle(.plain)
                 .padding(.bottom, 8)
-                .allowsHitTesting(false)
             }
         }
         .padding(.horizontal, 12)
+        .onAppear {
+            // Set initial camera position
+            updateCameraIfNeeded()
+        }
+        .onChange(of: cotViewModel.parsedMessages.count) { oldCount, newCount in
+            // Only update camera when drone count changes
+            if newCount != lastDroneCount {
+                lastDroneCount = newCount
+                updateCameraIfNeeded()
+            }
+        }
+        .onChange(of: cotViewModel.aircraftTracks.count) { oldCount, newCount in
+            // Only update camera when aircraft count changes
+            if showAircraft && newCount != lastAircraftCount {
+                lastAircraftCount = newCount
+                updateCameraIfNeeded()
+            }
+        }
     }
     
     private func getDroneFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
@@ -1112,7 +1284,18 @@ private struct LiveMapPreview: View {
             )
     }
     
-    private var mapRegion: MKCoordinateRegion {
+    private func updateCameraIfNeeded() {
+        let region = Self.calculateRegion(cotViewModel: cotViewModel, showAircraft: showAircraft)
+        mapCameraPosition = .region(region)
+    }
+    
+    private func recenterMap() {
+        withAnimation {
+            updateCameraIfNeeded()
+        }
+    }
+    
+    private static func calculateRegion(cotViewModel: CoTViewModel, showAircraft: Bool) -> MKCoordinateRegion {
         var allCoords: [CLLocationCoordinate2D] = []
         
         // Always add drone coordinates (excluding FPV and 0/0)
