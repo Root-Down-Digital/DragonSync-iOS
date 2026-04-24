@@ -320,12 +320,10 @@ struct ContentView: View {
     
     private var bothDetectionsList: some View {
         List {
-            if (hasDrones && cotViewModel.parsedMessages.count >= 2) || (hasAircraft && cotViewModel.aircraftTracks.count >= 2) || (hasDrones && hasAircraft) {
-                Section {
-                    unifiedMapView(showAircraft: true)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                }
+            Section {
+                unifiedMapView(showAircraft: true)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
             
             if hasDrones {
@@ -341,9 +339,9 @@ struct ContentView: View {
                             MessageRow(
                                 message: item,
                                 cotViewModel: cotViewModel,
-                                isCompact: cotViewModel.parsedMessages.count >= 2 || hasAircraft
+                                isCompact: true
                             )
-                            .id(item.uid) // Preserve view identity to prevent sheet dismissal on updates
+                            .id(item.uid)
                         }
                     }
                 }
@@ -360,7 +358,6 @@ struct ContentView: View {
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
-        // Check if this is an FPV detection - FPV should never have flight paths
         if let message = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
            message.isFPVDetection {
             return []
@@ -369,7 +366,13 @@ struct ContentView: View {
         guard let encounter = DroneStorageManager.shared.fetchEncounter(id: uid) else {
             return []
         }
-        return encounter.flightPath.map { point in
+        
+        let sortedPoints = encounter.flightPath
+            .filter { !$0.isProximityPoint }
+            .filter { !($0.latitude == 0 && $0.longitude == 0) }
+            .sorted { $0.timestamp < $1.timestamp }
+        
+        return sortedPoints.map { point in
             CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
         }
     }
@@ -590,12 +593,10 @@ struct ContentView: View {
             } else {
                 ScrollViewReader { proxy in
                     List {
-                        if cotViewModel.parsedMessages.count >= 2 {
-                            Section {
-                                unifiedMapView(showAircraft: false)
-                                    .listRowInsets(EdgeInsets())
-                                    .listRowBackground(Color.clear)
-                            }
+                        Section {
+                            unifiedMapView(showAircraft: false)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Color.clear)
                         }
                         
                         Section {
@@ -610,9 +611,9 @@ struct ContentView: View {
                                     MessageRow(
                                         message: item,
                                         cotViewModel: cotViewModel,
-                                        isCompact: cotViewModel.parsedMessages.count >= 2
+                                        isCompact: true
                                     )
-                                    .id(item.uid) // Preserve view identity to prevent sheet dismissal on updates
+                                    .id(item.uid)
                                 }
                             }
                         }
@@ -1037,20 +1038,22 @@ private struct LiveMapPreview: View {
     }
     
     private func getDroneFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
-        // Check if this is an FPV detection - FPV should never have flight paths
         if let currentMessage = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
            currentMessage.isFPVDetection {
             return []
         }
         
-        // Get flight path from DroneStorageManager
         guard let encounter = DroneStorageManager.shared.fetchEncounter(id: uid) else {
             return []
         }
         
-        var coordinates = encounter.flightPath.map { $0.coordinate }
+        let sortedPoints = encounter.flightPath
+            .filter { !$0.isProximityPoint }
+            .filter { !($0.latitude == 0 && $0.longitude == 0) }
+            .sorted { $0.timestamp < $1.timestamp }
         
-        // Ensure path ends at current position if we have one
+        var coordinates = sortedPoints.map { $0.coordinate }
+        
         if let currentMessage = cotViewModel.parsedMessages.first(where: { $0.uid == uid }),
            let currentCoord = currentMessage.coordinate,
            currentCoord.latitude != 0 && currentCoord.longitude != 0 {
@@ -1058,7 +1061,6 @@ private struct LiveMapPreview: View {
             if coordinates.isEmpty {
                 coordinates = [currentCoord]
             } else {
-                // Replace last coordinate with current for seamless alignment
                 coordinates[coordinates.count - 1] = currentCoord
             }
         }

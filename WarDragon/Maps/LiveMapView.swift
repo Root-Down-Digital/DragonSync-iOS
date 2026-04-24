@@ -220,11 +220,19 @@ struct LiveMapView: View {
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
-        guard let path = flightPaths[uid] else { return [] }
-        return path.compactMap { $0.coordinate.isValid ? $0.coordinate : nil }
+        guard let encounter = DroneStorageManager.shared.fetchEncounter(id: uid) else {
+            guard let path = flightPaths[uid] else { return [] }
+            return path.compactMap { $0.coordinate.isValid ? $0.coordinate : nil }
+        }
+        
+        let sortedPoints = encounter.flightPath
+            .filter { !$0.isProximityPoint }
+            .filter { !($0.latitude == 0 && $0.longitude == 0) }
+            .sorted { $0.timestamp < $1.timestamp }
+        
+        return sortedPoints.map { $0.coordinate }
     }
     
-    /// Get flight path for a drone and ensure it ends at current position
     private func getValidFlightPathWithCurrent(for drone: CoTViewModel.CoTMessage) -> [CLLocationCoordinate2D] {
         var validPath = getValidFlightPath(for: drone.uid)
         
@@ -367,6 +375,70 @@ struct LiveMapView: View {
                                             .cornerRadius(4)
                                     }
                                 }
+                        }
+                        
+                        if message.homeLat != "0.0" && message.homeLon != "0.0",
+                           let lat = Double(message.homeLat),
+                           let lon = Double(message.homeLon),
+                           !(lat == 0 && lon == 0)
+                        {
+                            Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                                VStack(spacing: 2) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.green)
+                                            .frame(width: 30, height: 30)
+                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                        Image(systemName: "house.fill")
+                                            .foregroundStyle(.white)
+                                            .font(.body)
+                                    }
+                                    
+                                    if uniqueDrones.count > 1 {
+                                        Text(message.uid)
+                                            .font(.caption2)
+                                            .bold()
+                                            .foregroundColor(.primary)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 2)
+                                            .background(.green.opacity(0.2))
+                                            .background(.ultraThinMaterial)
+                                            .cornerRadius(4)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if message.pilotLat != "0.0" && message.pilotLon != "0.0",
+                           let plat = Double(message.pilotLat),
+                           let plon = Double(message.pilotLon),
+                           !(plat == 0 && plon == 0)
+                        {
+                            Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
+                                VStack(spacing: 2) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.orange)
+                                            .frame(width: 30, height: 30)
+                                            .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                        Image(systemName: "person.fill")
+                                            .foregroundStyle(.white)
+                                            .font(.body)
+                                    }
+                                    
+                                    if uniqueDrones.count > 1 {
+                                        Text(message.uid)
+                                            .font(.caption2)
+                                            .bold()
+                                            .foregroundColor(.primary)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 2)
+                                            .background(.orange.opacity(0.2))
+                                            .background(.ultraThinMaterial)
+                                            .cornerRadius(4)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

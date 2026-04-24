@@ -215,7 +215,6 @@ struct DroneDetailView: View {
                     .font(.headline)
                 Spacer()
                 
-                // Map Style Picker
                 Menu {
                     Button {
                         selectedMapStyle = .standard
@@ -320,9 +319,10 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    if message.homeLat != "0.0",
+                    if message.homeLat != "0.0" && message.homeLon != "0.0",
                        let lat = Double(message.homeLat),
-                       let lon = Double(message.homeLon)
+                       let lon = Double(message.homeLon),
+                       !(lat == 0 && lon == 0)
                     {
                         Annotation("Takeoff", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                             ZStack {
@@ -336,9 +336,10 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    if message.pilotLat != "0.0",
+                    if message.pilotLat != "0.0" && message.pilotLon != "0.0",
                        let plat = Double(message.pilotLat),
-                       let plon = Double(message.pilotLon)
+                       let plon = Double(message.pilotLon),
+                       !(plat == 0 && plon == 0)
                     {
                         Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: plat, longitude: plon)) {
                             ZStack {
@@ -355,10 +356,11 @@ struct DroneDetailView: View {
                     let cleanFlightPath = DroneStorageManager.shared
                         .fetchEncounter(id: message.uid)?.flightPath
                         .filter { !$0.isProximityPoint }
+                        .filter { !($0.latitude == 0 && $0.longitude == 0) }
+                        .sorted { $0.timestamp < $1.timestamp }
                         .map { $0.coordinate } ?? flightPath
                     
                     if showFlightPath && cleanFlightPath.count > 1 {
-                        // Smooth the path for better visual appearance
                         let smoothedPath = FlightPathSmoother.smoothPath(cleanFlightPath, smoothness: 4)
                         MapPolyline(coordinates: smoothedPath)
                             .stroke(.purple, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
