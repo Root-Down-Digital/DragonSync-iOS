@@ -38,6 +38,8 @@ struct ContentView: View {
     @State private var settingsPath = NavigationPath()
     @State private var historyPath = NavigationPath()
     
+    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "HasCompletedOnboarding1")
+    
     enum DetectionMode {
         case drones
         case aircraft
@@ -56,6 +58,9 @@ struct ContentView: View {
             statusTab
             settingsTab
             historyTab
+        }
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingView(isPresented: $showOnboarding)
         }
         .onChange(of: settings.isListening) { oldValue, newValue in
             guard oldValue != newValue else { return }
