@@ -156,7 +156,6 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
-**DOES NOT WORK OUT OF THE BOX, MODS NEEDED TO SERVICE/WRAPPER FILES**
 
 **Quick Start:**
 1. Power on device
