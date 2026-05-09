@@ -335,9 +335,9 @@ The app's parser supports both droneid-go (canonical long-form keys, `transport`
 │               Detection Sources                      │
 │                                                      │
 │  WiFi RID (2.4/5GHz) ──┐                             │
-│  Bluetooth RID (Sniffle)┤                            │
+│  Bluetooth RID (Sniffle)┤                             │
 │  ESP32 UART passthrough ┼──► droneid-go (Go binary)  │
-│  DJI DroneID (DragonSDR)┘     unified ZMQ tcp:4224   │
+│  DJI DroneID (DragonSDR)┘     unified ZMQ tcp:4224    │
 │  FPV Video ─────────── RX5808 + fpv_mdn_receiver     │
 │  ESP32 Standalone ──── Drag0net WiFi 2.4GHz          │
 └────────────────────┬─────────────────────────────────┘

@@ -1,2155 +1,1108 @@
 #!/usr/bin/env python3
 """
-DragonSync Enhanced Test Data Broadcaster
-Supports testing: Multicast CoT, ZMQ, MQTT, TAK Server, and ADS-B readsb simulation
+DragonSync iOS — droneid-go + DragonSync scenario broadcaster.
+
+Every JSON / XML shape in this script is sourced from:
+  - droneid-go binary `json:"..."` struct tags (alphafox02/droneid-go)
+  - DragonSync core/telemetry_parser.py
+  - DragonSync core/drone.py to_cot_xml / to_pilot_cot_xml / to_home_cot_xml / to_dict
+  - DragonSync utils/cot_builder.py build_drone_cot / build_pilot_cot / build_home_cot
+  - DragonSync sinks/mqtt_sink.py (MQTT JSON wire format)
+
+Scenarios (each can be broadcast independently or combined):
+  wifi      WiFi RID frame, single dict (transport=wifi, frequency_mhz, full envelope)
+  ble       BLE RID burst, BT split array with AUX_ADV_IND + aext (transport=ble)
+  uart      UART/ESP32 frame, consolidated array (transport=uart)
+  dji       DJI DroneID with Frequency Message + home location (transport=dji)
+  area      Area beacon: System.area_count/radius/floor/ceiling
+  auth      Multi-page Auth Message (page 0..N-1)
+  caa       CAA-Assigned Registration ID variant
+  utm       UTM(USS)-Assigned ID variant
+  session   Specific Session ID variant
+  multi     BLE array burst with 3 distinct drones in one frame
+  health    droneid-go health/heartbeat snapshot (top-level service state)
+  status    WarDragon monitor system status JSON (port 4225)
+  spoof:K   Spoof scenario, K in {rssi, speed, teleport, altitude}
+  cot       DragonSync drone CoT XML (multicast 239.2.3.1:6969, build_drone_cot format)
+  pilot     DragonSync pilot CoT (uid=pilot-..., type=b-m-p-s-m)
+  home      DragonSync home/takeoff CoT (uid=home-..., type=b-m-p-s-m)
+  adsb      DragonSync ADS-B CoT (a-f-A) for aircraft track
+  status_cot WarDragon monitor status CoT XML (uid=wardragon-..., type=b-m-p-s-m)
+  mqtt_dict DragonSync to_dict() JSON shape (the MQTT/Lattice/API wire format)
+
+Usage:
+  ./testscript.py --scenario wifi
+  ./testscript.py --scenario all --rate 5
+  ./testscript.py --scenario cot --scenario pilot --scenario home
+  ./testscript.py --scenario health --health-rate 0.2
+  ./testscript.py --zmq-bind 0.0.0.0:4224 --status-bind 0.0.0.0:4225 --scenario all
+  ./testscript.py --scenario mqtt_dict --mqtt-broker localhost
 """
 
-import socket
-import time
-import math
-import os
-import random
+import argparse
 import json
-import string
-import struct
-import zmq
+import math
+import random
+import socket
+import sys
+import time
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+from xml.sax.saxutils import escape as xml_escape
 
-# Try to import paho-mqtt, provide fallback if not available
+try:
+    import zmq
+except ImportError:
+    print("ERROR: pyzmq not installed. pip install pyzmq", file=sys.stderr)
+    sys.exit(1)
+
 try:
     import paho.mqtt.client as mqtt
     MQTT_AVAILABLE = True
 except ImportError:
     MQTT_AVAILABLE = False
-    print(" paho-mqtt not installed. MQTT features disabled.")
-    print("   Install with: pip3 install paho-mqtt")
 
-# Try to import requests for OpenSky API testing
-try:
-    import requests
-    REQUESTS_AVAILABLE = True
-except ImportError:
-    REQUESTS_AVAILABLE = False
-    print(" requests not installed. OpenSky API testing disabled.")
-    print("   Install with: pip3 install requests")
 
+# =====================================================================
+# Source-verified enum tables
+# =====================================================================
+
+ID_TYPES = [
+    "Serial Number (ANSI/CTA-2063-A)",
+    "CAA Assigned Registration ID",
+    "UTM (USS) Assigned ID",
+    "Specific Session ID",
+]
+
+UA_TYPE_BY_NAME = {
+    "None": 0, "Aeroplane": 1, "Helicopter": 2, "Gyroplane": 3,
+    "Hybrid Lift": 4, "Ornithopter": 5, "Glider": 6, "Kite": 7,
+    "Free Balloon": 8, "Captive Balloon": 9, "Airship": 10,
+    "Free Fall": 11, "Rocket": 12, "Tethered Powered Aircraft": 13,
+    "Ground Obstacle": 14, "Other": 15,
+}
+
+OP_STATUS = ["Undeclared", "Ground", "Airborne", "Emergency", "Remote ID System Failure"]
+HEIGHT_TYPES = ["Above Takeoff", "AGL"]
+CLASSIFICATION_TYPES = ["Undeclared", "EU"]
+OPERATOR_LOCATION_TYPES = ["Takeoff", "Live GNSS", "Fixed Location"]
+OPERATOR_ID_TYPES = ["Operator ID", "CAA Assigned Operator ID"]
+SELF_ID_TEXT_TYPES = [0, 1, 2]
+AUTH_TYPES = [
+    "None", "UAS ID Signature", "Operator ID Signature",
+    "Message Set Signature", "Network Remote ID", "Specific Authentication",
+    "Private Use", "MFG Spec",
+]
+ACCURACY_STRINGS = ["<1m", "<3m", "<10m", "<30m", "<100m", "Unknown"]
+PROTOCOL_VERSIONS = ["F3411.19", "F3411.22a"]
+
+
+# =====================================================================
+# Config
+# =====================================================================
+
+@dataclass
 class Config:
-    def __init__(self):
-        # Multicast/ZMQ settings
-        self.multicast_group = '224.0.0.1'
-        self.cot_port = 6969
-        self.status_port = 6969
-        self.broadcast_mode = 'multicast'
-        self.zmq_host = '224.0.0.1'
-        
-        # MQTT settings
-        self.mqtt_broker = 'localhost'
-        self.mqtt_port = 1883
-        self.mqtt_username = None
-        self.mqtt_password = None
-        self.mqtt_base_topic = 'wardragon'
-        self.mqtt_use_tls = False
-        
-        # TAK Server settings
-        self.tak_host = 'localhost'
-        self.tak_port = 8087
-        self.tak_protocol = 'tcp'  # tcp, udp, or tls
-        
-        # ADS-B settings
-        self.adsb_port = 8080  # HTTP port for readsb-compatible API
-        
-        # OpenSky Network settings
-        self.opensky_username = None  # Optional: for authenticated requests
-        self.opensky_password = None
-        
-        # Spoof testing settings
-        self.spoof_mode = None  # None, 'rssi', 'speed', 'teleport', 'altitude', 'all'
-        self.spoof_intensity = 'medium'  # low, medium, high, extreme
-        
-class DroneMessageGenerator:
-    def __init__(self, config=None):
-        self.config = config or Config()
-        self.lat_range = (37.2, 37.3)
-        self.lon_range = (-115.8, -115.7)  
-        self.msg_index = 0
-        self.start_time = time.time()
-        
-        # Track drone states for realistic movement and consistent IDs
-        self.drone_states = {}
-        # Realistic serial numbers matching actual drone formats
-        self.drone_ids = [
-            "112624150A90E3AE1EC0",  # ESP32 format (20 chars hex)
-            "3NZDJ1Y0010ABC",         # DJI format
-            "1869600XXYYZZ"           # Ruko/Generic format
-        ]
-        self.current_drone_index = 0
-        self.current_drone_id = self.drone_ids[0]
-        
-        # CAA registration IDs for testing
-        self.caa_ids = ["123456", "789ABC", "XYZ999"]
-        self.current_caa_index = 0
-        
-        # Spoof testing state
-        self.last_spoofed_position = None
-        self.spoof_counter = 0
+    zmq_bind: str = "0.0.0.0:4224"
+    status_bind: str = "0.0.0.0:4225"
+    multicast_group: str = "239.2.3.1"
+    multicast_port: int = 6969
+    mqtt_broker: str = ""
+    mqtt_port: int = 1883
+    mqtt_topic: str = "wardragon/drone"
+    rate_hz: float = 1.0
+    health_rate_hz: float = 0.1
+    status_rate_hz: float = 0.033
+    scenarios: list = field(default_factory=lambda: ["wifi"])
+    duration_s: float = 0.0
+    seed: int = 0
+    lat_center: float = 37.25
+    lon_center: float = -115.75
 
 
-    def random_mac(self):
-        return ":".join(f"{random.randint(0, 255):02X}" for _ in range(6))
-    
-    def apply_spoofing(self, lat, lon, alt, speed, vspeed, rssi, course):
-        """Apply spoofing modifications to trigger spoof detection
-        
-        Spoof modes:
-        - rssi: RSSI doesn't match distance (too weak for close drone or too strong for far drone)
-        - speed: Impossible speeds (>100 m/s for consumer drones)
-        - teleport: Random position jumps (teleportation)
-        - altitude: Inconsistent altitude reporting
-        - all: Random mix of all spoof types
-        """
-        mode = self.config.spoof_mode
-        intensity = self.config.spoof_intensity
-        
-        # Intensity multipliers
-        intensity_map = {
-            'low': 1.5,
-            'medium': 3.0,
-            'high': 5.0,
-            'extreme': 10.0
-        }
-        multiplier = intensity_map.get(intensity, 3.0)
-        
-        if mode == 'rssi' or (mode == 'all' and self.spoof_counter % 4 == 0):
-            # RSSI mismatch: Signal too weak or too strong for the distance
-            if random.choice([True, False]):
-                # Too weak: drone reports close but RSSI says it's far
-                rssi = -90 - int(multiplier * 5)  # Very weak signal
-                print(f"🎭 SPOOF: RSSI mismatch (too weak): {rssi}dBm")
-            else:
-                # Too strong: drone reports far but RSSI says it's close
-                rssi = -30 + int(multiplier * 2)  # Very strong signal
-                print(f"🎭 SPOOF: RSSI mismatch (too strong): {rssi}dBm")
-        
-        if mode == 'speed' or (mode == 'all' and self.spoof_counter % 4 == 1):
-            # Impossible speed: Commercial drones max ~20-25 m/s
-            speed = 50 + (multiplier * 20)  # 80-250 m/s depending on intensity
-            vspeed = 20 + (multiplier * 5)  # Vertical speed also impossible
-            print(f"🎭 SPOOF: Impossible speed: {speed:.1f} m/s (vert: {vspeed:.1f} m/s)")
-        
-        if mode == 'teleport' or (mode == 'all' and self.spoof_counter % 4 == 2):
-            # Position jump: Suddenly appear elsewhere
-            if self.last_spoofed_position and random.random() < 0.3:  # 30% chance
-                # Jump to random position (simulating replay attack or GPS spoofing)
-                lat = random.uniform(self.lat_range[0], self.lat_range[1])
-                lon = random.uniform(self.lon_range[0], self.lon_range[1])
-                old_lat, old_lon, _ = self.last_spoofed_position
-                distance = self.calculate_distance(old_lat, old_lon, lat, lon)
-                print(f"🎭 SPOOF: Position jump (teleport): {distance:.0f}m in 1 second")
-        
-        if mode == 'altitude' or (mode == 'all' and self.spoof_counter % 4 == 3):
-            # Altitude inconsistency: Jump altitude dramatically
-            alt_change = random.choice([-1, 1]) * multiplier * 100  # ±150-1000m jump
-            alt += alt_change
-            alt = max(0, alt)  # Don't go below ground
-            print(f"🎭 SPOOF: Altitude jump: {alt_change:+.0f}m (new: {alt:.0f}m)")
-        
-        return lat, lon, alt, speed, vspeed, rssi, course
-    
-    def calculate_distance(self, lat1, lon1, lat2, lon2):
-        """Calculate distance between two coordinates in meters"""
-        R = 6371000  # Earth radius in meters
-        phi1 = math.radians(lat1)
-        phi2 = math.radians(lat2)
-        delta_phi = math.radians(lat2 - lat1)
-        delta_lambda = math.radians(lon2 - lon1)
-        
-        a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        
-        return R * c
-        
-    def get_timestamps(self):
-        now = datetime.now(timezone.utc)
-        time_str = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        stale = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        return time_str, time_str, stale
+# =====================================================================
+# DroneSim — per-drone state for realistic continuity
+# =====================================================================
 
-    def generate_drone_cot_with_track(self):
-        """Generate main drone CoT message with track information matching DragonSync format"""
-        time_str, start_str, stale_str = self.get_timestamps()
-        now = datetime.now(timezone.utc)
-        unix_timestamp = now.timestamp()
-        
-        # Use time to generate smooth flight pattern
-        t = time.time() * 0.1
-        
-        # Center point of flight area 
-        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
-        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
-        
-        # Radius of flight pattern
-        radius_lat = (self.lat_range[1] - self.lat_range[0]) / 3
-        radius_lon = (self.lon_range[1] - self.lon_range[0]) / 3
-        
-        # Figure-8 pattern
-        lat = center_lat + radius_lat * math.sin(t)
-        lon = center_lon + radius_lon * math.sin(t * 2)
-        
-        # Smooth altitude changes
-        alt = 300 + 50 * math.sin(t * 0.5)
-        height_agl = alt - 100
-        
-        # Speed and direction calculations based on movement
-        dx = math.cos(t * 2) * radius_lon
-        dy = math.cos(t) * radius_lat
-        speed = 15 + 5 * math.cos(t)
-        vspeed = 2.5 * math.cos(t * 0.5)
-        
-        # Calculate course (direction of movement)
-        course = (math.degrees(math.atan2(dx, dy))) % 360
-        
-        # ========== SPOOF TESTING MODE ==========
-        if self.config.spoof_mode:
-            lat, lon, alt, speed, vspeed, rssi, course = self.apply_spoofing(
-                lat, lon, alt, speed, vspeed, rssi, course
-            )
-            # Store position for teleport detection
-            self.last_spoofed_position = (lat, lon, alt)
-            self.spoof_counter += 1
-        # ========================================
-        
-        self.current_drone_index = (self.current_drone_index + 1) % len(self.drone_ids)
-        uid = self.drone_ids[self.current_drone_index]
-        self.current_drone_id = uid
-        
-        mac = self.random_mac()
-        rssi = -60 + int(10 * math.sin(t))
-        desc = f"Anzu Raptor {uid}"
-        
-        # NEW BACKEND/ENRICHMENT FIELDS
-        freq = round(random.uniform(5725000000, 5875000000), 2)  # Frequency in Hz (5.8GHz FPV band)
-        seen_by = f"wardragon-{random.randint(100, 199)}"  # WarDragon kit ID
-        rid_make = random.choice(["DJI", "Autel", "Skydio", "Parrot"])
-        rid_model = random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2"])
-        rid_source = random.choice(["FAA", "EASA", "CAA"])
-        
-        # Match exact DragonSync format
-        xml = f"""<?xml version='1.0' encoding='UTF-8'?>
-<event version="2.0" uid="{uid}" type="a-u-A-M-H-R" time="{time_str}" start="{start_str}" stale="{stale_str}" how="m-g">
-    <point lat="{lat:.6f}" lon="{lon:.6f}" hae="{alt:.1f}" ce="35.0" le="999999"/>
-    <detail>
-        <contact callsign="{uid}"/>
-        <precisionlocation geopointsrc="gps" altsrc="gps"/>
-        <track course="{course:.1f}" speed="{speed:.1f}"/>
-        <remarks>MAC: {mac}, RSSI: {rssi}dBm; ID Type: Serial Number (ANSI/CTA-2063-A); UA Type: Helicopter or Multirotor (2); Operator ID: TestOperator; Speed: {speed:.1f} m/s; Vert Speed: {vspeed:.1f} m/s; Altitude: {alt:.1f} m; AGL: {height_agl:.1f} m; Direction: {course:.1f}°; Index: {random.randint(1, 100)}; Runtime: {int(time.time() - self.start_time)}s; Freq: {freq} Hz; Seen By: {seen_by}; Observed At: {unix_timestamp}; RID Time: {time_str}; RID: {rid_make} {rid_model} ({rid_source})</remarks>
-        <color argb="-256"/>
-    </detail>
-</event>"""
-        
-        # Debug: Print track info periodically
-        if int(time.time() * 10) % 50 == 0:
-            print(f"  DEBUG:  Drone XML: UID={uid} Lat={lat:.6f} Lon={lon:.6f} Course={course:.1f}° Speed={speed:.1f}m/s")
-        
-        return xml
+class DroneSim:
+    def __init__(self, drone_id, mac, ua_name, transport, cfg, id_type=None, caa_id=None):
+        self.id = drone_id
+        self.id_type = id_type or ID_TYPES[0]
+        self.caa_id = caa_id
+        self.mac = mac
+        self.ua_type_name = ua_name
+        self.ua_type = UA_TYPE_BY_NAME[ua_name]
+        self.transport = transport
+        self.cfg = cfg
+        self.heading = random.uniform(0, 360)
+        self.speed = random.uniform(2, 18)
+        self.altitude = random.uniform(20, 120)
+        self.height_agl = self.altitude
+        self.lat = cfg.lat_center + random.uniform(-0.02, 0.02)
+        self.lon = cfg.lon_center + random.uniform(-0.02, 0.02)
+        self.home_lat = self.lat
+        self.home_lon = self.lon
+        self.operator_lat = self.lat - random.uniform(-0.001, 0.001)
+        self.operator_lon = self.lon - random.uniform(-0.001, 0.001)
+        self.index = random.randint(1, 200)
+        self.runtime = random.randint(60, 1800)
+        self.first_seen = time.time()
+        self.frequency_mhz = {"wifi": 2412.0, "ble": 2402.0, "uart": 0.0, "dji": 5765.0}.get(transport, 0.0)
+        self.protocol_version = random.choice(PROTOCOL_VERSIONS)
+        self.rssi_baseline = random.randint(-78, -45)
+        self.rssi = self.rssi_baseline
+        self.operator_id_value = f"FAA{random.randint(1000, 9999)}-{random.randint(100,999)}"
+        self.operator_id_type_value = random.choice(OPERATOR_ID_TYPES)
 
-    def generate_pilot_cot(self):
-        """Generate separate pilot CoT message matching DragonSync format"""
-        time_str, start_str, stale_str = self.get_timestamps()
-        
-        # Pilot moves in a walking pattern (slow, realistic movement)
-        # Use slower time scale so pilot moves visibly but slowly
-        t = time.time() * 0.02  # Much slower than drone
-        
-        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
-        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
-        
-        # Pilot walks in a small oval pattern (realistic for someone tracking a drone)
-        # Movement radius: ~200-300 meters
-        pilot_lat = center_lat + 0.002 * math.sin(t)  # ~200m north-south
-        pilot_lon = center_lon + 0.002 * math.cos(t * 0.7)  # ~200m east-west
-        pilot_alt = 50 + 2 * math.sin(t * 0.3)  # Small altitude changes (terrain)
-        
-        # Extract base ID from drone ID
-        base_id = self.current_drone_id.replace("drone-", "")
-        pilot_uid = f"pilot-{base_id}"
-        
-        return f"""<?xml version='1.0' encoding='UTF-8'?>
-<event version="2.0" uid="{pilot_uid}" type="b-m-p-s-m" time="{time_str}" start="{start_str}" stale="{stale_str}" how="m-g">
-    <point lat="{pilot_lat:.6f}" lon="{pilot_lon:.6f}" hae="{pilot_alt:.1f}" ce="35.0" le="999999"/>
-    <detail>
-        <contact callsign="{pilot_uid}"/>
-        <precisionlocation geopointsrc="gps" altsrc="gps"/>
-        <usericon iconsetpath="com.atakmap.android.maps.public/Civilian/Person.png"/>
-        <remarks>Pilot location for drone {self.current_drone_id}</remarks>
-    </detail>
-</event>"""
+    def step(self, dt):
+        self.heading = (self.heading + random.uniform(-8, 8)) % 360
+        self.speed = max(0.0, self.speed + random.uniform(-1.5, 1.5))
+        rad = math.radians(self.heading)
+        d_lat = (self.speed * dt * math.cos(rad)) / 111000.0
+        cos_lat = max(0.01, math.cos(math.radians(self.lat)))
+        d_lon = (self.speed * dt * math.sin(rad)) / (111000.0 * cos_lat)
+        self.lat += d_lat
+        self.lon += d_lon
+        self.altitude = max(0.0, self.altitude + random.uniform(-2, 2))
+        self.height_agl = max(0.0, self.altitude)
+        self.runtime += int(dt)
+        self.index += 1
+        self.rssi = max(-110, min(-20, self.rssi_baseline + random.randint(-3, 3)))
 
-    def generate_home_cot(self):
-        """Generate separate home/takeoff point CoT message matching DragonSync format"""
-        time_str, start_str, stale_str = self.get_timestamps()
-        
-        # Home point moves slowly (pilot might relocate their "home" base)
-        # Use very slow time scale - home point shouldn't move much
-        t = time.time() * 0.01  # Even slower than pilot
-        
-        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
-        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
-        
-        # Home point drifts slowly (pilot might be in a vehicle or moving base station)
-        # Very small movement: ~100m over long period
-        home_lat = center_lat + 0.001 * math.sin(t)  # ~100m drift
-        home_lon = center_lon + 0.001 * math.cos(t)  # ~100m drift
-        home_alt = 100 + 5 * math.sin(t * 0.5)  # Minor altitude variations
-        
-        # Extract base ID from drone ID
-        base_id = self.current_drone_id.replace("drone-", "")
-        home_uid = f"home-{base_id}"
-        
-        return f"""<?xml version='1.0' encoding='UTF-8'?>
-<event version="2.0" uid="{home_uid}" type="b-m-p-s-m" time="{time_str}" start="{start_str}" stale="{stale_str}" how="m-g">
-    <point lat="{home_lat:.6f}" lon="{home_lon:.6f}" hae="{home_alt:.1f}" ce="35.0" le="999999"/>
-    <detail>
-        <contact callsign="{home_uid}"/>
-        <precisionlocation geopointsrc="gps" altsrc="gps"/>
-        <usericon iconsetpath="com.atakmap.android.maps.public/Civilian/House.png"/>
-        <remarks>Home location for drone {self.current_drone_id}</remarks>
-    </detail>
-</event>"""
 
-    def generate_fpv_detection_message(self):
-        """Generate an FPV detection message compatible with fpv_mdn_receiver.py output
-        
-        Format matches actual hardware output from fpvparser.py:
-        - Frequency: 5.6-5.9 GHz range (FPV video frequencies in MHz)
-        - RSSI: 1200-1400 range (actual observed raw values from hardware)
-        - Source: inst-node format (e.g., "01-97e8")
-        - Distance: Uses empirical RSSI-based calculation matching fpvparser.py
-        """
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        
-        # Realistic FPV frequencies in MHz (5.6-5.9 GHz band used by FPV drones)
-        # Common channels: 5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885
-        frequency = random.choice([5621, 5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885])
-        
-        # FPV video bandwidth (typically 20-40 MHz)
-        bandwidth = f"{random.choice([20, 40])}MHz"
-        
-        # Realistic RSSI values from actual hardware (raw ADC values around 1200-1400)
-        rssi = random.randint(1200, 1400)
-        
-        # Source node in inst-node format (matches hardware output)
-        source_inst = f"{random.randint(1, 5):02d}"
-        source_node = f"{random.randint(1000, 9999):04x}"  # Use hex like hardware does (e.g., "97e8")
-        detection_source = f"{source_inst}-{source_node}"
-        
-        # Calculate distance using empirical formula from fpvparser.py
-        # Higher RSSI = stronger signal = closer distance
-        if rssi >= 2000:
-            distance = 10.0
-        elif rssi >= 1800:
-            distance = 25.0
-        elif rssi >= 1600:
-            distance = 50.0
-        elif rssi >= 1400:
-            distance = 100.0
-        elif rssi >= 1200:
-            # Linear interpolation: rssi 1400 -> 100m, rssi 1200 -> 200m
-            distance = 300 - (rssi - 1200) * 0.5
-        elif rssi >= 1000:
-            distance = 500.0
-        else:
-            distance = 1000.0
-        
-        # Initialize or reuse existing detection
-        if not hasattr(self, 'current_fpv_detection'):
-            self.current_fpv_detection = {
-                'frequency': frequency,
-                'source_inst': source_inst,
-                'source_node': source_node,
-                'detection_source': detection_source,
-                'rssi': rssi,
-                'time': 0
-            }
-        else:
-            frequency = self.current_fpv_detection['frequency']
-            source_inst = self.current_fpv_detection['source_inst']
-            source_node = self.current_fpv_detection['source_node']
-            detection_source = self.current_fpv_detection['detection_source']
-            rssi = self.current_fpv_detection['rssi']
-            # Recalculate distance with current RSSI
-            if rssi >= 1400:
-                distance = 100.0
-            elif rssi >= 1200:
-                distance = 300 - (rssi - 1200) * 0.5
-            else:
-                distance = 200.0
-            
-        # Format matches fpv_mdn_receiver.py detection_messages output
-        # This is what's published to ZMQ after "detection_messages = [{"FPV Detection": ...}]"
-        detection_message = [
-            {
-                "FPV Detection": {
-                    "timestamp": timestamp,
-                    "manufacturer": source_inst,  # "01" from actual logs
-                    "device_type": f"FPV{frequency}MHz",  # "FPV5621.0MHz" from actual logs
-                    "frequency": frequency,  # 5621 from actual logs
-                    "bandwidth": bandwidth,  # Empty string from actual logs
-                    "signal_strength": rssi,  # 1328.64-1332.6 from actual logs
-                    "detection_source": detection_source,  # "01-97e8" from actual logs
-                    "status": "LOCK UPDATE",  # Actual status from logs
-                    "estimated_distance": distance  # ~1e-50 from actual logs
-                }
-            }
-        ]
-        
-        return json.dumps(detection_message)
-    
-    def generate_fpv_update_message(self):
-        """Generate an FPV update message in the format of LOCK UPDATE messages
-        
-        This matches the actual AUX_ADV_IND format from fpv_mdn_receiver.py
-        Format is used for ongoing signal strength updates after initial detection
-        """
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        
-        if not hasattr(self, 'current_fpv_detection'):
-            return None
-        
-        # Get cached detection info
-        detection_source = self.current_fpv_detection['detection_source']
-        frequency = self.current_fpv_detection['frequency']
-        
-        # Simulate realistic RSSI fluctuation (±20-30 units is typical for FPV hardware)
-        rssi_variation = random.uniform(-30, 30)
-        rssi = self.current_fpv_detection['rssi'] + rssi_variation
-        # Clamp to reasonable range (1000-1600)
-        rssi = max(1000, min(1600, rssi))
-        self.current_fpv_detection['rssi'] = rssi
-        
-        # Recalculate distance based on new RSSI (matching fpvparser.py formula)
-        if rssi >= 2000:
-            distance = 10.0
-        elif rssi >= 1800:
-            distance = 25.0
-        elif rssi >= 1600:
-            distance = 50.0
-        elif rssi >= 1400:
-            distance = 100.0
-        elif rssi >= 1200:
-            distance = 300 - (rssi - 1200) * 0.5
-        elif rssi >= 1000:
-            distance = 500.0
-        else:
-            distance = 1000.0
-        
-        # Increment time counter (matches hardware behavior)
-        self.current_fpv_detection['time'] += 10  # Hardware updates every ~10 seconds
-        
-        # Format matches actual fpv_mdn_receiver.py zmq_formatted_msg output
-        update_message = {
-            "AUX_ADV_IND": {
-                "rssi": rssi,  # Raw ADC value (not dBm)
-                "aa": 2391391958,  # Fixed advertising address (matches hardware: 0x8e89bed6)
-                "time": timestamp
-            }, 
-            "aext": {
-                "AdvA": f"{detection_source} random"  # Source node identifier
-            },
-            "AdvData": "020116faff0d01",  # OpenDroneID header (matches hardware)
-            "location": {
-                "lat": 0.0,  # FPV detector doesn't have location data
-                "lon": 0.0
-            },
-            "distance": distance,  # Estimated distance in meters
-            "frequency": frequency  # Keep original frequency in MHz
-        }
-        
-        return json.dumps(update_message)
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-    def generate_complete_message(self, mode="zmq"):
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        unix_timestamp = now.timestamp()
-        
-        latitude = round(random.uniform(*self.lat_range), 6)
-        longitude = round(random.uniform(*self.lon_range), 6)
-        rssi = random.randint(-90, -40)
-        
-        message = [
-            {
-                "Basic ID": {
-                    "protocol_version": "F3411.19",
-                    "id_type": "Serial Number (ANSI/CTA-2063-A)",
-                    "ua_type": "Helicopter (or Multirotor)",
-                    "id": f"{random.randint(10000000, 99999999)}{random.choice(string.ascii_uppercase)}291",
-                    "MAC": "8e:3b:93:22:33:fa",
-                    "rssi": rssi
-                }
-            },
-            {
-                "Location/Vector Message": {
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "geodetic_altitude": round(random.uniform(50.0, 400.0), 2),
-                    "height_agl": round(random.uniform(20.0, 200.0), 2),
-                    "speed": round(random.uniform(0.0, 30.0), 1),
-                    "vert_speed": round(random.uniform(-5.0, 5.0), 1),
-                    "timestamp": timestamp,
-                }
-            }
-        ]
-        
-        # NEW BACKEND/ENRICHMENT FIELDS (from dragonsync.py/drone.py)
-        message.append({
-            "freq": round(random.uniform(5725000000, 5875000000), 2),  # Frequency in Hz (5.8GHz FPV band)
-            "seen_by": f"wardragon-{random.randint(100, 199)}",  # WarDragon kit ID
-            "observed_at": unix_timestamp,  # Unix timestamp
-            "rid_timestamp": timestamp,  # ISO8601 timestamp
-            "rid": {  # FAA RID enrichment from faa-rid-lookup
-                "tracking": random.choice(["Active", "Lost", "Unknown"]),
-                "status": random.choice(["Valid", "Expired", "Unknown"]),
-                "make": random.choice(["DJI", "Autel", "Skydio", "Parrot", "Unknown"]),
-                "model": random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2", "Unknown"]),
-                "source": random.choice(["FAA", "EASA", "CAA", "Unknown"]),
-                "lookup_success": random.choice([True, False])
-            }
+
+def stale_iso(seconds=600):
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def random_mac():
+    return ":".join(f"{random.randint(0, 255):02X}" for _ in range(6))
+
+
+def random_aa():
+    return random.randint(0, 0xFFFFFFFF)
+
+
+# =====================================================================
+# droneid-go ZMQ payload builders (envelope + sub-messages)
+# =====================================================================
+
+def build_basic_id(d, include_transport=True, include_frequency_mhz=True):
+    obj = {
+        "id": d.id,
+        "id_type": d.id_type,
+        "MAC": d.mac,
+        "RSSI": d.rssi,
+        "ua_type": d.ua_type_name,
+        "protocol_version": d.protocol_version,
+    }
+    if include_transport:
+        obj["transport"] = d.transport
+    if include_frequency_mhz and d.frequency_mhz > 0:
+        obj["frequency_mhz"] = d.frequency_mhz
+    return obj
+
+
+def build_location(d, include_canonical_accuracy=True):
+    loc = {
+        "latitude": round(d.lat, 7),
+        "longitude": round(d.lon, 7),
+        "geodetic_altitude": round(d.altitude, 1),
+        "speed": round(d.speed, 2),
+        "vert_speed": round(random.uniform(-2, 2), 2),
+        "height_agl": round(d.height_agl, 1),
+        "height_type": random.choice(HEIGHT_TYPES),
+        "pressure_altitude": round(d.altitude + random.uniform(-3, 3), 1),
+        "ew_dir_segment": random.choice(["E", "W"]),
+        "speed_multiplier": random.choice(["0.25", "0.75"]),
+        "op_status": random.choice(OP_STATUS),
+        "direction": int(d.heading),
+        "timestamp": int(time.time()),
+        "status": random.randint(0, 4),
+        "alt_pressure": round(d.altitude - 1.5, 1),
+        "protocol_version": d.protocol_version,
+    }
+    if include_canonical_accuracy:
+        loc.update({
+            "horizontal_accuracy": random.choice(ACCURACY_STRINGS),
+            "vertical_accuracy": random.choice(ACCURACY_STRINGS),
+            "baro_accuracy": random.choice(ACCURACY_STRINGS),
+            "speed_accuracy": random.choice(ACCURACY_STRINGS),
+            "timestamp_accuracy": random.choice(["0.1s", "0.2s", "0.5s", "1.0s"]),
         })
-        
-        if mode == "zmq":
-            return json.dumps(message, indent=4)
-        elif mode == "multicast":
-            return json.dumps(message)
+    return loc
 
-    def generate_esp32_format(self):
-        """Generate a telemetry message in ESP32-compatible format following a figure-8 flight path"""
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        unix_timestamp = now.timestamp()
-        
-        # time parameter for smooth pattern
-        t = time.time() * 0.1
-        
-        # Center point of flight area
-        center_lat = (self.lat_range[0] + self.lat_range[1]) / 2
-        center_lon = (self.lon_range[0] + self.lon_range[1]) / 2
-        
-        # Radius of the figure-8 pattern
-        radius_lat = (self.lat_range[1] - self.lat_range[0]) / 3
-        radius_lon = (self.lon_range[1] - self.lon_range[0]) / 3
-        
-        # Figure-8 coordinates
-        latitude = round(center_lat + radius_lat * math.sin(t), 6)
-        longitude = round(center_lon + radius_lon * math.sin(2 * t), 6)
-        
-        # Smooth altitude changes around 300m ±50m
-        alt = round(300 + 50 * math.sin(0.5 * t), 1)
-        height_agl = round(alt - 100, 1)
-        
-        # Compute movement deltas for speed and course
-        let_dx = radius_lon * math.cos(2 * t)
-        let_dy = radius_lat * math.cos(t)
-        speed = round(15 + 5 * math.cos(t), 1)
-        vspeed = round(2.5 * math.cos(0.5 * t), 2)
-        
-        # Calculate course: direction of motion
-        dx = math.cos(t * 2) * radius_lon
-        dy = math.cos(t) * radius_lat
-        course = (math.degrees(math.atan2(dx, dy))) % 360
-        
-        # Cycle through drone IDs for multiple drones
-        self.current_drone_index = (self.current_drone_index + 1) % len(self.drone_ids)
-        uid = self.drone_ids[self.current_drone_index]
-        self.current_drone_id = uid
-        
-        # Other fields
-        mac = self.random_mac()
-        rssi = -60 + int(10 * math.sin(t))
-        desc = f"DJI {uid}"
-        
-        message = {
-            "index": 10,
-            "runtime": round(now.timestamp()),
-            "Basic ID": {
-                "id": uid,
-                "id_type": "Serial Number (ANSI/CTA-2063-A)",
-                "ua_type": 0,
-                "MAC": mac,
-                "RSSI": rssi
-            },
-            "Location/Vector Message": {
-                "latitude": latitude,
-                "longitude": longitude,
-                "speed": speed,
-                "vert_speed": vspeed,
-                "geodetic_altitude": alt,
-                "height_agl": height_agl,
-                "status": 2,
-                "op_status": "Ground",
-                "height_type": "Above Takeoff",
-                "ew_dir_segment": "East",
-                "speed_multiplier": "0.25",
-                "direction": round(course, 1),
-                "alt_pressure": 100,
-                "horiz_acc": 10,
-                "vert_acc": 4,
-                "baro_acc": 6,
-                "speed_acc": 3
-            },
-            "Self-ID Message": {
-                "description_type": 0,
-                "description": desc
-            },
-            "System Message": {
-                "latitude": center_lat,
-                "longitude": center_lon,
-                "operator_lat": center_lat,
-                "operator_lon": center_lon,
-                "operator_id": "NotMe",
-                "home_lat": center_lat,
-                "home_lon": center_lon,
-                "operator_alt_geo": 20,
-                "classification": 1,
-                "timestamp": round(now.timestamp() * 1000)
-            },
-            "Operator ID Message": {
-                "protocol_version": "F3411.22",
-                "operator_id_type": "Operator ID",
-                "operator_id": "NotMe"
-            },
-            # NEW BACKEND/ENRICHMENT FIELDS
-            "freq": round(random.uniform(5725000000, 5875000000), 2),  # Frequency in Hz (5.8GHz FPV band)
-            "seen_by": f"wardragon-{random.randint(100, 199)}",  # WarDragon kit ID
-            "observed_at": unix_timestamp,  # Unix timestamp
-            "rid_timestamp": timestamp,  # ISO8601 timestamp
-            "rid": {  # FAA RID enrichment from faa-rid-lookup
-                "make": random.choice(["DJI", "Autel", "Skydio", "Parrot"]),
-                "model": random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2"]),
-                "source": random.choice(["faa", "dronedb", "caa"])
-            }
-        }
-        
-        return json.dumps(message, indent=4)
-    
 
-    def generate_status_message(self):
-        """Generate system status message matching DragonSync wardragon_monitor.py format"""
-        runtime = int(time.time() - self.start_time)
-        current_time = datetime.now(timezone.utc)
-        time_str = current_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        stale_str = (current_time + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        unix_timestamp = current_time.timestamp()
-        
-        # System location with movement
-        lat = (self.lat_range[0] + self.lat_range[1]) / 2 + random.uniform(-0.0001, 0.0001)
-        lon = (self.lon_range[0] + self.lon_range[1]) / 2 + random.uniform(-0.0001, 0.0001)
-        alt = 50 + random.uniform(-5, 5)
-        
-        # GPS data including speed and track for the track element
-        speed = round(random.uniform(0, 25), 2)  # Speed in m/s
-        track = round(random.uniform(0, 360), 1)  # Track/course in degrees
-        
-        # Generate system stats
-        serial_number = f"wardragon-{random.randint(100,102)}"
-        cpu_usage = round(random.uniform(0, 100), 1)
-        
-        # Memory in MB
-        total_memory = 8192 * 1024
-        available_memory = round(random.uniform(total_memory * 0.3, total_memory * 0.8), 2)
-        
-        # Disk in MB
-        total_disk = 512000 * 1024
-        used_disk = round(random.uniform(total_disk * 0.1, total_disk * 0.9), 2)
-        
-        # Temperatures
-        temperature = round(random.uniform(30, 70), 1)
-        pluto_temp = round(random.uniform(40, 60), 1)
-        zynq_temp = round(random.uniform(35, 55), 1)
-        
-        # Backend enrichment fields (even though system status doesn't use all of these, include for consistency)
-        freq = round(random.uniform(5725000000, 5875000000), 2)
-        seen_by = serial_number
-        rid_make = random.choice(["DJI", "Autel", "Skydio", "Parrot"])
-        rid_model = random.choice(["Mavic 3", "Mini 4 Pro", "Air 3", "EVO II", "X2"])
-        rid_source = random.choice(["FAA", "EASA", "CAA"])
-        
-        message = f"""<?xml version='1.0' encoding='UTF-8'?>
-<event version="2.0" uid="{serial_number}" type="a-f-G-E-S" time="{time_str}" start="{time_str}" stale="{stale_str}" how="m-g">
-    <point lat="{lat:.6f}" lon="{lon:.6f}" hae="{alt:.1f}" ce="35.0" le="999999"/>
-    <detail>
-        <contact endpoint="" phone="" callsign="{serial_number}"/>
-        <precisionlocation geopointsrc="gps" altsrc="gps"/>
-        <remarks>CPU Usage: {cpu_usage}%, Memory Total: {total_memory:.2f} MB, Memory Available: {available_memory:.2f} MB, Disk Total: {total_disk:.2f} MB, Disk Used: {used_disk:.2f} MB, Temperature: {temperature}°C, Uptime: {runtime} seconds, Pluto Temp: {pluto_temp}°C, Zynq Temp: {zynq_temp}°C; Seen By: {seen_by}; Observed At: {unix_timestamp}</remarks>
-        <color argb="-256"/>
-        <track course="{track}" speed="{speed:.2f}"/>
-    </detail>
-</event>"""
-        
-        return message
-
-    def print_sample_fpv_json(self):
-        """Print a sample FPV detection JSON message for testing"""
-        sample_data = {
-            "timestamp": "2025-05-01T14:22:33.123Z",
-            "model": "Mpdds1+DJI O2",
-            "mode": 0,
-            "bandwidth_low": 10,
-            "bandwidth_high": 20,
-            "freq": 2421.175779,
-            "rssi": -32.025200
-        }
-        
-        fpv_detection = {
-            "FPV Detection": {
-                "timestamp": sample_data["timestamp"],
-                "device_type": sample_data["model"],
-                "frequency": round(sample_data["freq"], 2),
-                "bandwidth": f"{sample_data['bandwidth_low']}/{sample_data['bandwidth_high']}M",
-                "signal_strength": round(sample_data["rssi"]),
-                "detection_source": sample_data["model"]
-            }
-        }
-        
-        json_message = json.dumps([fpv_detection], indent=2)
-        print("ANT FPV Detection JSON:")
-        print(json_message)
-        
-        return json_message
-
-def setup_zmq():
-    context = zmq.Context()
-    cot_socket = context.socket(zmq.PUB)
-    status_socket = context.socket(zmq.PUB)
-    return context, cot_socket, status_socket
-
-# ============================================================================
-# MQTT TEST FUNCTIONS
-# ============================================================================
-
-def test_mqtt_connection(config):
-    """Test MQTT broker connectivity and publish sample messages"""
-    if not MQTT_AVAILABLE:
-        print("MQTT testing requires paho-mqtt: pip3 install paho-mqtt")
-        input("\nPress Enter to continue...")
-        return
-    
-    clear_screen()
-    print("🔌 MQTT Broker Connection Test")
-    print(f"\nBroker: {config.mqtt_broker}:{config.mqtt_port}")
-    print(f"Base Topic: {config.mqtt_base_topic}")
-    
-    try:
-        client = mqtt.Client(client_id=f"wardragon_test_{random.randint(1000,9999)}")
-        
-        if config.mqtt_username and config.mqtt_password:
-            client.username_pw_set(config.mqtt_username, config.mqtt_password)
-        
-        if config.mqtt_use_tls:
-            client.tls_set()
-        
-        # Connection callback
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
-                print("Connected to MQTT broker successfully!")
-            else:
-                print(f"Connection failed with code: {rc}")
-        
-        def on_publish(client, userdata, mid):
-            print(f"📤 Message published (ID: {mid})")
-        
-        client.on_connect = on_connect
-        client.on_publish = on_publish
-        
-        print("\nDEBUG:  Connecting...")
-        client.connect(config.mqtt_broker, config.mqtt_port, 60)
-        client.loop_start()
-        time.sleep(2)
-        
-        # Publish test messages
-        print("\nDEBUG:  Publishing test messages...")
-        
-        # 1. Test drone detection
-        drone_topic = f"{config.mqtt_base_topic}/drones/TEST_DRONE"
-        drone_payload = json.dumps({
-            "mac": "AA:BB:CC:DD:EE:FF",
-            "latitude": 37.25,
-            "longitude": -115.75,
-            "altitude": 150.0,
-            "rssi": -65,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "manufacturer": "DJI",
-            "uaType": "Helicopter"
+def build_system(d, include_area=False):
+    sys_msg = {
+        "latitude": round(d.operator_lat, 7),
+        "longitude": round(d.operator_lon, 7),
+        "operator_lat": round(d.operator_lat, 7),
+        "operator_lon": round(d.operator_lon, 7),
+        "home_lat": round(d.home_lat, 7),
+        "home_lon": round(d.home_lon, 7),
+        "operator_altitude_geo": round(d.altitude - 5.0, 1),
+        "classification_type": random.choice(CLASSIFICATION_TYPES),
+        "operator_location_type": random.choice(OPERATOR_LOCATION_TYPES),
+        "timestamp": int(time.time()),
+    }
+    if include_area:
+        sys_msg.update({
+            "area_count": random.randint(1, 8),
+            "area_radius": random.randint(50, 500),
+            "area_floor": round(random.uniform(0, 30), 1),
+            "area_ceiling": round(random.uniform(80, 400), 1),
         })
-        client.publish(drone_topic, drone_payload, qos=1)
-        time.sleep(0.5)
-        
-        # 2. Test system status
-        status_topic = f"{config.mqtt_base_topic}/status"
-        status_payload = json.dumps({
-            "status": "online",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "device": "wardragon_test"
-        })
-        client.publish(status_topic, status_payload, qos=1, retain=True)
-        time.sleep(0.5)
-        
-        # 3. Test system stats
-        system_topic = f"{config.mqtt_base_topic}/system"
-        system_payload = json.dumps({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "cpuUsage": 25.5,
-            "memoryUsed": 45.2,
-            "dronesTracked": 1,
-            "uptime": "1h 23m"
-        })
-        client.publish(system_topic, system_payload, qos=0)
-        
-        print("\nTest messages published successfully!")
-        print(f"\n📊 Published to:")
-        print(f"   • {drone_topic}")
-        print(f"   • {status_topic}")
-        print(f"   • {system_topic}")
-        
-        time.sleep(1)
-        client.loop_stop()
-        client.disconnect()
-        
-    except Exception as e:
-        print(f"\nError: {e}")
-    
-    input("\n\nPress Enter to continue...")
+    return sys_msg
 
-# ============================================================================
-# TAK SERVER TEST FUNCTIONS
-# ============================================================================
 
-def test_tak_connection(config, generator):
-    """Test TAK server connectivity and send CoT messages"""
-    clear_screen()
-    print("🎯 TAK Server Connection Test")
-    print(f"\nServer: {config.tak_host}:{config.tak_port}")
-    print(f"Protocol: {config.tak_protocol.upper()}")
-    
-    try:
-        if config.tak_protocol in ['tcp', 'tls']:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            
-            print(f"\nDEBUG:  Connecting to {config.tak_host}:{config.tak_port}...")
-            sock.connect((config.tak_host, config.tak_port))
-            print(" Connected successfully!")
-            
-            print("\nDEBUG:  Sending test CoT XML...")
-            cot_xml = generator.generate_drone_cot_with_track()
-            sock.sendall(cot_xml.encode('utf-8'))
-            print(" CoT message sent!")
-            
-            time.sleep(1)
-            
-            print("DEBUG:  Sending system status CoT...")
-            status_xml = generator.generate_status_message()
-            sock.sendall(status_xml.encode('utf-8'))
-            print(" Status message sent!")
-            
-            sock.close()
-            
-        elif config.tak_protocol == 'udp':
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            
-            print(f"\nDEBUG:  Sending via UDP to {config.tak_host}:{config.tak_port}...")
-            print("(UDP is connectionless - no handshake needed)\n")
-            
-            cot_xml = generator.generate_drone_cot_with_track()
-            bytes_sent = sock.sendto(cot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f" CoT message sent! ({bytes_sent} bytes)")
-            print(f"   UID: {generator.current_drone_id}")
-            
-            time.sleep(0.5)
-            
-            status_xml = generator.generate_status_message()
-            bytes_sent = sock.sendto(status_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f" Status message sent! ({bytes_sent} bytes)")
-            
-            time.sleep(0.5)
-            
-            pilot_xml = generator.generate_pilot_cot()
-            bytes_sent = sock.sendto(pilot_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f" Pilot message sent! ({bytes_sent} bytes)")
-            
-            time.sleep(0.5)
-            
-            home_xml = generator.generate_home_cot()
-            bytes_sent = sock.sendto(home_xml.encode('utf-8'), (config.tak_host, config.tak_port))
-            print(f" Home message sent! ({bytes_sent} bytes)")
-            
-            sock.close()
-        
-        print(f"\n TAK server test completed successfully!")
-        print(f"\n💡 Check your TAK clients (ATAK/WinTAK/iTAK) for new contacts")
-        print(f"   Look for UIDs starting with: {generator.current_drone_id}")
-        
-    except socket.timeout:
-        print("\nConnection timeout")
-    except ConnectionRefusedError:
-        print("\nConnection refused - is TAK server running?")
-    except socket.gaierror:
-        print(f"\nCannot resolve hostname: {config.tak_host}")
-    except Exception as e:
-        print(f"\nError: {e}")
-    
-    input("\n\nPress Enter to continue...")
+def build_self_id(d):
+    return {
+        "text": f"UAV {d.mac.lower()} operational",
+        "text_type": random.choice(SELF_ID_TEXT_TYPES),
+        "description": "DragonSync iOS test broadcast",
+    }
 
-# ============================================================================
-# ADS-B READSB SIMULATION
-# ============================================================================
-class ADSBSimulator:
-    def __init__(self, count=6):
-        self.aircraft = []
-        # Center of operations (e.g., Area 51)
-        self.center_lat = 37.24
-        self.center_lon = -115.81
-        
-        for i in range(count):
-            self.aircraft.append({
-                "hex": f"{random.randint(0x100000, 0xFFFFFF):06X}",
-                "flight": f"TEST{i+1:02d}",
-                "pattern": i % 3,  # Cycle through Circle, Figure-8, and Ellipse
-                "lane": 0.04 + (i * 0.03),  # Each plane gets a 0.03 degree "lane" separation
-                "speed": 0.05 + (random.uniform(0.02, 0.05)),
-                "alt": 10000 + (i * 3000), # Separated by 3000ft altitude increments
-                "phase": random.uniform(0, math.pi * 2) # Random start point in the loop
-            })
-            
-    def get_aircraft_json(self):
-        t = time.time()
-        current_aircraft = []
-        
-        for ac in self.aircraft:
-            move_t = (t * ac["speed"]) + ac["phase"]
-            lane = ac["lane"]
-            
-            # Pattern 0: Perfect Circle
-            if ac["pattern"] == 0:
-                lat_off = lane * math.sin(move_t)
-                lon_off = lane * math.cos(move_t)
-                
-            # Pattern 1: Figure-8 (Lissajous)
-            elif ac["pattern"] == 1:
-                lat_off = lane * math.sin(move_t)
-                lon_off = (lane * 1.5) * math.sin(2 * move_t) / 2
-                
-            # Pattern 2: Wide Ellipse
-            else:
-                lat_off = (lane * 0.7) * math.sin(move_t)
-                lon_off = (lane * 1.8) * math.cos(move_t)
-                
-            # Calculate Heading (Track)
-            # We use a small look-ahead delta to see where the plane is going
-            dt = 0.01
-            if ac["pattern"] == 0:
-                next_lat = lane * math.sin(move_t + dt)
-                next_lon = lane * math.cos(move_t + dt)
-            elif ac["pattern"] == 1:
-                next_lat = lane * math.sin(move_t + dt)
-                next_lon = (lane * 1.5) * math.sin(2 * (move_t + dt)) / 2
-            else:
-                next_lat = (lane * 0.7) * math.sin(move_t + dt)
-                next_lon = (lane * 1.8) * math.cos(move_t + dt)
-                
-            track = math.degrees(math.atan2(next_lon - lon_off, next_lat - lat_off)) % 360
-            
-            current_aircraft.append({
-                "hex": ac["hex"],
-                "flight": ac["flight"],
-                "alt_baro": ac["alt"],
-                "gs": 200 + (ac["lane"] * 1000), # Further out planes fly faster
-                "track": round(track, 1),
-                "lat": round(self.center_lat + lat_off, 6),
-                "lon": round(self.center_lon + lon_off, 6),
-                "seen": 0.1,
-                "rssi": -18.5,
-                "category": "A1"
-            })
-            
+
+def build_operator_id(d):
+    return {
+        "operator_id": d.operator_id_value,
+        "operator_id_type": d.operator_id_type_value,
+        "protocol_version": d.protocol_version,
+    }
+
+
+def build_auth_page(page_index, page_count, _d):
+    payload = "".join(random.choices("0123456789ABCDEF", k=46 if page_index > 0 else 34))
+    return {
+        "auth_type": random.choice(AUTH_TYPES),
+        "auth_data": payload,
+        "page": page_index,
+        "page_count": page_count,
+        "length": len(payload) // 2,
+        "timestamp": int(time.time()),
+    }
+
+
+def build_aux_adv_ind(d):
+    return {
+        "aa": random_aa(),
+        "chan": 37 + random.randint(0, 2),
+        "phy": random.choice([1, 2, 3]),
+        "rssi": d.rssi,
+        "addr": d.mac,
+    }
+
+
+def build_aext(d):
+    return {
+        "AdvA": f"{d.mac} (random)",
+        "AdvData": "".join(random.choices("0123456789abcdef", k=64)),
+        "AdvDataInfo": {
+            "did": random.randint(0, 4095),
+            "sid": random.randint(0, 15),
+            "mac": d.mac,
+        },
+        "AdvMode": random.choice(["Connectable", "Non-Connectable", "Scannable"]),
+    }
+
+
+# =====================================================================
+# droneid-go ZMQ scenarios
+# =====================================================================
+
+def scenario_wifi(d):
+    return {
+        "Basic ID": build_basic_id(d),
+        "Location/Vector Message": build_location(d),
+        "System Message": build_system(d),
+        "Self-ID Message": build_self_id(d),
+        "Operator ID Message": build_operator_id(d),
+        "index": d.index,
+        "runtime": d.runtime,
+    }
+
+
+def scenario_ble(d):
+    aux = build_aux_adv_ind(d)
+    aext = build_aext(d)
+    return [
+        {"Basic ID": build_basic_id(d), "AUX_ADV_IND": aux, "aext": aext},
+        {"Location/Vector Message": build_location(d), "AUX_ADV_IND": aux, "aext": aext},
+        {"System Message": build_system(d), "AUX_ADV_IND": aux, "aext": aext},
+        {"Self-ID Message": build_self_id(d), "AUX_ADV_IND": aux, "aext": aext},
+        {"Operator ID Message": build_operator_id(d), "AUX_ADV_IND": aux, "aext": aext},
+    ]
+
+
+def scenario_uart(d):
+    return [{
+        "Basic ID": build_basic_id(d),
+        "Location/Vector Message": build_location(d),
+        "System Message": build_system(d),
+        "Self-ID Message": build_self_id(d),
+        "Operator ID Message": build_operator_id(d),
+        "index": d.index,
+        "runtime": d.runtime,
+    }]
+
+
+def scenario_dji(d):
+    obj = scenario_wifi(d)
+    obj["Frequency Message"] = {"frequency": d.frequency_mhz}
+    obj["System Message"]["home_lat"] = round(d.home_lat, 7)
+    obj["System Message"]["home_lon"] = round(d.home_lon, 7)
+    obj["Basic ID"]["transport"] = "dji"
+    obj.pop("index", None)
+    obj.pop("runtime", None)
+    return obj
+
+
+def scenario_area(d):
+    obj = scenario_wifi(d)
+    obj["System Message"] = build_system(d, include_area=True)
+    return obj
+
+
+def scenario_auth(d, page_count=4):
+    return [
+        {"Basic ID": build_basic_id(d),
+         "Auth Message": build_auth_page(p, page_count, d),
+         "index": d.index, "runtime": d.runtime}
+        for p in range(page_count)
+    ]
+
+
+def scenario_caa(d_template):
+    d = DroneSim(
+        drone_id=f"GBR-{uuid.uuid4().hex[:8].upper()}",
+        mac=d_template.mac, ua_name=d_template.ua_type_name,
+        transport=d_template.transport, cfg=d_template.cfg,
+        id_type="CAA Assigned Registration ID",
+    )
+    return scenario_wifi(d)
+
+
+def scenario_utm(d_template):
+    d = DroneSim(
+        drone_id=f"USS-{uuid.uuid4().hex[:12]}",
+        mac=d_template.mac, ua_name=d_template.ua_type_name,
+        transport=d_template.transport, cfg=d_template.cfg,
+        id_type="UTM (USS) Assigned ID",
+    )
+    return scenario_wifi(d)
+
+
+def scenario_session(d_template):
+    d = DroneSim(
+        drone_id=f"sess-{uuid.uuid4().hex[:16]}",
+        mac=d_template.mac, ua_name=d_template.ua_type_name,
+        transport=d_template.transport, cfg=d_template.cfg,
+        id_type="Specific Session ID",
+    )
+    return scenario_wifi(d)
+
+
+def scenario_fpv(d):
+    """Raw FPV Detection envelope (RX5808 / fpv_mdn_receiver.py shape).
+    iOS routes by presence of `FPV Detection` key (XMLParserDelegate processFPVDetection)."""
+    return {
+        "FPV Detection": {
+            "type": "nodeAlert",
+            "frequency": 5658,
+            "rssi": 1820,
+            "stat": "NEW CONTACT LOCK",
+            "time": int(time.time()),
+            "source": f"01-{d.mac.replace(':', '').lower()[-4:]}",
+        },
+        "AUX_ADV_IND": build_aux_adv_ind(d),
+        "aext": build_aext(d),
+    }
+
+
+def scenario_fpv_serial(d):
+    """fpv_mdn_receiver.py raw serial passthrough — `from`/`to`/`msg` envelope.
+    iOS ZMQHandler.processRawFPVMessage handles this shape directly."""
+    return {
+        "from": {"inst": "01", "node": d.mac.replace(":", "").lower()[-4:]},
+        "to": {"inst": "00", "node": "mcn"},
+        "msg": {
+            "type": "nodeAlert",
+            "time": d.runtime,
+            "freq": int(d.frequency_mhz) if d.frequency_mhz > 0 else 5621,
+            "rssi": 1278,
+            "stat": "NEW CONTACT LOCK",
+        },
+    }
+
+
+def scenario_legacy(d):
+    """Legacy zmq_decoder.py output shape: short-form accuracy keys, classification
+    Int (not classification_type), operator_alt_geo (not operator_altitude_geo),
+    no transport, no frequency_mhz. Verifies iOS backward-compat reads."""
+    obj = {
+        "Basic ID": {
+            "id": d.id,
+            "id_type": d.id_type,
+            "MAC": d.mac,
+            "RSSI": d.rssi,
+            "ua_type": d.ua_type_name,
+            "protocol_version": d.protocol_version,
+        },
+        "Location/Vector Message": {
+            "latitude": round(d.lat, 7),
+            "longitude": round(d.lon, 7),
+            "geodetic_altitude": round(d.altitude, 1),
+            "speed": round(d.speed, 2),
+            "vert_speed": round(random.uniform(-2, 2), 2),
+            "height_agl": round(d.height_agl, 1),
+            "height_type": random.choice(HEIGHT_TYPES),
+            "pressure_altitude": round(d.altitude, 1),
+            "ew_dir_segment": "E",
+            "speed_multiplier": "0.25",
+            "op_status": random.choice(OP_STATUS),
+            "direction": int(d.heading),
+            "horiz_acc": random.randint(0, 13),
+            "vert_acc": "<3m",
+            "baro_acc": random.randint(0, 7),
+            "speed_acc": random.randint(0, 4),
+            "timestamp": int(time.time()),
+            "status": 0,
+            "alt_pressure": round(d.altitude, 1),
+            "operator_alt_geo": round(d.altitude - 5.0, 1),
+        },
+        "System Message": {
+            "operator_lat": round(d.operator_lat, 7),
+            "operator_lon": round(d.operator_lon, 7),
+            "home_lat": round(d.home_lat, 7),
+            "home_lon": round(d.home_lon, 7),
+            "classification": random.randint(0, 7),
+            "timestamp": int(time.time()),
+        },
+        "Self-ID Message": {
+            "text": f"UAV {d.mac.lower()} operational",
+            "description": "legacy zmq_decoder broadcast",
+            "description_type": random.randint(0, 2),
+        },
+        "Operator ID Message": {
+            "operator_id": d.operator_id_value,
+        },
+        "index": d.index,
+        "runtime": d.runtime,
+    }
+    return obj
+
+
+def scenario_multi(drones):
+    out = []
+    aux = build_aux_adv_ind(drones[0])
+    aext = build_aext(drones[0])
+    for d in drones:
+        out.extend([
+            {"Basic ID": build_basic_id(d), "AUX_ADV_IND": aux, "aext": aext},
+            {"Location/Vector Message": build_location(d), "AUX_ADV_IND": aux, "aext": aext},
+            {"System Message": build_system(d), "AUX_ADV_IND": aux, "aext": aext},
+        ])
+    return out
+
+
+def scenario_health(uptime_s):
+    sources = {}
+    for src in ("wifi", "ble", "uart", "dji"):
+        sources[src] = {
+            "enabled": True,
+            "state": "connected",
+            "state_str": "running",
+            "connected_since": (datetime.now(timezone.utc) - timedelta(seconds=uptime_s)).isoformat(),
+            "last_message_time": datetime.now(timezone.utc).isoformat(),
+            "connect_attempts": 1,
+            "messages_total": random.randint(100, 100000),
+            "messages_per_sec": round(random.uniform(0.5, 12.0), 2),
+            "errors_total": random.randint(0, 50),
+            "errors_recent": random.randint(0, 3),
+            "last_error": "" if random.random() > 0.2 else "i/o timeout",
+            "last_error_time": datetime.now(timezone.utc).isoformat(),
+            "uptime": uptime_s,
+            "uptime_ns": uptime_s * 1_000_000_000,
+        }
+    return {
+        "enabled": True,
+        "state": "running",
+        "state_str": "running",
+        "connected_since": (datetime.now(timezone.utc) - timedelta(seconds=uptime_s)).isoformat(),
+        "last_message_time": datetime.now(timezone.utc).isoformat(),
+        "connect_attempts": 1,
+        "messages_total": sum(s["messages_total"] for s in sources.values()),
+        "messages_per_sec": round(sum(s["messages_per_sec"] for s in sources.values()), 2),
+        "errors_total": sum(s["errors_total"] for s in sources.values()),
+        "errors_recent": sum(s["errors_recent"] for s in sources.values()),
+        "uptime": uptime_s,
+        "uptime_ns": uptime_s * 1_000_000_000,
+        "sources": sources,
+    }
+
+
+# =====================================================================
+# WarDragon monitor status (port 4225 JSON, parsed by iOS StatusMessageParser)
+# =====================================================================
+
+def scenario_status_json():
+    return {
+        "serial_number": "wardragon-test-0001",
+        "gps_data": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "altitude": 30.0,
+            "track": 0.0,
+            "speed": 0.0,
+        },
+        "system_stats": {
+            "cpu_usage": round(random.uniform(5, 75), 1),
+            "memory": {
+                "total": 16_000_000_000, "available": 12_000_000_000,
+                "percent": round(random.uniform(20, 60), 1),
+                "used": 4_000_000_000, "free": 8_000_000_000,
+                "active": 3_500_000_000, "inactive": 500_000_000,
+                "buffers": 100_000_000, "shared": 50_000_000,
+                "cached": 2_000_000_000, "slab": 200_000_000,
+            },
+            "disk": {
+                "total": 256_000_000_000, "used": 100_000_000_000,
+                "free": 156_000_000_000,
+                "percent": round(random.uniform(20, 60), 1),
+            },
+            "temperature": round(random.uniform(40, 70), 1),
+            "uptime": time.time() % 1_000_000,
+        },
+        "ant_sdr_temps": {
+            "pluto_temp": round(random.uniform(40, 75), 1),
+            "zynq_temp": round(random.uniform(45, 80), 1),
+        },
+    }
+
+
+# =====================================================================
+# Spoof mutations
+# =====================================================================
+
+SPOOF_KINDS = ["rssi", "speed", "teleport", "altitude"]
+
+
+def apply_spoof(obj, kind):
+    if isinstance(obj, list):
+        for el in obj:
+            apply_spoof(el, kind)
+        return obj
+    loc = obj.get("Location/Vector Message")
+    basic = obj.get("Basic ID")
+    if kind == "rssi" and basic:
+        basic["RSSI"] = -10
+    elif kind == "speed" and loc:
+        loc["speed"] = 999.0
+    elif kind == "altitude" and loc:
+        loc["geodetic_altitude"] = 99999.0
+    elif kind == "teleport" and loc:
+        loc["latitude"] = round(random.uniform(-89, 89), 6)
+        loc["longitude"] = round(random.uniform(-179, 179), 6)
+    return obj
+
+
+# =====================================================================
+# DragonSync CoT XML emitters (multicast 239.2.3.1:6969)
+# =====================================================================
+
+def cot_drone(d):
+    """Drone CoT remarks. Combines DragonSync build_drone_cot fields (MAC, RSSI,
+    ID Type, UA Type, Operator ID, Speed, Altitude, Course, Index, Runtime,
+    Description, Transport, Freq) with the inline System: [...] block that
+    ZMQHandler.swift emits and iOS XMLParserDelegate.parseDroneRemarks expects
+    for pilot/home extraction. DragonSync alone publishes pilot/home as separate
+    pilot-/home- CoT events, which iOS filters out — embedding them inline lets
+    iOS surface operator and home location from a single multicast event."""
+    ua_name = d.ua_type_name
+    op_display = f"[{d.operator_id_type_value}: {d.operator_id_value}]"
+    remarks = (
+        f"MAC: {d.mac}, RSSI: {d.rssi}dBm; "
+        f"ID Type: {d.id_type}; UA Type: {ua_name} ({d.ua_type}); "
+        f"Operator ID: {op_display}; "
+        f"Speed: {d.speed:.2f} m/s; Vert Speed: 0.0 m/s; "
+        f"Altitude: {d.altitude:.1f} m; AGL: {d.height_agl:.1f} m; "
+        f"Course: {d.heading:.1f}°; "
+        f"Index: {d.index}; Runtime: {d.runtime}s; "
+        f"Description: DragonSync iOS test broadcast; "
+        f"Transport: {d.transport}"
+    )
+    if d.frequency_mhz > 0:
+        remarks += f"; Freq: ~{d.frequency_mhz:.3f} MHz"
+    if d.caa_id:
+        remarks += f"; CAA ID: {d.caa_id}"
+    remarks += (
+        f"; System: [Operator Lat: {d.operator_lat:.7f}, "
+        f"Operator Lon: {d.operator_lon:.7f}, "
+        f"Home Lat: {d.home_lat:.7f}, "
+        f"Home Lon: {d.home_lon:.7f}]"
+    )
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<event version="2.0" uid="drone-{d.id}" type="a-u-A-M-H-R" '
+        f'time="{now_iso()}" start="{now_iso()}" stale="{stale_iso()}" how="m-g">'
+        f'<point lat="{d.lat:.7f}" lon="{d.lon:.7f}" hae="{d.altitude:.1f}" ce="35.0" le="999999"/>'
+        f'<detail>'
+        f'<contact callsign="drone-{d.id}"/>'
+        f'<precisionlocation geopointsrc="gps" altsrc="gps"/>'
+        f'<track course="{d.heading:.1f}" speed="{d.speed:.2f}"/>'
+        f'<remarks>{xml_escape(remarks)}</remarks>'
+        f'<color argb="-256"/>'
+        f'</detail></event>'
+    ).encode("utf-8")
+
+
+def cot_pilot(d):
+    """Mirrors DragonSync build_pilot_cot. iOS XMLParserDelegate filters on uid prefix 'pilot-'."""
+    base = d.id[len("drone-"):] if d.id.startswith("drone-") else d.id
+    remarks = f"Pilot location for drone drone-{d.id}"
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<event version="2.0" uid="pilot-{base}" type="b-m-p-s-m" '
+        f'time="{now_iso()}" start="{now_iso()}" stale="{stale_iso()}" how="m-g">'
+        f'<point lat="{d.operator_lat:.7f}" lon="{d.operator_lon:.7f}" hae="{d.altitude:.1f}" ce="35.0" le="999999"/>'
+        f'<detail>'
+        f'<contact callsign="pilot-{base}"/>'
+        f'<precisionlocation geopointsrc="gps" altsrc="gps"/>'
+        f'<usericon iconsetpath="com.atakmap.android.maps.public/Civilian/Person.png"/>'
+        f'<remarks>{xml_escape(remarks)}</remarks>'
+        f'</detail></event>'
+    ).encode("utf-8")
+
+
+def cot_home(d):
+    """Mirrors DragonSync build_home_cot. iOS filters on uid prefix 'home-'."""
+    base = d.id[len("drone-"):] if d.id.startswith("drone-") else d.id
+    remarks = f"Home location for drone drone-{d.id}"
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<event version="2.0" uid="home-{base}" type="b-m-p-s-m" '
+        f'time="{now_iso()}" start="{now_iso()}" stale="{stale_iso()}" how="m-g">'
+        f'<point lat="{d.home_lat:.7f}" lon="{d.home_lon:.7f}" hae="{d.altitude:.1f}" ce="35.0" le="999999"/>'
+        f'<detail>'
+        f'<contact callsign="home-{base}"/>'
+        f'<precisionlocation geopointsrc="gps" altsrc="gps"/>'
+        f'<usericon iconsetpath="com.atakmap.android.maps.public/Civilian/House.png"/>'
+        f'<remarks>{xml_escape(remarks)}</remarks>'
+        f'</detail></event>'
+    ).encode("utf-8")
+
+
+def cot_adsb(craft):
+    """Mirrors DragonSync build_adsb_cot. ADS-B aircraft uid uses ICAO hex."""
+    uid = f"ADSB-{craft['hex']}"
+    callsign = craft.get("flight", uid)
+    remarks = (
+        f"ICAO: {craft['hex']}; Flight: {callsign}; "
+        f"Altitude: {craft['alt_baro']} ft; Speed: {craft['gs']} kt; Track: {craft['track']}°"
+    )
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<event version="2.0" uid="{uid}" type="a-f-A" '
+        f'time="{now_iso()}" start="{now_iso()}" stale="{stale_iso()}" how="m-g">'
+        f'<point lat="{craft["lat"]:.6f}" lon="{craft["lon"]:.6f}" hae="{craft["alt_baro"] * 0.3048:.1f}" ce="35.0" le="999999"/>'
+        f'<detail>'
+        f'<contact callsign="{callsign}"/>'
+        f'<track course="{craft["track"]}" speed="{craft["gs"]}"/>'
+        f'<remarks>{xml_escape(remarks)}</remarks>'
+        f'</detail></event>'
+    ).encode("utf-8")
+
+
+def cot_status(serial="wardragon-test-0001"):
+    """WarDragon monitor system status as CoT (matches wardragon_monitor.py output)."""
+    cpu = round(random.uniform(5, 75), 1)
+    temp = round(random.uniform(40, 70), 1)
+    pluto = round(random.uniform(40, 75), 1)
+    zynq = round(random.uniform(45, 80), 1)
+    mem_total_mb = 16000.0
+    mem_avail_mb = round(random.uniform(8000, 13000), 1)
+    mem_used_mb = round(mem_total_mb - mem_avail_mb, 1)
+    mem_percent = round(mem_used_mb / mem_total_mb * 100.0, 1)
+    disk_total = 256000.0
+    disk_used = round(random.uniform(50000, 150000), 1)
+    disk_free = round(disk_total - disk_used, 1)
+    disk_percent = round(disk_used / disk_total * 100.0, 1)
+    remarks = (
+        f"CPU Usage: {cpu}%, "
+        f"Memory Total: {mem_total_mb} MB, Memory Available: {mem_avail_mb} MB, "
+        f"Memory Used: {mem_used_mb} MB, Memory Free: {mem_avail_mb} MB, "
+        f"Memory Active: 3500.0 MB, Memory Inactive: 500.0 MB, "
+        f"Memory Buffers: 100.0 MB, Memory Shared: 50.0 MB, "
+        f"Memory Cached: 2000.0 MB, Memory Slab: 200.0 MB, "
+        f"Memory Percent: {mem_percent}%, "
+        f"Disk Total: {disk_total} MB, Disk Used: {disk_used} MB, "
+        f"Disk Free: {disk_free} MB, Disk Percent: {disk_percent}%, "
+        f"Temperature: {temp}°C, Uptime: {int(time.time() % 1_000_000)} seconds, "
+        f"Pluto Temp: {pluto}°C, Zynq Temp: {zynq}°C"
+    )
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<event version="2.0" uid="{serial}" type="b-m-p-s-m">'
+        f'<point lat="37.7749" lon="-122.4194" hae="30.0" ce="9999999" le="9999999"/>'
+        f'<detail>'
+        f'<track course="0.0" speed="0.0"/>'
+        f'<status readiness="true"/>'
+        f'<remarks>{xml_escape(remarks)}</remarks>'
+        f'</detail></event>'
+    ).encode("utf-8")
+
+
+# =====================================================================
+# DragonSync to_dict() shape (MQTT / Lattice / API export wire format)
+# =====================================================================
+
+def mqtt_dict(d):
+    """Mirrors DragonSync core/drone.py Drone.to_dict()."""
+    return {
+        "id": f"drone-{d.id}",
+        "id_type": d.id_type,
+        "ua_type": d.ua_type,
+        "ua_type_name": d.ua_type_name,
+        "operator_id_type": d.operator_id_type_value,
+        "operator_id": d.operator_id_value,
+        "op_status": random.choice(OP_STATUS),
+        "height_type": random.choice(HEIGHT_TYPES),
+        "ew_dir": random.choice(["E", "W"]),
+        "direction": int(d.heading),
+        "speed_multiplier": random.choice(["0.25", "0.75"]),
+        "pressure_altitude": round(d.altitude + random.uniform(-3, 3), 1),
+        "vertical_accuracy": random.choice(ACCURACY_STRINGS),
+        "horizontal_accuracy": random.choice(ACCURACY_STRINGS),
+        "baro_accuracy": random.choice(ACCURACY_STRINGS),
+        "speed_accuracy": random.choice(ACCURACY_STRINGS),
+        "timestamp": int(time.time()),
+        "rid_timestamp": int(time.time()),
+        "observed_at": time.time(),
+        "timestamp_accuracy": random.choice(["0.1s", "0.2s", "0.5s", "1.0s"]),
+        "seen_by": "wardragon-test-0001",
+        "lat": round(d.lat, 7),
+        "lon": round(d.lon, 7),
+        "alt": round(d.altitude, 1),
+        "height": round(d.height_agl, 1),
+        "speed": round(d.speed, 2),
+        "vspeed": round(random.uniform(-2, 2), 2),
+        "pilot_lat": round(d.operator_lat, 7),
+        "pilot_lon": round(d.operator_lon, 7),
+        "home_lat": round(d.home_lat, 7),
+        "home_lon": round(d.home_lon, 7),
+        "description": "DragonSync iOS test broadcast",
+        "mac": d.mac,
+        "rssi": d.rssi,
+        "index": d.index,
+        "runtime": d.runtime,
+        "caa_id": d.caa_id or "",
+        "freq": d.frequency_mhz if d.frequency_mhz > 0 else None,
+        "transport": d.transport,
+        "rid": {
+            "tracking": None,
+            "status": None,
+            "make": None,
+            "model": None,
+            "source": None,
+            "lookup_attempted": False,
+            "lookup_success": False,
+        },
+        "last_update_time": time.time(),
+        "track_type": "drone",
+    }
+
+
+# =====================================================================
+# ADS-B aircraft sim (for cot_adsb scenario)
+# =====================================================================
+
+class ADSBAircraft:
+    def __init__(self, cfg):
+        self.hex = "".join(random.choices("0123456789ABCDEF", k=6))
+        self.flight = f"TEST{random.randint(100, 999)}"
+        self.lat = cfg.lat_center + random.uniform(-0.1, 0.1)
+        self.lon = cfg.lon_center + random.uniform(-0.1, 0.1)
+        self.alt_baro = random.randint(2000, 38000)
+        self.gs = random.randint(120, 480)
+        self.track = random.uniform(0, 360)
+
+    def step(self, dt):
+        rad = math.radians(self.track)
+        d_lat = (self.gs * 0.514444 * dt * math.cos(rad)) / 111000.0
+        cos_lat = max(0.01, math.cos(math.radians(self.lat)))
+        d_lon = (self.gs * 0.514444 * dt * math.sin(rad)) / (111000.0 * cos_lat)
+        self.lat += d_lat
+        self.lon += d_lon
+        self.track = (self.track + random.uniform(-2, 2)) % 360
+
+    def as_dict(self):
         return {
-            "now": time.time(),
-            "messages": 123456,
-            "aircraft": current_aircraft
+            "hex": self.hex, "flight": self.flight,
+            "lat": self.lat, "lon": self.lon,
+            "alt_baro": self.alt_baro, "gs": self.gs,
+            "track": int(self.track),
         }
 
-class ReadsbHTTPHandler(BaseHTTPRequestHandler):
-    simulator = None # Assigned during server startup
-    
-    def do_GET(self):
-        if self.path == '/data/aircraft.json':
-            if ReadsbHTTPHandler.simulator:
-                data = ReadsbHTTPHandler.simulator.get_aircraft_json()
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(data).encode())
+
+# =====================================================================
+# Publisher
+# =====================================================================
+
+class Publisher:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.ctx = zmq.Context()
+        self.zmq_sock = self.ctx.socket(zmq.PUB)
+        self.zmq_sock.bind(f"tcp://{cfg.zmq_bind}")
+        self.status_sock = self.ctx.socket(zmq.PUB)
+        self.status_sock.bind(f"tcp://{cfg.status_bind}")
+        self.mc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.mc_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        self.mqtt_client = None
+        if cfg.mqtt_broker:
+            if not MQTT_AVAILABLE:
+                print("[mqtt] paho-mqtt not installed; mqtt_dict scenario disabled", file=sys.stderr)
+            else:
+                self.mqtt_client = mqtt.Client(client_id=f"dragonsync-test-{uuid.uuid4().hex[:8]}")
+                try:
+                    self.mqtt_client.connect(cfg.mqtt_broker, cfg.mqtt_port, 60)
+                    self.mqtt_client.loop_start()
+                    print(f"[mqtt] connected {cfg.mqtt_broker}:{cfg.mqtt_port}")
+                except Exception as exc:
+                    print(f"[mqtt] connect failed: {exc}", file=sys.stderr)
+                    self.mqtt_client = None
+        time.sleep(0.3)
+        print(f"[zmq] telemetry on tcp://{cfg.zmq_bind}")
+        print(f"[zmq] status   on tcp://{cfg.status_bind}")
+        print(f"[mc]  CoT      on {cfg.multicast_group}:{cfg.multicast_port}")
+
+    def send_telemetry(self, payload, label):
+        data = json.dumps(payload).encode("utf-8")
+        self.zmq_sock.send(data)
+        if isinstance(payload, list):
+            ids = [el["Basic ID"]["id"] for el in payload
+                   if isinstance(el.get("Basic ID"), dict) and el["Basic ID"].get("id")]
+            tag = ",".join(sorted(set(ids))) or "<no-bid>"
         else:
-            self.send_response(404)
-            self.end_headers()
-            
-    def log_message(self, format, *args):
-        pass # Keep console clean
+            tag = (payload.get("Basic ID") or {}).get("id", "<no-bid>")
+        print(f"[tx] {label:<10} {tag} ({len(data)}B)")
+
+    def send_status_json(self, payload):
+        data = json.dumps(payload).encode("utf-8")
+        self.status_sock.send(data)
+        print(f"[tx] status_js ({len(data)}B)")
+
+    def send_health(self, payload):
+        data = json.dumps(payload).encode("utf-8")
+        self.zmq_sock.send(data)
+        print(f"[tx] health     sources={len(payload.get('sources', {}))} ({len(data)}B)")
+
+    def send_cot(self, xml_bytes, label):
+        self.mc_sock.sendto(xml_bytes, (self.cfg.multicast_group, self.cfg.multicast_port))
+        print(f"[tx] {label:<10} cot multicast ({len(xml_bytes)}B)")
+
+    def send_mqtt(self, payload, sub_topic=""):
+        if not self.mqtt_client:
+            return
+        topic = f"{self.cfg.mqtt_topic}/{sub_topic}" if sub_topic else self.cfg.mqtt_topic
+        self.mqtt_client.publish(topic, json.dumps(payload), qos=0)
+        print(f"[tx] mqtt_dict topic={topic} ({len(json.dumps(payload))}B)")
+
+    def close(self):
+        self.zmq_sock.close(linger=0)
+        self.status_sock.close(linger=0)
+        self.ctx.term()
+        self.mc_sock.close()
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
 
 
-def start_adsb_server(config):
-    """Start simulated ADS-B readsb HTTP server with persistent aircraft"""
-    clear_screen()
-    print("DEBUG:   Starting Persistent ADS-B Simulator")
-    print(f"\nEndpoint: http://localhost:{config.adsb_port}/data/aircraft.json")
-    
+# =====================================================================
+# Runner
+# =====================================================================
+
+ALL_SCENARIOS = [
+    "wifi", "ble", "uart", "dji", "area", "auth",
+    "caa", "utm", "session", "multi", "fpv", "fpv_serial", "legacy",
+    "health", "status",
+    "cot", "pilot", "home", "adsb", "status_cot", "mqtt_dict",
+]
+
+
+def make_drone(transport, cfg, ua=None):
+    serial = uuid.uuid4().hex[:20].upper()
+    ua_name = ua or random.choice(["Aeroplane", "Helicopter", "Hybrid Lift", "Other"])
+    return DroneSim(serial, random_mac(), ua_name, transport, cfg)
+
+
+def run(cfg):
+    if cfg.seed:
+        random.seed(cfg.seed)
+
+    pub = Publisher(cfg)
+    drones = {
+        "wifi": make_drone("wifi", cfg),
+        "ble": make_drone("ble", cfg),
+        "uart": make_drone("uart", cfg),
+        "dji": make_drone("dji", cfg),
+    }
+    multi_drones = [make_drone("ble", cfg) for _ in range(3)]
+    aircraft = ADSBAircraft(cfg)
+
+    period = 1.0 / cfg.rate_hz if cfg.rate_hz > 0 else 1.0
+    health_period = 1.0 / cfg.health_rate_hz if cfg.health_rate_hz > 0 else 60.0
+    status_period = 1.0 / cfg.status_rate_hz if cfg.status_rate_hz > 0 else 30.0
+
+    last_health = 0.0
+    last_status = 0.0
+    last_step = time.time()
+    end_at = time.time() + cfg.duration_s if cfg.duration_s > 0 else None
+
+    scenarios = cfg.scenarios
+    if "all" in scenarios:
+        scenarios = ALL_SCENARIOS
+
+    print(f"[run] scenarios={scenarios} rate={cfg.rate_hz}Hz "
+          f"health={cfg.health_rate_hz}Hz status={cfg.status_rate_hz}Hz")
+
     try:
-        # Initialize the persistent data
-        simulator = ADSBSimulator(count=5)
-        ReadsbHTTPHandler.simulator = simulator
-        
-        server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
-        print("\n Server started! Aircraft are now flying in circles.")
-        print("   Press Ctrl+C to stop\n")
-        
-        server.serve_forever()
-        
+        while True:
+            now = time.time()
+            dt = now - last_step
+            last_step = now
+            for d in drones.values():
+                d.step(dt)
+            for d in multi_drones:
+                d.step(dt)
+            aircraft.step(dt)
+
+            for s in scenarios:
+                if s == "wifi":
+                    pub.send_telemetry(scenario_wifi(drones["wifi"]), "wifi")
+                elif s == "ble":
+                    pub.send_telemetry(scenario_ble(drones["ble"]), "ble")
+                elif s == "uart":
+                    pub.send_telemetry(scenario_uart(drones["uart"]), "uart")
+                elif s == "dji":
+                    pub.send_telemetry(scenario_dji(drones["dji"]), "dji")
+                elif s == "area":
+                    pub.send_telemetry(scenario_area(drones["wifi"]), "area")
+                elif s == "auth":
+                    for f in scenario_auth(drones["wifi"]):
+                        pub.send_telemetry(f, "auth")
+                elif s == "caa":
+                    pub.send_telemetry(scenario_caa(drones["wifi"]), "caa")
+                elif s == "utm":
+                    pub.send_telemetry(scenario_utm(drones["wifi"]), "utm")
+                elif s == "session":
+                    pub.send_telemetry(scenario_session(drones["wifi"]), "session")
+                elif s == "multi":
+                    pub.send_telemetry(scenario_multi(multi_drones), "multi")
+                elif s == "fpv":
+                    pub.send_telemetry(scenario_fpv(drones["wifi"]), "fpv")
+                elif s == "fpv_serial":
+                    pub.send_telemetry(scenario_fpv_serial(drones["wifi"]), "fpv_serial")
+                elif s == "legacy":
+                    pub.send_telemetry(scenario_legacy(drones["wifi"]), "legacy")
+                elif s.startswith("spoof:"):
+                    kind = s.split(":", 1)[1]
+                    if kind not in SPOOF_KINDS:
+                        print(f"[warn] unknown spoof kind: {kind}", file=sys.stderr)
+                        continue
+                    obj = apply_spoof(scenario_wifi(drones["wifi"]), kind)
+                    pub.send_telemetry(obj, f"spoof:{kind}")
+                elif s == "cot":
+                    pub.send_cot(cot_drone(drones["wifi"]), "cot_drone")
+                elif s == "pilot":
+                    pub.send_cot(cot_pilot(drones["wifi"]), "cot_pilot")
+                elif s == "home":
+                    pub.send_cot(cot_home(drones["wifi"]), "cot_home")
+                elif s == "adsb":
+                    pub.send_cot(cot_adsb(aircraft.as_dict()), "cot_adsb")
+                elif s == "status_cot":
+                    pub.send_cot(cot_status(), "status_cot")
+                elif s == "mqtt_dict":
+                    payload = mqtt_dict(drones["wifi"])
+                    pub.send_mqtt(payload, sub_topic=f"drone-{drones['wifi'].id}")
+                elif s in ("health", "status"):
+                    pass
+                else:
+                    print(f"[warn] unknown scenario: {s}", file=sys.stderr)
+
+            if "health" in scenarios and (now - last_health) >= health_period:
+                pub.send_health(scenario_health(int(now - drones["wifi"].first_seen)))
+                last_health = now
+
+            if "status" in scenarios and (now - last_status) >= status_period:
+                pub.send_status_json(scenario_status_json())
+                last_status = now
+
+            if end_at is not None and now >= end_at:
+                break
+
+            time.sleep(period)
     except KeyboardInterrupt:
-        print("\n\nServer stopped")
-        server.shutdown()
-    except Exception as e:
-        print(f"\nError: {e}")
-        
-    input("\nPress Enter to continue...")
+        print("\n[run] interrupt — shutting down")
+    finally:
+        pub.close()
 
-# ============================================================================
-# CONFIGURATION FUNCTIONS
-# ============================================================================
 
-def configure_mqtt_settings(config):
-    """Configure MQTT broker settings"""
-    clear_screen()
-    print("DEBUG:  MQTT Configuration")
-    print(f"\nCurrent Settings:")
-    print(f"  Broker: {config.mqtt_broker}:{config.mqtt_port}")
-    print(f"  Base Topic: {config.mqtt_base_topic}")
-    print(f"  TLS: {'Enabled' if config.mqtt_use_tls else 'Disabled'}")
-    
-    print("\n1. Change Broker Host")
-    print("2. Change Port")
-    print("3. Set Username/Password")
-    print("4. Change Base Topic")
-    print("5. Toggle TLS")
-    print("6. Back")
-    
-    choice = input("\nEnter choice (1-6): ")
-    
-    if choice == '1':
-        config.mqtt_broker = input("Enter broker host: ")
-    elif choice == '2':
-        try:
-            config.mqtt_port = int(input("Enter port: "))
-        except ValueError:
-            print("Invalid port")
-    elif choice == '3':
-        config.mqtt_username = input("Username (blank for none): ") or None
-        if config.mqtt_username:
-            config.mqtt_password = input("Password: ") or None
-    elif choice == '4':
-        config.mqtt_base_topic = input("Enter base topic: ")
-    elif choice == '5':
-        config.mqtt_use_tls = not config.mqtt_use_tls
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--zmq-bind", default="0.0.0.0:4224",
+                   help="droneid-go telemetry publisher bind (default 0.0.0.0:4224)")
+    p.add_argument("--status-bind", default="0.0.0.0:4225",
+                   help="wardragon_monitor JSON status publisher bind (default 0.0.0.0:4225)")
+    p.add_argument("--multicast-group", default="239.2.3.1",
+                   help="DragonSync CoT multicast group (default 239.2.3.1)")
+    p.add_argument("--multicast-port", type=int, default=6969)
+    p.add_argument("--mqtt-broker", default="",
+                   help="MQTT broker host for mqtt_dict scenario (empty disables)")
+    p.add_argument("--mqtt-port", type=int, default=1883)
+    p.add_argument("--mqtt-topic", default="wardragon/drone")
+    p.add_argument("--scenario", action="append", default=None,
+                   help=f"repeatable. One of: {', '.join(ALL_SCENARIOS)}, all, "
+                        f"or spoof:{{{ '|'.join(SPOOF_KINDS) }}}. Default: wifi")
+    p.add_argument("--rate", type=float, default=1.0, help="telemetry frames/sec (default 1)")
+    p.add_argument("--health-rate", type=float, default=0.1,
+                   help="health snapshots/sec (default 0.1 = every 10s)")
+    p.add_argument("--status-rate", type=float, default=0.033,
+                   help="status frames/sec (default ~30s)")
+    p.add_argument("--duration", type=float, default=0.0, help="seconds to run (0 = forever)")
+    p.add_argument("--seed", type=int, default=0, help="RNG seed (0 = nondeterministic)")
+    p.add_argument("--lat", type=float, default=37.25)
+    p.add_argument("--lon", type=float, default=-115.75)
+    return p.parse_args()
 
-def configure_tak_settings(config):
-    """Configure TAK server settings"""
-    clear_screen()
-    print("DEBUG:  TAK Server Configuration")
-    print(f"\nCurrent Settings:")
-    print(f"  Server: {config.tak_host}:{config.tak_port}")
-    print(f"  Protocol: {config.tak_protocol.upper()}")
-    
-    print("\n1. Change Host")
-    print("2. Change Port")
-    print("3. Change Protocol (TCP/UDP/TLS)")
-    print("4. Back")
-    
-    choice = input("\nEnter choice (1-4): ")
-    
-    if choice == '1':
-        config.tak_host = input("Enter host: ")
-    elif choice == '2':
-        try:
-            config.tak_port = int(input("Enter port: "))
-        except ValueError:
-            print("Invalid port")
-    elif choice == '3':
-        protocol = input("Enter protocol (tcp/udp/tls): ").lower()
-        if protocol in ['tcp', 'udp', 'tls']:
-            config.tak_protocol = protocol
 
-def configure_adsb_settings(config):
-    """Configure ADS-B settings"""
-    clear_screen()
-    print("DEBUG:  ADS-B Configuration")
-    print(f"\nCurrent Settings:")
-    print(f"  HTTP Port: {config.adsb_port}")
-    
-    print("\n1. Change Port")
-    print("2. Back")
-    
-    choice = input("\nEnter choice (1-2): ")
-    
-    if choice == '1':
-        try:
-            new_port = int(input(f"Enter port [{config.adsb_port}]: "))
-            config.adsb_port = new_port
-            print(f"Port updated to {config.adsb_port}")
-        except ValueError:
-            print("Invalid port number")
-    
-    input("\nPress Enter to continue...")
+def main():
+    args = parse_args()
+    cfg = Config(
+        zmq_bind=args.zmq_bind,
+        status_bind=args.status_bind,
+        multicast_group=args.multicast_group,
+        multicast_port=args.multicast_port,
+        mqtt_broker=args.mqtt_broker,
+        mqtt_port=args.mqtt_port,
+        mqtt_topic=args.mqtt_topic,
+        rate_hz=args.rate,
+        health_rate_hz=args.health_rate,
+        status_rate_hz=args.status_rate,
+        duration_s=args.duration,
+        seed=args.seed,
+        lat_center=args.lat,
+        lon_center=args.lon,
+        scenarios=args.scenario or ["wifi"],
+    )
+    run(cfg)
 
-def configure_opensky_settings(config):
-    """Configure OpenSky Network settings"""
-    clear_screen()
-    print("DEBUG:  OpenSky Network Configuration")
-    print(f"\nCurrent Settings:")
-    print(f"  Username: {config.opensky_username or 'Not set (anonymous)'}")
-    print(f"  Password: {'*' * len(config.opensky_password) if config.opensky_password else 'Not set'}")
-    
-    print("\n📝 Note: OpenSky Network allows anonymous requests but has rate limits.")
-    print("   Authenticated requests get higher rate limits and more features.")
-    print("   Register at: https://opensky-network.org\n")
-    
-    print("1. Set/Change Username")
-    print("2. Set/Change Password")
-    print("3. Clear Credentials (use anonymous)")
-    print("4. Back")
-    
-    choice = input("\nEnter choice (1-4): ")
-    
-    if choice == '1':
-        username = input("Enter OpenSky username (blank to cancel): ").strip()
-        if username:
-            config.opensky_username = username
-            print(f"Username set to: {username}")
-    elif choice == '2':
-        password = input("Enter OpenSky password (blank to cancel): ").strip()
-        if password:
-            config.opensky_password = password
-            print("Password updated")
-    elif choice == '3':
-        config.opensky_username = None
-        config.opensky_password = None
-        print("Credentials cleared - will use anonymous access")
-    
-    input("\nPress Enter to continue...")
 
-def configure_spoof_settings(config):
-    """Configure spoof testing mode"""
-    clear_screen()
-    print("🎭 Spoof Detection Testing Configuration")
-    print(f"\nCurrent Settings:")
-    print(f"  Mode: {config.spoof_mode or 'Disabled'}")
-    print(f"  Intensity: {config.spoof_intensity}")
-    
-    print("\n📝 Spoof Mode simulates spoofed/fake drone broadcasts to test")
-    print("   your app's spoof detection capabilities.\n")
-    
-    print("Available Spoof Modes:")
-    print("  1. RSSI Mismatch - Signal strength doesn't match distance")
-    print("  2. Impossible Speed - Speeds >100 m/s (fighter jet speeds)")
-    print("  3. Position Jump - Teleportation/GPS spoofing")
-    print("  4. Altitude Jump - Sudden impossible altitude changes")
-    print("  5. All Modes - Random mix of all spoof types")
-    print("  6. Disable - Normal testing (no spoofing)")
-    
-    choice = input("\nEnter choice (1-6): ")
-    
-    if choice == '1':
-        config.spoof_mode = 'rssi'
-    elif choice == '2':
-        config.spoof_mode = 'speed'
-    elif choice == '3':
-        config.spoof_mode = 'teleport'
-    elif choice == '4':
-        config.spoof_mode = 'altitude'
-    elif choice == '5':
-        config.spoof_mode = 'all'
-    elif choice == '6':
-        config.spoof_mode = None
-        print("\n✅ Spoof mode disabled")
-        input("\nPress Enter to continue...")
-        return
-    
-    if config.spoof_mode:
-        print("\nSpoof Intensity:")
-        print("  1. Low - Subtle anomalies")
-        print("  2. Medium - Obvious anomalies")
-        print("  3. High - Extreme anomalies")
-        print("  4. Extreme - Impossible values")
-        
-        intensity_choice = input("\nEnter intensity (1-4): ")
-        if intensity_choice == '1':
-            config.spoof_intensity = 'low'
-        elif intensity_choice == '2':
-            config.spoof_intensity = 'medium'
-        elif intensity_choice == '3':
-            config.spoof_intensity = 'high'
-        elif intensity_choice == '4':
-            config.spoof_intensity = 'extreme'
-        
-        print(f"\n✅ Spoof mode set to: {config.spoof_mode.upper()} ({config.spoof_intensity})")
-        print("\n⚠️  When broadcasting, you'll see 🎭 SPOOF messages indicating")
-        print("   what type of spoofing is being applied to each message.")
-    
-    input("\nPress Enter to continue...")
-
-# ============================================================================
-# OPENSKY NETWORK TEST FUNCTIONS
-# ============================================================================
-
-def get_approximate_location():
-    """Try to get approximate location from IP geolocation (requires internet)"""
-    try:
-        # Using a free IP geolocation service
-        response = requests.get('http://ip-api.com/json/', timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status') == 'success':
-                return {
-                    'lat': data.get('lat'),
-                    'lon': data.get('lon'),
-                    'city': data.get('city'),
-                    'country': data.get('country')
-                }
-    except:
-        pass
-    return None
-
-def test_opensky_api(config):
-    """Test OpenSky Network API and display live aircraft data"""
-    if not REQUESTS_AVAILABLE:
-        print("OpenSky testing requires requests: pip3 install requests")
-        input("\nPress Enter to continue...")
-        return
-    
-    clear_screen()
-    print("DEBUG:   OpenSky Network API Test")
-    print("\nOpenSky provides LIVE aircraft data from real ADS-B receivers worldwide.")
-    print("Note: This is separate from the local ADS-B readsb simulator.\n")
-    
-    # Try to get user's location
-    print("🔍 Attempting to detect your location...")
-    location = get_approximate_location()
-    
-    if location:
-        print(f"Detected: {location['city']}, {location['country']}")
-        print(f"   Coordinates: {location['lat']:.2f}, {location['lon']:.2f}")
-        default_lat = location['lat']
-        default_lon = location['lon']
-    else:
-        print(" Could not detect location, using Area 51 region as default")
-        default_lat = 37.25
-        default_lon = -115.75
-    
-    # Get user's area of interest
-    print("\nEnter geographic bounds to search for aircraft:")
-    print("(Leave blank to use detected/default location)\n")
-    
-    try:
-        lat_input = input(f"Center Latitude [{default_lat}]: ").strip()
-        lon_input = input(f"Center Longitude [{default_lon}]: ").strip()
-        radius_input = input("Radius in degrees [0.5]: ").strip()
-        
-        center_lat = float(lat_input) if lat_input else default_lat
-        center_lon = float(lon_input) if lon_input else default_lon
-        radius = float(radius_input) if radius_input else 0.5
-        
-        # Calculate bounding box
-        lamin = center_lat - radius
-        lamax = center_lat + radius
-        lomin = center_lon - radius
-        lomax = center_lon + radius
-        
-        print(f"\n🔍 Searching for aircraft in area:")
-        print(f"   Latitude: {lamin:.2f} to {lamax:.2f}")
-        print(f"   Longitude: {lomin:.2f} to {lomax:.2f}")
-        
-        # Build OpenSky API URL
-        # API documentation: https://openskynetwork.github.io/opensky-api/rest.html
-        url = f"https://opensky-network.org/api/states/all?lamin={lamin}&lomin={lomin}&lamax={lamax}&lomax={lomax}"
-        
-        print(f"\nDEBUG:  Fetching data from OpenSky Network...")
-        print(f"   URL: {url}")
-        
-        # Make API request with authentication if available
-        auth = None
-        if config.opensky_username and config.opensky_password:
-            auth = (config.opensky_username, config.opensky_password)
-            print(f"   Using authenticated access as: {config.opensky_username}")
-        else:
-            print(f"   Using anonymous access (rate limited)")
-        
-        response = requests.get(url, timeout=10, auth=auth)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            if not data or 'states' not in data or not data['states']:
-                print("\n No aircraft found in this area")
-                print("   Try a different location or larger radius")
-                print("   Note: Not all areas have ADS-B coverage")
-            else:
-                aircraft_count = len(data['states'])
-                timestamp = data.get('time', 'unknown')
-                
-                print(f"\nSuccessfully retrieved data!")
-                print(f"   Timestamp: {datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-                print(f"   Aircraft found: {aircraft_count}")
-                print("\n" + "="*80)
-                
-                # Display aircraft details
-                for i, state in enumerate(data['states'][:10]):  # Limit to first 10
-                    icao24 = state[0] or "Unknown"
-                    callsign = (state[1] or "").strip() or "N/A"
-                    origin_country = state[2] or "Unknown"
-                    longitude = state[5]
-                    latitude = state[6]
-                    baro_altitude = state[7]
-                    velocity = state[9]
-                    true_track = state[10]
-                    
-                    print(f"\nDEBUG:   Aircraft #{i+1}:")
-                    print(f"   ICAO24: {icao24}")
-                    print(f"   Callsign: {callsign}")
-                    print(f"   Country: {origin_country}")
-                    
-                    if latitude and longitude:
-                        print(f"   Position: {latitude:.6f}, {longitude:.6f}")
-                    else:
-                        print(f"   Position: Not available")
-                    
-                    if baro_altitude:
-                        print(f"   Altitude: {baro_altitude:.0f} m ({baro_altitude * 3.28084:.0f} ft)")
-                    else:
-                        print(f"   Altitude: Not available")
-                    
-                    if velocity:
-                        print(f"   Speed: {velocity:.1f} m/s ({velocity * 1.94384:.1f} knots)")
-                    else:
-                        print(f"   Speed: Not available")
-                    
-                    if true_track:
-                        print(f"   Heading: {true_track:.1f}°")
-                    else:
-                        print(f"   Heading: Not available")
-                
-                if aircraft_count > 10:
-                    print(f"\n   ... and {aircraft_count - 10} more aircraft")
-                
-                print("\n" + "="*80)
-                
-                # Offer to convert to CoT format
-                convert = input("\nDEBUG:  Convert to CoT XML format? (y/n): ").lower()
-                if convert == 'y':
-                    print("\nDEBUG:  Generating CoT messages...")
-                    cot_messages = []
-                    
-                    for state in data['states']:
-                        if state[6] and state[5]:  # Has valid lat/lon
-                            lat = state[6]
-                            lon = state[5]
-                            alt = state[7] or 0
-                            speed = (state[9] or 0) * 1.94384  # m/s to knots
-                            track = state[10] or 0
-                            callsign = (state[1] or "").strip() or state[0]
-                            
-                            now = datetime.now(timezone.utc)
-                            time_str = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                            stale_str = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                            
-                            cot = f"""<?xml version='1.0' encoding='UTF-8'?>
-<event version="2.0" uid="ADSB-{state[0]}" type="a-f-A-C-F" time="{time_str}" start="{time_str}" stale="{stale_str}" how="m-g">
-    <point lat="{lat:.6f}" lon="{lon:.6f}" hae="{alt:.1f}" ce="100.0" le="999999"/>
-    <detail>
-        <contact callsign="{callsign}"/>
-        <track course="{track:.1f}" speed="{speed:.1f}"/>
-        <remarks>OpenSky Network: {state[2]}, ICAO24: {state[0]}</remarks>
-        <color argb="-256"/>
-    </detail>
-</event>"""
-                            cot_messages.append(cot)
-                    
-                    print(f"Generated {len(cot_messages)} CoT messages")
-                    print(f"\nSample CoT message:")
-                    print(cot_messages[0] if cot_messages else "No messages generated")
-                    
-                    # Offer to broadcast
-                    if cot_messages:
-                        broadcast = input(f"\n📤 Broadcast these to {config.broadcast_mode}? (y/n): ").lower()
-                        if broadcast == 'y':
-                            if config.broadcast_mode == 'multicast':
-                                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                                ttl = struct.pack('b', 1)
-                                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-                                
-                                for cot in cot_messages:
-                                    sock.sendto(cot.encode(), (config.multicast_group, config.cot_port))
-                                    time.sleep(0.1)
-                                
-                                sock.close()
-                                print(f"Broadcast {len(cot_messages)} messages via multicast")
-                            else:
-                                context = zmq.Context()
-                                sock = context.socket(zmq.PUB)
-                                sock.bind(f"tcp://{config.zmq_host}:{config.cot_port}")
-                                time.sleep(0.5)  # Let socket bind
-                                
-                                for cot in cot_messages:
-                                    sock.send_string(cot)
-                                    time.sleep(0.1)
-                                
-                                context.destroy()
-                                print(f"Broadcast {len(cot_messages)} messages via ZMQ")
-        
-        elif response.status_code == 401:
-            print("\nAuthentication failed")
-            print("   OpenSky API requires authentication for some queries")
-            print("   You may need to register at https://opensky-network.org")
-        
-        elif response.status_code == 404:
-            print("\nAPI endpoint not found")
-            print("   Check that you have internet connectivity")
-        
-        else:
-            print(f"\nAPI request failed with status code: {response.status_code}")
-            print(f"   Response: {response.text}")
-    
-    except requests.exceptions.Timeout:
-        print("\nRequest timed out")
-        print("   Check your internet connection")
-    
-    except requests.exceptions.ConnectionError:
-        print("\nConnection error")
-        print("   Check your internet connection")
-        print("   OpenSky Network may be unavailable")
-    
-    except ValueError as e:
-        print(f"\nInvalid input: {e}")
-    
-    except Exception as e:
-        print(f"\nError: {e}")
-    
-    input("\n\nPress Enter to continue...")
-
-def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
-    
-def get_valid_number(prompt, min_val, max_val):
-    while True:
-        try:
-            value = float(input(prompt))
-            if min_val <= value <= max_val:
-                return value
-            print(f"Please enter a number between {min_val} and {max_val}")
-        except ValueError:
-            print("Please enter a valid number")
-            
-def configure_settings(config):
-    clear_screen()
-    print("📝 Configure Settings")
-    print("\n1. Change Broadcast Mode")
-    print("2. Change Host/Group")
-    print("3. Change CoT Port")
-    print("4. Change Status Port")
-    print("5. Back to Main Menu")
-    
-    choice = input("\nEnter your choice (1-5): ")
-    
-    if choice == '1':
-        mode = input("Enter broadcast mode (multicast/zmq): ").lower()
-        if mode in ['multicast', 'zmq']:
-            config.broadcast_mode = mode
-            
-    elif choice == '2':
-        if config.broadcast_mode == 'multicast':
-            config.multicast_group = input("Enter multicast group (e.g., 0.0.0.0): ")
-        else:
-            config.zmq_host = input("Enter ZMQ host (e.g., 127.0.0.1): ")
-            
-    elif choice == '3':
-        try:
-            config.cot_port = int(input("Enter CoT port: "))
-        except ValueError:
-            print("Invalid port number")
-            
-    elif choice == '4':
-        try:
-            config.status_port = int(input("Enter Status port: "))
-        except ValueError:
-            print("Invalid port number")
-
-def quick_test_mode(config, generator):
-    """Quick test mode - broadcasts directly to app without external services"""
-    clear_screen()
-    print("🚀 QUICK TEST MODE - Direct to WarDragon App")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("\nThis mode broadcasts test data directly to your app.")
-    print("Built-in simulated services - no external setup required!")
-    print("\nWhat to test:")
-    print("  1. Complete Drone Scenario (All XML - Drone/Pilot/Home/Status)")
-    print("  2. FPV Detection Scenario")
-    print("  3. Mixed Drone + FPV Scenario")
-    print("  4. Simulated Flight Path (Continuous)")
-    print("  5. Everything At Once (Drone + FPV + MQTT + TAK + ADS-B)")
-    print("  6. Back to Main Menu")
-    
-    choice = input("\nEnter choice (1-6): ")
-    
-    if choice == '6':
-        return
-    
-    # Determine mode from config
-    if choice in ['1', '2', '3', '4', '5']:
-        interval = 2.0  # Default to 2 seconds
-        
-        # Setup simulated services for option 5
-        mqtt_client = None
-        tak_socket = None
-        adsb_server = None
-        adsb_thread = None
-        
-        if choice == '5':
-            print("\nDEBUG:  Setting up simulated services...")
-            
-            # Setup MQTT if available
-            if MQTT_AVAILABLE:
-                try:
-                    mqtt_client = mqtt.Client(client_id=f"wardragon_quicktest_{random.randint(1000,9999)}")
-                    if config.mqtt_username and config.mqtt_password:
-                        mqtt_client.username_pw_set(config.mqtt_username, config.mqtt_password)
-                    mqtt_client.connect(config.mqtt_broker, config.mqtt_port, 60)
-                    mqtt_client.loop_start()
-                    print("MQTT client connected")
-                except Exception as e:
-                    print(f" MQTT connection failed: {e}")
-                    mqtt_client = None
-            
-            # Setup TAK socket
-            try:
-                if config.tak_protocol in ['tcp', 'tls']:
-                    tak_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    tak_socket.connect((config.tak_host, config.tak_port))
-                else:
-                    tak_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                print(f"TAK {config.tak_protocol.upper()} connection established")
-            except Exception as e:
-                print(f" TAK connection failed: {e}")
-                tak_socket = None
-            
-            # Setup ADS-B HTTP server in background thread
-            try:
-                from http.server import HTTPServer
-                adsb_server = HTTPServer(('0.0.0.0', config.adsb_port), ReadsbHTTPHandler)
-                adsb_thread = threading.Thread(target=adsb_server.serve_forever, daemon=True)
-                adsb_thread.start()
-                print(f"ADS-B server started on port {config.adsb_port}")
-            except Exception as e:
-                print(f" ADS-B server failed: {e}")
-                adsb_server = None
-        
-        print(f"\n⚙️  Using {config.broadcast_mode.upper()} mode")
-        print(f"DEBUG:  Broadcasting to: {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
-        
-        if choice == '5':
-            print(f"\n🔌 Additional Services Active:")
-            if mqtt_client:
-                print(f"   • MQTT → {config.mqtt_broker}:{config.mqtt_port}")
-            if tak_socket:
-                print(f"   • TAK → {config.tak_host}:{config.tak_port}")
-            if adsb_server:
-                print(f"   • ADS-B → http://localhost:{config.adsb_port}/data/aircraft.json")
-        
-        print(f"\nYour app should now show detections!")
-        print("\nPress Ctrl+C to stop\n")
-        
-        # Setup sockets
-        if config.broadcast_mode == 'multicast':
-            cot_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            status_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            
-            ttl = struct.pack('b', 1)
-            cot_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            status_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            cot_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-            status_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-        else:
-            context, cot_sock, status_sock = setup_zmq()
-            cot_sock.bind(f"tcp://{config.zmq_host}:{config.cot_port}")
-            status_sock.bind(f"tcp://{config.zmq_host}:{config.status_port}")
-        
-        try:
-            counter = 0
-            while True:
-                counter += 1
-                timestamp = time.strftime('%H:%M:%S')
-                
-                if choice == '1':  # Complete Drone Scenario
-                    # Send drone
-                    drone_msg = generator.generate_drone_cot_with_track()
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
-                    else:
-                        cot_sock.send_string(drone_msg)
-                    
-                    time.sleep(0.1)
-                    
-                    # Send pilot
-                    pilot_msg = generator.generate_pilot_cot()
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
-                    else:
-                        cot_sock.send_string(pilot_msg)
-                    
-                    time.sleep(0.1)
-                    
-                    # Send home
-                    home_msg = generator.generate_home_cot()
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
-                    else:
-                        cot_sock.send_string(home_msg)
-                    
-                    time.sleep(0.1)
-                    
-                    # Send status
-                    status_msg = generator.generate_status_message()
-                    if config.broadcast_mode == 'multicast':
-                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
-                    else:
-                        status_sock.send_string(status_msg)
-                    
-                    print(f"[{timestamp}] Update #{counter}: ✓ Drone ✓ Pilot ✓ Home ✓ Status")
-                
-                elif choice == '2':  # FPV Detection Scenario
-                    if counter == 1:
-                        # Initial FPV detection
-                        fpv_init = generator.generate_fpv_detection_message()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(fpv_init.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(fpv_init)
-                        print(f"[{timestamp}] FPV Detection: New signal detected!")
-                    else:
-                        # FPV updates
-                        fpv_update = generator.generate_fpv_update_message()
-                        if fpv_update:
-                            if config.broadcast_mode == 'multicast':
-                                cot_sock.sendto(fpv_update.encode(), (config.multicast_group, config.cot_port))
-                            else:
-                                cot_sock.send_string(fpv_update)
-                            print(f"[{timestamp}] FPV Update #{counter-1}: Signal strength updated")
-                
-                elif choice == '3':  # Mixed Scenario
-                    # Send drone
-                    drone_msg = generator.generate_drone_cot_with_track()
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
-                    else:
-                        cot_sock.send_string(drone_msg)
-                    
-                    time.sleep(0.1)
-                    
-                    # Send FPV
-                    if counter == 1:
-                        fpv_msg = generator.generate_fpv_detection_message()
-                    else:
-                        fpv_msg = generator.generate_fpv_update_message()
-                    
-                    if fpv_msg:
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(fpv_msg.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(fpv_msg)
-                    
-                    time.sleep(0.1)
-                    
-                    # Send status
-                    status_msg = generator.generate_status_message()
-                    if config.broadcast_mode == 'multicast':
-                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
-                    else:
-                        status_sock.send_string(status_msg)
-                    
-                    print(f"[{timestamp}] Update #{counter}: ✓ Drone ✓ FPV ✓ Status")
-                
-                elif choice == '4':  # Simulated Flight Path
-                    # Generate ONLY the drone message with track data
-                    # Do NOT send pilot/home messages - these are filtered by WarDragon
-                    drone_msg = generator.generate_drone_cot_with_track()
-                    status_msg = generator.generate_status_message()
-                    
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
-                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
-                    else:
-                        cot_sock.send_string(drone_msg)
-                        time.sleep(0.05)
-                        status_sock.send_string(status_msg)
-                    
-                    # Extract position and track data for debug display
-                    import re
-                    lat_match = re.search(r'lat="([^"]+)"', drone_msg)
-                    lon_match = re.search(r'lon="([^"]+)"', drone_msg)
-                    course_match = re.search(r'course="([^"]+)"', drone_msg)
-                    speed_match = re.search(r'speed="([^"]+)"', drone_msg)
-                    uid_match = re.search(r'uid="([^"]+)"', drone_msg)
-                    
-                    if lat_match and lon_match and course_match and speed_match:
-                        uid = uid_match.group(1) if uid_match else "unknown"
-                        print(f"[{timestamp}] 🛸 Update #{counter}: UID={uid} Pos=({lat_match.group(1)}, {lon_match.group(1)}) Course={course_match.group(1)}° Speed={speed_match.group(1)}m/s")
-                    else:
-                        print(f"[{timestamp}] Flight update #{counter}: Complete message sent")
-                
-                elif choice == '5':  # Everything At Once
-                    # 1. Send primary CoT messages (Drone, Pilot, Home, Status)
-                    drone_msg = generator.generate_drone_cot_with_track()
-                    pilot_msg = generator.generate_pilot_cot()
-                    home_msg = generator.generate_home_cot()
-                    status_msg = generator.generate_status_message()
-                    
-                    if config.broadcast_mode == 'multicast':
-                        cot_sock.sendto(drone_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
-                        cot_sock.sendto(pilot_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
-                        cot_sock.sendto(home_msg.encode(), (config.multicast_group, config.cot_port))
-                        time.sleep(0.05)
-                        status_sock.sendto(status_msg.encode(), (config.multicast_group, config.status_port))
-                    else:
-                        cot_sock.send_string(drone_msg)
-                        time.sleep(0.05)
-                        cot_sock.send_string(pilot_msg)
-                        time.sleep(0.05)
-                        cot_sock.send_string(home_msg)
-                        time.sleep(0.05)
-                        status_sock.send_string(status_msg)
-                    
-                    # 2. Send FPV message
-                    if counter == 1:
-                        fpv_msg = generator.generate_fpv_detection_message()
-                    else:
-                        fpv_msg = generator.generate_fpv_update_message()
-                    
-                    if fpv_msg:
-                        time.sleep(0.05)
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(fpv_msg.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(fpv_msg)
-                    
-                    # 3. Publish to MQTT
-                    if mqtt_client:
-                        try:
-                            # Parse drone position from XML
-                            import re
-                            lat_match = re.search(r'lat="([^"]+)"', drone_msg)
-                            lon_match = re.search(r'lon="([^"]+)"', drone_msg)
-                            alt_match = re.search(r'hae="([^"]+)"', drone_msg)
-                            
-                            drone_data = {
-                                "mac": generator.random_mac(),
-                                "latitude": float(lat_match.group(1)) if lat_match else 37.25,
-                                "longitude": float(lon_match.group(1)) if lon_match else -115.75,
-                                "altitude": float(alt_match.group(1)) if alt_match else 100.0,
-                                "rssi": random.randint(-80, -40),
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "manufacturer": "DJI",
-                                "uaType": "Helicopter"
-                            }
-                            
-                            mqtt_topic = f"{config.mqtt_base_topic}/drones/QUICKTEST_{counter}"
-                            mqtt_client.publish(mqtt_topic, json.dumps(drone_data), qos=1)
-                        except Exception as e:
-                            pass  # Silent fail for MQTT
-                    
-                    # 4. Send to TAK server
-                    if tak_socket:
-                        try:
-                            if config.tak_protocol in ['tcp', 'tls']:
-                                tak_socket.sendall(drone_msg.encode('utf-8'))
-                            else:
-                                tak_socket.sendto(drone_msg.encode('utf-8'), (config.tak_host, config.tak_port))
-                        except Exception as e:
-                            pass  # Silent fail for TAK
-                    
-                    # 5. ADS-B is handled by the background HTTP server
-                    # Extract position for display
-                    import re
-                    lat_match = re.search(r'lat="([^"]+)"', drone_msg)
-                    lon_match = re.search(r'lon="([^"]+)"', drone_msg)
-                    
-                    services = []
-                    services.append("CoT")
-                    if fpv_msg:
-                        services.append("FPV")
-                    if mqtt_client:
-                        services.append("MQTT")
-                    if tak_socket:
-                        services.append("TAK")
-                    if adsb_server:
-                        services.append("ADS-B")
-                    
-                    if lat_match and lon_match:
-                        print(f"[{timestamp}] Update #{counter}: {' + '.join(services)} → ({lat_match.group(1)}, {lon_match.group(1)})")
-                    else:
-                        print(f"[{timestamp}] Update #{counter}: {' + '.join(services)} sent")
-                
-                time.sleep(interval)
-                
-        except KeyboardInterrupt:
-            print("\n\nTest stopped")
-            
-            # Cleanup multicast/ZMQ
-            if config.broadcast_mode == 'multicast':
-                cot_sock.close()
-                status_sock.close()
-            else:
-                context.destroy()
-            
-            # Cleanup additional services
-            if mqtt_client:
-                try:
-                    mqtt_client.loop_stop()
-                    mqtt_client.disconnect()
-                    print("MQTT disconnected")
-                except:
-                    pass
-            
-            if tak_socket:
-                try:
-                    tak_socket.close()
-                    print("TAK connection closed")
-                except:
-                    pass
-            
-            if adsb_server:
-                try:
-                    adsb_server.shutdown()
-                    print("ADS-B server stopped")
-                except:
-                    pass
-        
-        input("\nPress Enter to continue...")
-
-def main_menu():
-    config = Config()
-    generator = DroneMessageGenerator(config)  # Pass config to generator
-    
-    while True:
-        clear_screen()
-        print("🐉 WarDragon Enhanced Test Suite 🐉")
-        print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print("CURRENT SETTINGS:")
-        print(f"  Multicast/ZMQ: {config.broadcast_mode} @ {config.multicast_group if config.broadcast_mode == 'multicast' else config.zmq_host}:{config.cot_port}")
-        print(f"  MQTT: {config.mqtt_broker}:{config.mqtt_port} | Topic: {config.mqtt_base_topic}")
-        print(f"  TAK: {config.tak_protocol.upper()}://{config.tak_host}:{config.tak_port}")
-        print(f"  ADS-B: HTTP Port {config.adsb_port}")
-        print(f"  OpenSky: {'Authenticated (' + config.opensky_username + ')' if config.opensky_username else 'Anonymous (rate limited)'}")
-        
-        # Show spoof mode if enabled
-        if config.spoof_mode:
-            print(f"  🎭 SPOOF MODE: {config.spoof_mode.upper()} ({config.spoof_intensity})")
-        
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        
-        print("\n🚀 QUICK TEST (No External Services Required)")
-        print("  X. Quick Test Mode - Test App Directly")
-        
-        print("\n🎭 SPOOF TESTING")
-        print("  S. Configure Spoof Mode (Test Spoof Detection)")
-        
-        print("\nDEBUG:  MULTICAST/ZMQ TESTS")
-        print("  1. Multicast: DragonSync Drone CoT XML (with Track)")
-        print("  2. Multicast: DragonSync Pilot CoT XML")
-        print("  3. Multicast: DragonSync Home/Takeoff CoT XML")
-        print("  4. Multicast: DragonSync Status XML (with Track)")
-        print("  5. ZMQ: ESP32 JSON Format (RID Telemetry)")
-        print("  6. ZMQ: FPV Detection Messages")
-        print("  7. Multicast: Broadcast All DragonSync XML Messages")
-        print("  8. ZMQ: Broadcast All ESP32 JSON + FPV")
-        
-        print("\n🔌 MQTT TESTS")
-        print("  M. Test MQTT Connection & Publish")
-        
-        print("\n🎯 TAK SERVER TESTS")
-        print("  T. Test TAK Server Connection & Send CoT")
-        
-        print("\nDEBUG:   ADS-B TESTS")
-        print("  A. Start ADS-B Readsb Simulator (Local HTTP Server)")
-        
-        print("\n🌐 OPENSKY NETWORK TESTS")
-        print("  O. Test OpenSky API (Live Internet Aircraft Data)")
-        
-        print("\n⚙️  CONFIGURATION")
-        print("  C. Configure Multicast/ZMQ Settings")
-        print("  Q. Configure MQTT Settings")
-        print("  K. Configure TAK Settings")
-        print("  B. Configure ADS-B Settings")
-        print("  Y. Configure OpenSky Network Settings")
-        
-        print("\n  0. Exit")
-        
-        choice = input("\nEnter your choice: ").upper()
-        
-        if choice == '0':
-            print("\n👋 Goodbye!")
-            break
-        
-        # Quick Test Mode
-        if choice == 'X':
-            quick_test_mode(config, generator)
-            continue
-        
-        # Configuration menus
-        if choice == 'C':
-            configure_settings(config)
-            continue
-        elif choice == 'Q':
-            configure_mqtt_settings(config)
-            continue
-        elif choice == 'K':
-            configure_tak_settings(config)
-            continue
-        elif choice == 'B':
-            configure_adsb_settings(config)
-            continue
-        elif choice == 'Y':  # Changed from 'S' to 'Y'
-            configure_opensky_settings(config)
-            continue
-        elif choice == 'S':  # NEW: Spoof configuration
-            configure_spoof_settings(config)
-            continue
-        
-        # MQTT test
-        elif choice == 'M':
-            test_mqtt_connection(config)
-            continue
-        
-        # TAK test
-        elif choice == 'T':
-            test_tak_connection(config, generator)
-            continue
-        
-        # ADS-B test
-        elif choice == 'A':
-            start_adsb_server(config)
-            continue
-        
-        # OpenSky test
-        elif choice == 'O':
-            test_opensky_api(config)
-            continue
-        
-        if choice in ['1', '2', '3', '4', '5', '6', '7', '8']:
-            interval = get_valid_number("\nEnter broadcast interval in seconds (0.1-60): ", 0.1, 60)
-            
-            if config.broadcast_mode == 'multicast':
-                cot_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                status_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                
-                ttl = struct.pack('b', 1)
-                cot_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                status_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                cot_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-                status_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-            else:
-                context, cot_sock, status_sock = setup_zmq()
-                cot_sock.bind(f"tcp://{config.zmq_host}:{config.cot_port}")
-                status_sock.bind(f"tcp://{config.zmq_host}:{config.status_port}")
-                
-            clear_screen()
-            print(f"🚀 Broadcasting messages every {interval} seconds via {config.broadcast_mode}")
-            print(f"CoT messages to: {config.cot_port}")
-            print(f"Status messages to: {config.status_port}")
-            print("Press Ctrl+C to return to menu\n")
-            
-            try:
-                while True:
-                    if choice == '1':  # DragonSync Drone CoT with Track
-                        message = generator.generate_drone_cot_with_track()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(message)
-                            
-                        print(f"DEBUG:  Sent DragonSync Drone CoT (with track) at {time.strftime('%H:%M:%S')}")
-                        print(f"Message preview: {message[:200]}...\n")
-                    
-                    elif choice == '2':  # DragonSync Pilot CoT
-                        message = generator.generate_pilot_cot()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(message)
-                            
-                        print(f"DEBUG:  Sent DragonSync Pilot CoT at {time.strftime('%H:%M:%S')}")
-                        print(f"Message preview: {message[:200]}...\n")
-                    
-                    elif choice == '3':  # DragonSync Home CoT
-                        message = generator.generate_home_cot()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(message)
-                            
-                        print(f"DEBUG:  Sent DragonSync Home/Takeoff CoT at {time.strftime('%H:%M:%S')}")
-                        print(f"Message preview: {message[:200]}...\n")
-                    
-                    elif choice == '4':  # DragonSync Status with Track
-                        message = generator.generate_status_message()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            status_sock.sendto(message.encode(), (config.multicast_group, config.status_port))
-                        else:
-                            status_sock.send_string(message)
-                            
-                        print(f"DEBUG:  Sent DragonSync Status (with track) at {time.strftime('%H:%M:%S')}")
-                        print(f"Message preview: {message[:200]}...\n")
-                    
-                    elif choice == '5':  # ESP32 Format
-                        message = generator.generate_esp32_format()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(message)
-                            
-                        print(f"DEBUG:  Sent ESP32 format message at {time.strftime('%H:%M:%S')}")
-                    
-                    elif choice == '6':  # FPV Detection Messages
-                        init_message = generator.generate_fpv_detection_message()
-                        
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(init_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(init_message)
-                            
-                        print(f"DEBUG:  Sent FPV Detection message at {time.strftime('%H:%M:%S')}")
-                        
-                        try:
-                            update_count = 0
-                            while True:
-                                time.sleep(interval)
-                                update_message = generator.generate_fpv_update_message()
-                                
-                                if config.broadcast_mode == 'multicast':
-                                    cot_sock.sendto(update_message.encode(), (config.multicast_group, config.cot_port))
-                                else:
-                                    cot_sock.send_string(update_message)
-                                    
-                                update_count += 1
-                                print(f"DEBUG:  Sent FPV Update message #{update_count} at {time.strftime('%H:%M:%S')}")
-                        except KeyboardInterrupt:
-                            break
-                    
-                    elif choice == '7':  # Broadcast All DragonSync XML Messages (Multicast)
-                        # Send drone CoT
-                        drone_message = generator.generate_drone_cot_with_track()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(drone_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(drone_message)
-                        
-                        time.sleep(0.1)  # Small delay between messages
-                        
-                        # Send pilot CoT
-                        pilot_message = generator.generate_pilot_cot()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(pilot_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(pilot_message)
-                        
-                        time.sleep(0.1)
-                        
-                        # Send home CoT
-                        home_message = generator.generate_home_cot()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(home_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(home_message)
-                        
-                        time.sleep(0.1)
-                        
-                        # Send status message
-                        status_message = generator.generate_status_message()
-                        if config.broadcast_mode == 'multicast':
-                            status_sock.sendto(status_message.encode(), (config.multicast_group, config.status_port))
-                        else:
-                            status_sock.send_string(status_message)
-                            
-                        print(f"DEBUG:  Sent Complete DragonSync XML Message Set at {time.strftime('%H:%M:%S')}")
-                        print(f"   ✓ Drone CoT XML (with track)")
-                        print(f"   ✓ Pilot CoT XML")
-                        print(f"   ✓ Home CoT XML") 
-                        print(f"   ✓ Status CoT XML (with track)\n")
-                    
-                    elif choice == '8':  # Broadcast All ESP32 JSON + FPV (ZMQ)
-                        # Send ESP32 RID telemetry JSON
-                        esp32_message = generator.generate_esp32_format()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(esp32_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(esp32_message)
-                        
-                        time.sleep(0.1)
-                        
-                        # Send FPV detection
-                        fpv_message = generator.generate_fpv_detection_message()
-                        if config.broadcast_mode == 'multicast':
-                            cot_sock.sendto(fpv_message.encode(), (config.multicast_group, config.cot_port))
-                        else:
-                            cot_sock.send_string(fpv_message)
-                        
-                        time.sleep(0.1)
-                        
-                        # Send FPV update
-                        fpv_update = generator.generate_fpv_update_message()
-                        if fpv_update:
-                            if config.broadcast_mode == 'multicast':
-                                cot_sock.sendto(fpv_update.encode(), (config.multicast_group, config.cot_port))
-                            else:
-                                cot_sock.send_string(fpv_update)
-                        
-                        print(f"DEBUG:  Sent Complete ESP32/ZMQ JSON Message Set at {time.strftime('%H:%M:%S')}")
-                        print(f"   ✓ ESP32 RID Telemetry JSON")
-                        print(f"   ✓ FPV Detection JSON")
-                        print(f"   ✓ FPV Update JSON\n")
-
-                    time.sleep(interval)
-
-            except KeyboardInterrupt:
-                print("\n\nBroadcast stopped")
-                if config.broadcast_mode == 'multicast':
-                    cot_sock.close()
-                    status_sock.close()
-                else:
-                    context.destroy()
-                input("\nPress Enter to return to menu...")
-                
 if __name__ == "__main__":
-    try:
-        main_menu()
-    except KeyboardInterrupt:
-        print("\n\n👋 Program terminated by user")
-    except Exception as e:
-        print(f"\nAn error occurred: {e}")
-        
+    main()
