@@ -25,6 +25,8 @@ struct DroneDetailView: View {
     @State private var faaError: String?
     @State private var isLoadingFAA = false
     @StateObject private var faaService = FAAService.shared
+    @State private var resolvedFlightPath: [CLLocationCoordinate2D] = []
+    @State private var resolvedAlertRings: [CoTViewModel.AlertRing] = []
     
     enum MapStyleOption {
         case standard
@@ -291,21 +293,13 @@ struct DroneDetailView: View {
                         }
                     }
 
-                    let cleanFlightPath = DroneStorageManager.shared
-                        .fetchEncounter(id: message.uid)?.flightPath
-                        .filter { !$0.isProximityPoint }
-                        .filter { !($0.latitude == 0 && $0.longitude == 0) }
-                        .sorted { $0.timestamp < $1.timestamp }
-                        .map { $0.coordinate } ?? flightPath
-                    
-                    if showFlightPath && cleanFlightPath.count > 1 {
-                        let smoothedPath = FlightPathSmoother.smoothPath(cleanFlightPath, smoothness: 4)
+                    if showFlightPath && resolvedFlightPath.count > 1 {
+                        let smoothedPath = FlightPathSmoother.smoothPath(resolvedFlightPath, smoothness: 4)
                         MapPolyline(coordinates: smoothedPath)
                             .stroke(.purple, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
 
-                    let alertRings = cotViewModel.alertRings.filter { $0.droneId == message.uid }
-                    ForEach(alertRings) { ring in
+                    ForEach(resolvedAlertRings) { ring in
                         MapCircle(center: ring.centerCoordinate, radius: ring.radius)
                             .stroke(.red.opacity(0.2), lineWidth: 2)
                     }
@@ -314,6 +308,38 @@ struct DroneDetailView: View {
             .mapStyle(selectedMapStyle.mapStyle)
             .frame(height: 300)
             .cornerRadius(12)
+            .task(id: message.uid) {
+                refreshFlightPath()
+                refreshAlertRings()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DroneInfoUpdated"))) { _ in
+                refreshFlightPath()
+            }
+        }
+    }
+
+    private func refreshFlightPath() {
+        let stored = DroneStorageManager.shared
+            .fetchEncounter(id: message.uid)?.flightPath
+            .filter { !$0.isProximityPoint }
+            .filter { !($0.latitude == 0 && $0.longitude == 0) }
+            .sorted { $0.timestamp < $1.timestamp }
+            .map { $0.coordinate } ?? flightPath
+        let same = stored.count == resolvedFlightPath.count
+            && zip(stored, resolvedFlightPath).allSatisfy {
+                $0.latitude == $1.latitude && $0.longitude == $1.longitude
+            }
+        if !same {
+            resolvedFlightPath = stored
+        }
+    }
+
+    private func refreshAlertRings() {
+        let next = cotViewModel.alertRings.filter { $0.droneId == message.uid }
+        let same = next.count == resolvedAlertRings.count
+            && zip(next, resolvedAlertRings).allSatisfy { $0.id == $1.id && $0.radius == $1.radius }
+        if !same {
+            resolvedAlertRings = next
         }
     }
 
