@@ -21,8 +21,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 
 > [!NOTE]
-> Due to rapid code development of DroneID and Dragonsync, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
->
+> Due to rapid code development of DroneID and Dragonsync, this app will always be a work in progress
 
 ## What It Detects
 
