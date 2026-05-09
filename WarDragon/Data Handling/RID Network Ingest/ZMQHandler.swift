@@ -54,6 +54,27 @@ class ZMQHandler: ObservableObject {
         case sdr
         case fpv
     }
+
+    // MARK: - droneid-go backend health
+    @Published var backendHealth: DroneidGoHealth?
+
+    struct DroneidGoHealth: Equatable {
+        var enabled: Bool
+        var state: String
+        var stateString: String
+        var connectedSince: Date?
+        var lastMessageTime: Date?
+        var lastErrorTime: Date?
+        var lastError: String
+        var connectAttempts: Int
+        var messagesTotal: Int
+        var messagesPerSec: Double
+        var errorsTotal: Int
+        var errorsRecent: Int
+        var uptimeSeconds: Double
+        var sources: [String: DroneidGoHealth]
+        var receivedAt: Date
+    }
     
     private let manufacturerMapping: [Int: String] = [
         1187: "Ruko",
@@ -425,7 +446,13 @@ class ZMQHandler: ObservableObject {
     
     func convertTelemetryToXMLArray(_ jsonString: String) -> [String] {
         guard let data = jsonString.data(using: .utf8) else { return [] }
-        
+
+        if let healthObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           isDroneidGoHealthMessage(healthObj) {
+            ingestDroneidGoHealth(healthObj)
+            return []
+        }
+
         if jsonString.contains("fpv") {
             messageFormat = .fpv
         } else if jsonString.contains("\"index\":") &&
@@ -538,6 +565,35 @@ class ZMQHandler: ObservableObject {
         // Extract takeoff location from DJI via SDR
         let homeLat = system?["home_lat"] as? Double ?? 0.0
         let homeLon = system?["home_lon"] as? Double ?? 0.0
+
+        var frequencyMessageMHz: Double? = nil
+        if let freqMsg = jsonObject["Frequency Message"] as? [String: Any] {
+            frequencyMessageMHz = (freqMsg["frequency"] as? Double)
+                ?? (freqMsg["frequency"] as? Int).map(Double.init)
+                ?? (freqMsg["frequency_mhz"] as? Double)
+                ?? (freqMsg["frequency_mhz"] as? Int).map(Double.init)
+        }
+
+        let transport = (basicId?["transport"] as? String) ?? ""
+        let basicFrequencyMHz: Double? = (basicId?["frequency_mhz"] as? Double)
+            ?? (basicId?["frequency_mhz"] as? Int).map(Double.init)
+
+        let areaCount = system?["area_count"] as? Int
+        let areaRadius = system?["area_radius"] as? Int
+            ?? (system?["area_radius"] as? Double).map { Int($0) }
+        let areaCeiling = (system?["area_ceiling"] as? Double)
+            ?? (system?["area_ceiling"] as? Int).map(Double.init)
+        let areaFloor = (system?["area_floor"] as? Double)
+            ?? (system?["area_floor"] as? Int).map(Double.init)
+        let operatorLocationType = system?["operator_location_type"] as? String
+        let operatorIdType = operatorId?["operator_id_type"] as? String
+        let selfIdTextType = selfID?["text_type"] as? String
+        let authMsg = jsonObject["Auth Message"] as? [String: Any]
+        let authType = authMsg?["auth_type"] as? String
+        let authData = authMsg?["auth_data"] as? String
+        let authPage = authMsg?["page"] as? Int
+        let authPageCount = authMsg?["page_count"] as? Int
+        let authLength = authMsg?["length"] as? Int
         
         // Extract operator ID from both possible sources
         var opID = (system?["operator_id"] as? String) ?? (operatorId?["operator_id"] as? String) ?? ""
@@ -596,14 +652,27 @@ class ZMQHandler: ObservableObject {
         let direction = formatDoubleValue(location?["direction"])
         
         
-        // Status and Accuracy Fields
+        // MARK: - Status and Accuracy
         let status = location?["status"] as? Int ?? 0
         let alt_pressure = formatDoubleValue(location?["alt_pressure"])
-        let horiz_acc = location?["horiz_acc"] as? Int ?? 0
-        let vert_acc = location?["vert_acc"] as? String ?? ""
-        let baro_acc = location?["baro_acc"] as? Int ?? 0
-        let speed_acc = location?["speed_acc"] as? Int ?? 0
+        let horiz_acc = (location?["horizontal_accuracy"] as? Int)
+            ?? (location?["horiz_acc"] as? Int)
+            ?? 0
+        let horiz_acc_str = (location?["horizontal_accuracy"] as? String) ?? ""
+        let vert_acc = (location?["vertical_accuracy"] as? String)
+            ?? (location?["vert_acc"] as? String)
+            ?? ""
+        let baro_acc = (location?["baro_accuracy"] as? Int)
+            ?? (location?["baro_acc"] as? Int)
+            ?? 0
+        let baro_acc_str = (location?["baro_accuracy"] as? String) ?? ""
+        let speed_acc = (location?["speed_accuracy"] as? Int)
+            ?? (location?["speed_acc"] as? Int)
+            ?? 0
+        let speed_acc_str = (location?["speed_accuracy"] as? String) ?? ""
         let timestamp = location?["timestamp"] as? Int ?? 0
+        let timestamp_acc = (location?["timestamp_accuracy"] as? String)
+            ?? ((location?["timestamp_accuracy"] as? Int).map { String($0) } ?? "")
         
         // System Message Fields - check all possible field names
         let operator_lat = formatDoubleValue(system?["operator_lat"]) != "0.0" ?
@@ -614,9 +683,15 @@ class ZMQHandler: ObservableObject {
         formatDoubleValue(system?["operator_lon"]) :
         formatDoubleValue(system?["longitude"])
         
-        let operator_alt_geo = formatDoubleValue(location?["operator_alt_geo"])
-        
+        let operator_alt_geo: String = {
+            if let v = system?["operator_altitude_geo"] { return formatDoubleValue(v) }
+            if let v = system?["operator_alt_geo"] { return formatDoubleValue(v) }
+            if let v = location?["operator_alt_geo"] { return formatDoubleValue(v) }
+            return "0.0"
+        }()
+
         let classification = system?["classification"] as? Int ?? 0
+        let classificationType = (system?["classification_type"] as? String) ?? ""
         var channel: Int?
         var phy: Int?
         var accessAddress: Int?
@@ -671,10 +746,10 @@ class ZMQHandler: ObservableObject {
             advAddress = aext["AdvA"] as? String ?? ""
         }
         
-        // Build backend metadata string
         var backendMetadata = ""
-        if let freq = freq {
-            backendMetadata += ", Frequency: \(String(format: "%.3f", freq)) MHz"
+        let resolvedFrequencyMHz: Double? = basicFrequencyMHz ?? frequencyMessageMHz ?? freq
+        if let resolvedFrequencyMHz = resolvedFrequencyMHz {
+            backendMetadata += ", Frequency: \(String(format: "%.3f", resolvedFrequencyMHz)) MHz"
         }
         if let seenBy = seenBy {
             backendMetadata += ", SeenBy: \(seenBy)"
@@ -696,10 +771,81 @@ class ZMQHandler: ObservableObject {
             let source = ridSource ?? "UNKNOWN"
             ridInfo += " (\(source))"
         }
+
+        // MARK: - droneid-go remarks extras
+        var droneidGoExtras = ""
+        if !transport.isEmpty {
+            droneidGoExtras += ", Transport: \(transport)"
+        }
+        if let basicFrequencyMHz = basicFrequencyMHz {
+            droneidGoExtras += ", BasicFrequency: \(String(format: "%.3f", basicFrequencyMHz)) MHz"
+        }
+        if let frequencyMessageMHz = frequencyMessageMHz {
+            droneidGoExtras += ", FrequencyMessage: \(String(format: "%.3f", frequencyMessageMHz)) MHz"
+        }
+        if !timestamp_acc.isEmpty {
+            droneidGoExtras += ", Timestamp Accuracy: \(timestamp_acc)"
+        }
+        if !horiz_acc_str.isEmpty && horiz_acc == 0 {
+            droneidGoExtras += ", Horizontal Accuracy Str: \(horiz_acc_str)"
+        }
+        if !baro_acc_str.isEmpty && baro_acc == 0 {
+            droneidGoExtras += ", Baro Accuracy Str: \(baro_acc_str)"
+        }
+        if !speed_acc_str.isEmpty && speed_acc == 0 {
+            droneidGoExtras += ", Speed Accuracy Str: \(speed_acc_str)"
+        }
+        if !classificationType.isEmpty {
+            droneidGoExtras += ", Classification Type: \(classificationType)"
+        }
+        if let operatorIdType = operatorIdType, !operatorIdType.isEmpty {
+            droneidGoExtras += ", Operator ID Type: \(operatorIdType)"
+        }
+        if let operatorLocationType = operatorLocationType, !operatorLocationType.isEmpty {
+            droneidGoExtras += ", Operator Location Type: \(operatorLocationType)"
+        }
+        if let selfIdTextType = selfIdTextType, !selfIdTextType.isEmpty {
+            droneidGoExtras += ", Self-ID Text Type: \(selfIdTextType)"
+        }
+        if let areaCount = areaCount {
+            droneidGoExtras += ", Area Count: \(areaCount)"
+        }
+        if let areaRadius = areaRadius {
+            droneidGoExtras += ", Area Radius: \(areaRadius) m"
+        }
+        if let areaFloor = areaFloor {
+            droneidGoExtras += ", Area Floor: \(String(format: "%.1f", areaFloor)) m"
+        }
+        if let areaCeiling = areaCeiling {
+            droneidGoExtras += ", Area Ceiling: \(String(format: "%.1f", areaCeiling)) m"
+        }
+        if let authType = authType, !authType.isEmpty {
+            droneidGoExtras += ", Auth Type: \(authType)"
+        }
+        if let authPage = authPage {
+            droneidGoExtras += ", Auth Page: \(authPage)"
+        }
+        if let authPageCount = authPageCount {
+            droneidGoExtras += ", Auth Page Count: \(authPageCount)"
+        }
+        if let authLength = authLength {
+            droneidGoExtras += ", Auth Length: \(authLength)"
+        }
+        if let authData = authData, !authData.isEmpty {
+            let trimmed = authData.count > 64 ? String(authData.prefix(64)) + "…" : authData
+            droneidGoExtras += ", Auth Data: \(trimmed)"
+        }
         
-        // Determine transmission type based on message format
-        // WiFi drones have index/runtime, others don't
-        let transmissionType = (mIndex > 0 && mRuntime > 0) ? "WiFi" : "BLE"
+        let transmissionType: String = {
+            switch transport.lowercased() {
+            case "wifi": return "WiFi"
+            case "ble": return "BLE"
+            case "uart": return "ESP32"
+            case "dji": return "DJI"
+            case "": return (mIndex > 0 && mRuntime > 0) ? "WiFi" : "BLE"
+            default: return transport.uppercased()
+            }
+        }()
         
         // Generate XML
         let now = ISO8601DateFormatter().string(from: Date())
@@ -710,7 +856,7 @@ class ZMQHandler: ObservableObject {
             <point lat="\(lat)" lon="\(lon)" hae="\(alt)" ce="9999999" le="999999"/>
             <detail>
                 <track course="\(direction)" speed="\(speed)"/>
-                <remarks>Transmission Type: \(transmissionType), MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)</remarks>
+                <remarks>Transmission Type: \(transmissionType), MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)\(droneidGoExtras)</remarks>
                 <contact endpoint="" phone="" callsign="drone-\(droneId)"/>
                 <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
                 <color argb="-256"/>
@@ -881,16 +1027,22 @@ class ZMQHandler: ObservableObject {
         }
         
         // Collect other messages
+        var frequencyMessage: [String: Any]?
+        var auxAdvInd: [String: Any]?
+        var aext: [String: Any]?
         for obj in jsonArray {
             if let locationMsg = obj["Location/Vector Message"] as? [String: Any] { location = locationMsg }
             if let systemMsg = obj["System Message"] as? [String: Any] { system = systemMsg }
             if let selfIDMsg = obj["Self-ID Message"] as? [String: Any] { selfID = selfIDMsg }
             if let operatorIDMsg = obj["Operator ID Message"] as? [String: Any] { operatorId = operatorIDMsg }
             if let authMsg = obj["Auth Message"] as? [String: Any] { auth = authMsg }
+            if let freqMsg = obj["Frequency Message"] as? [String: Any] { frequencyMessage = freqMsg }
+            if let aux = obj["AUX_ADV_IND"] as? [String: Any] { auxAdvInd = aux }
+            if let aextObj = obj["aext"] as? [String: Any] { aext = aextObj }
             if let indexVal = obj["index"] as? Int { index = indexVal }
             if let runtimeVal = obj["runtime"] as? Int { runtime = runtimeVal }
         }
-        
+
         // Create consolidated object and process it
         var consolidatedObject: [String: Any] = [:]
         if let basicId = basicId { consolidatedObject["Basic ID"] = basicId }
@@ -899,52 +1051,69 @@ class ZMQHandler: ObservableObject {
         if let selfID = selfID { consolidatedObject["Self-ID Message"] = selfID }
         if let operatorId = operatorId { consolidatedObject["Operator ID Message"] = operatorId }
         if let auth = auth { consolidatedObject["Auth Message"] = auth }
+        if let frequencyMessage = frequencyMessage { consolidatedObject["Frequency Message"] = frequencyMessage }
+        if let auxAdvInd = auxAdvInd { consolidatedObject["AUX_ADV_IND"] = auxAdvInd }
+        if let aext = aext { consolidatedObject["aext"] = aext }
         if let index = index { consolidatedObject["index"] = index }
         if let runtime = runtime { consolidatedObject["runtime"] = runtime }
-        
+
         return processJsonObject(consolidatedObject)
     }
     
     func processJsonArrayToMultiple(_ jsonArray: [[String: Any]]) -> [String] {
-        var dronesBySerial: [String: (basicId: [String: Any], location: [String: Any]?, system: [String: Any]?, selfID: [String: Any]?, operatorId: [String: Any]?, auth: [String: Any]?, index: Int?, runtime: Int?)] = [:]
-        
+        // Track every wrapper droneid-go / zmq_decoder.py emits in BLE array form, keyed by Basic ID.id.
+        typealias DroneEntry = (
+            basicId: [String: Any],
+            location: [String: Any]?,
+            system: [String: Any]?,
+            selfID: [String: Any]?,
+            operatorId: [String: Any]?,
+            auth: [String: Any]?,
+            frequencyMessage: [String: Any]?,
+            auxAdvInd: [String: Any]?,
+            aext: [String: Any]?,
+            index: Int?,
+            runtime: Int?
+        )
+        var dronesBySerial: [String: DroneEntry] = [:]
+
+        // Some droneid-go / sniffle frames carry AUX_ADV_IND / aext / Frequency Message at the
+        // top of the array (sibling, not child of Basic ID). Capture those once for fan-out.
+        var sharedAuxAdvInd: [String: Any]?
+        var sharedAext: [String: Any]?
+        var sharedFrequencyMessage: [String: Any]?
+        for obj in jsonArray {
+            if sharedAuxAdvInd == nil, let aux = obj["AUX_ADV_IND"] as? [String: Any] { sharedAuxAdvInd = aux }
+            if sharedAext == nil, let ax = obj["aext"] as? [String: Any] { sharedAext = ax }
+            if sharedFrequencyMessage == nil, let fm = obj["Frequency Message"] as? [String: Any] { sharedFrequencyMessage = fm }
+        }
+
         for obj in jsonArray {
             if let basicIdMsg = obj["Basic ID"] as? [String: Any],
                let id = basicIdMsg["id"] as? String,
                !id.isEmpty {
-                
-                var entry = dronesBySerial[id] ?? (basicId: basicIdMsg, location: nil, system: nil, selfID: nil, operatorId: nil, auth: nil, index: nil, runtime: nil)
-                
+
+                var entry = dronesBySerial[id] ?? (basicId: basicIdMsg, location: nil, system: nil, selfID: nil, operatorId: nil, auth: nil, frequencyMessage: nil, auxAdvInd: nil, aext: nil, index: nil, runtime: nil)
+
                 entry.basicId = basicIdMsg
-                
-                if let locationMsg = obj["Location/Vector Message"] as? [String: Any] {
-                    entry.location = locationMsg
-                }
-                if let systemMsg = obj["System Message"] as? [String: Any] {
-                    entry.system = systemMsg
-                }
-                if let selfIDMsg = obj["Self-ID Message"] as? [String: Any] {
-                    entry.selfID = selfIDMsg
-                }
-                if let operatorIDMsg = obj["Operator ID Message"] as? [String: Any] {
-                    entry.operatorId = operatorIDMsg
-                }
-                if let authMsg = obj["Auth Message"] as? [String: Any] {
-                    entry.auth = authMsg
-                }
-                if let indexVal = obj["index"] as? Int {
-                    entry.index = indexVal
-                }
-                if let runtimeVal = obj["runtime"] as? Int {
-                    entry.runtime = runtimeVal
-                }
-                
+
+                if let locationMsg = obj["Location/Vector Message"] as? [String: Any] { entry.location = locationMsg }
+                if let systemMsg = obj["System Message"] as? [String: Any] { entry.system = systemMsg }
+                if let selfIDMsg = obj["Self-ID Message"] as? [String: Any] { entry.selfID = selfIDMsg }
+                if let operatorIDMsg = obj["Operator ID Message"] as? [String: Any] { entry.operatorId = operatorIDMsg }
+                if let authMsg = obj["Auth Message"] as? [String: Any] { entry.auth = authMsg }
+                if let freqMsg = obj["Frequency Message"] as? [String: Any] { entry.frequencyMessage = freqMsg }
+                if let aux = obj["AUX_ADV_IND"] as? [String: Any] { entry.auxAdvInd = aux }
+                if let ax = obj["aext"] as? [String: Any] { entry.aext = ax }
+                if let indexVal = obj["index"] as? Int { entry.index = indexVal }
+                if let runtimeVal = obj["runtime"] as? Int { entry.runtime = runtimeVal }
+
                 dronesBySerial[id] = entry
             }
         }
-        
+
         var xmlMessages: [String] = []
-        
+
         for (_, entry) in dronesBySerial {
             var consolidatedObject: [String: Any] = [:]
             consolidatedObject["Basic ID"] = entry.basicId
@@ -953,15 +1122,108 @@ class ZMQHandler: ObservableObject {
             if let selfID = entry.selfID { consolidatedObject["Self-ID Message"] = selfID }
             if let operatorId = entry.operatorId { consolidatedObject["Operator ID Message"] = operatorId }
             if let auth = entry.auth { consolidatedObject["Auth Message"] = auth }
+            if let freqMsg = entry.frequencyMessage ?? sharedFrequencyMessage { consolidatedObject["Frequency Message"] = freqMsg }
+            if let aux = entry.auxAdvInd ?? sharedAuxAdvInd { consolidatedObject["AUX_ADV_IND"] = aux }
+            if let ax = entry.aext ?? sharedAext { consolidatedObject["aext"] = ax }
             if let index = entry.index { consolidatedObject["index"] = index }
             if let runtime = entry.runtime { consolidatedObject["runtime"] = runtime }
-            
+
             if let xml = processJsonObject(consolidatedObject) {
                 xmlMessages.append(xml)
             }
         }
-        
+
         return xmlMessages
+    }
+
+    // MARK: - droneid-go health/heartbeat ingestion
+
+    private func isDroneidGoHealthMessage(_ json: [String: Any]) -> Bool {
+        let droneEnvelopeKeys = [
+            "Basic ID", "BasicID", "Basic_ID",
+            "Location/Vector Message", "Location",
+            "System Message", "System",
+            "Self-ID Message", "SelfID",
+            "Operator ID Message", "OperatorID",
+            "Auth Message",
+            "Frequency Message",
+            "AUX_ADV_IND", "aext",
+            "FPV Detection",
+            "from", "to", "msg"
+        ]
+        for key in droneEnvelopeKeys where json[key] != nil { return false }
+
+        let healthMarkers = [
+            "messages_per_sec", "messages_total",
+            "errors_recent", "errors_total",
+            "state_str",
+            "connected_since",
+            "last_message_time",
+            "uptime", "uptime_ns",
+            "sources"
+        ]
+        var hits = 0
+        for key in healthMarkers where json[key] != nil { hits += 1 }
+        return hits >= 2
+    }
+
+    private func ingestDroneidGoHealth(_ json: [String: Any]) {
+        let snapshot = parseDroneidGoHealth(json)
+        DispatchQueue.main.async { [weak self] in
+            self?.backendHealth = snapshot
+        }
+    }
+
+    private func parseDroneidGoHealth(_ json: [String: Any]) -> DroneidGoHealth {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoFormatterFallback = ISO8601DateFormatter()
+
+        func parseDate(_ value: Any?) -> Date? {
+            if let s = value as? String, !s.isEmpty {
+                if let d = isoFormatter.date(from: s) { return d }
+                if let d = isoFormatterFallback.date(from: s) { return d }
+            }
+            if let n = value as? Double { return Date(timeIntervalSince1970: n) }
+            if let n = value as? Int { return Date(timeIntervalSince1970: Double(n)) }
+            return nil
+        }
+
+        var nestedSources: [String: DroneidGoHealth] = [:]
+        if let sources = json["sources"] as? [String: Any] {
+            for (key, value) in sources {
+                if let nested = value as? [String: Any] {
+                    nestedSources[key] = parseDroneidGoHealth(nested)
+                }
+            }
+        }
+
+        let uptimeSeconds: Double = {
+            if let s = json["uptime"] as? Double { return s }
+            if let s = json["uptime"] as? Int { return Double(s) }
+            if let ns = json["uptime_ns"] as? Double { return ns / 1_000_000_000.0 }
+            if let ns = json["uptime_ns"] as? Int { return Double(ns) / 1_000_000_000.0 }
+            return 0
+        }()
+
+        return DroneidGoHealth(
+            enabled: (json["enabled"] as? Bool) ?? true,
+            state: (json["state"] as? String) ?? "",
+            stateString: (json["state_str"] as? String) ?? "",
+            connectedSince: parseDate(json["connected_since"]),
+            lastMessageTime: parseDate(json["last_message_time"]),
+            lastErrorTime: parseDate(json["last_error_time"]),
+            lastError: (json["last_error"] as? String) ?? "",
+            connectAttempts: (json["connect_attempts"] as? Int) ?? 0,
+            messagesTotal: (json["messages_total"] as? Int) ?? 0,
+            messagesPerSec: (json["messages_per_sec"] as? Double)
+                ?? Double((json["messages_per_sec"] as? Int) ?? 0),
+            errorsTotal: (json["errors_total"] as? Int) ?? 0,
+            errorsRecent: (json["errors_recent"] as? Int) ?? 0,
+            uptimeSeconds: uptimeSeconds,
+            sources: nestedSources,
+            receivedAt: Date()
+        )
     }
 
     func extractDouble(from dict: [String: Any]?, key: String) -> Double? {

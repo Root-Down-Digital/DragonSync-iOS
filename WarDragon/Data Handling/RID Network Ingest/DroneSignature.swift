@@ -302,7 +302,13 @@ public struct DroneSignature: Hashable {
         public let sid: Int?
         public let accessAddress: Int?
         public let phy: Int?
-        
+
+        // MARK: - droneid-go persisted fields
+        public let transport: String?
+        public let basicFrequencyMHz: Double?
+        public let frequencyMessageMHz: Double?
+        public let extras: [String: String]
+
         public enum TransmissionType: String {
             case ble = "BT4/5 DroneID"
             case wifi = "WiFi DroneID"
@@ -340,7 +346,11 @@ public struct DroneSignature: Hashable {
                     did: Int? = nil,
                     sid: Int? = nil,
                     accessAddress: Int? = nil,
-                    phy: Int? = nil) {
+                    phy: Int? = nil,
+                    transport: String? = nil,
+                    basicFrequencyMHz: Double? = nil,
+                    frequencyMessageMHz: Double? = nil,
+                    extras: [String: String] = [:]) {
             self.transmissionType = transmissionType
             self.signalStrength = signalStrength
             self.expectedSignalStrength = expectedSignalStrength
@@ -357,6 +367,10 @@ public struct DroneSignature: Hashable {
             self.sid = sid
             self.accessAddress = accessAddress
             self.phy = phy
+            self.transport = transport
+            self.basicFrequencyMHz = basicFrequencyMHz
+            self.frequencyMessageMHz = frequencyMessageMHz
+            self.extras = extras
         }
         
         public func hash(into hasher: inout Hasher) {
@@ -373,6 +387,9 @@ public struct DroneSignature: Hashable {
                 hasher.combine(advAddress)
                 hasher.combine(did)
                 hasher.combine(sid)
+                hasher.combine(transport)
+                hasher.combine(basicFrequencyMHz)
+                hasher.combine(frequencyMessageMHz)
             }
 
         public static func == (lhs: TransmissionInfo, rhs: TransmissionInfo) -> Bool {
@@ -388,8 +405,11 @@ public struct DroneSignature: Hashable {
                 lhs.advMode == rhs.advMode &&
                 lhs.advAddress == rhs.advAddress &&
                 lhs.did == rhs.did &&
-                lhs.sid == rhs.sid
-                // Skip metadata in equality check since [String:Any] can't be compared
+                lhs.sid == rhs.sid &&
+                lhs.transport == rhs.transport &&
+                lhs.basicFrequencyMHz == rhs.basicFrequencyMHz &&
+                lhs.frequencyMessageMHz == rhs.frequencyMessageMHz &&
+                lhs.extras == rhs.extras
         }
     }
     
@@ -646,28 +666,29 @@ extension DroneSignature.TransmissionInfo: Codable {
     enum CodingKeys: String, CodingKey {
         case transmissionType, signalStrength, expectedSignalStrength, macAddress, frequency
         case protocolType, messageTypes, timestamp, channel, advMode, advAddress, did, sid, accessAddress, phy
+        case transport, basicFrequencyMHz, frequencyMessageMHz, extras
     }
-    
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         let typeString = try container.decode(String.self, forKey: .transmissionType)
         transmissionType = TransmissionType(rawValue: typeString) ?? .unknown
-        
+
         signalStrength = try container.decodeIfPresent(Double.self, forKey: .signalStrength)
         expectedSignalStrength = try container.decodeIfPresent(Double.self, forKey: .expectedSignalStrength)
         macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)
         frequency = try container.decodeIfPresent(Double.self, forKey: .frequency)
-        
+
         let protoString = try container.decode(String.self, forKey: .protocolType)
         protocolType = ProtocolType(rawValue: protoString) ?? .openDroneID
-        
+
         let msgTypeStrings = try container.decode([String].self, forKey: .messageTypes)
         messageTypes = Set(msgTypeStrings.compactMap { MessageType(rawValue: $0) })
-        
+
         timestamp = try container.decode(TimeInterval.self, forKey: .timestamp)
-        metadata = nil // Can't encode [String: Any] easily
-        
+        metadata = nil
+
         channel = try container.decodeIfPresent(Int.self, forKey: .channel)
         advMode = try container.decodeIfPresent(String.self, forKey: .advMode)
         advAddress = try container.decodeIfPresent(String.self, forKey: .advAddress)
@@ -675,8 +696,13 @@ extension DroneSignature.TransmissionInfo: Codable {
         sid = try container.decodeIfPresent(Int.self, forKey: .sid)
         accessAddress = try container.decodeIfPresent(Int.self, forKey: .accessAddress)
         phy = try container.decodeIfPresent(Int.self, forKey: .phy)
+
+        transport = try container.decodeIfPresent(String.self, forKey: .transport)
+        basicFrequencyMHz = try container.decodeIfPresent(Double.self, forKey: .basicFrequencyMHz)
+        frequencyMessageMHz = try container.decodeIfPresent(Double.self, forKey: .frequencyMessageMHz)
+        extras = (try container.decodeIfPresent([String: String].self, forKey: .extras)) ?? [:]
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(transmissionType.rawValue, forKey: .transmissionType)
@@ -694,6 +720,12 @@ extension DroneSignature.TransmissionInfo: Codable {
         try container.encodeIfPresent(sid, forKey: .sid)
         try container.encodeIfPresent(accessAddress, forKey: .accessAddress)
         try container.encodeIfPresent(phy, forKey: .phy)
+        try container.encodeIfPresent(transport, forKey: .transport)
+        try container.encodeIfPresent(basicFrequencyMHz, forKey: .basicFrequencyMHz)
+        try container.encodeIfPresent(frequencyMessageMHz, forKey: .frequencyMessageMHz)
+        if !extras.isEmpty {
+            try container.encode(extras, forKey: .extras)
+        }
     }
 }
 

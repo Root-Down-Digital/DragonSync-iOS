@@ -722,12 +722,43 @@ public final class DroneSignatureGenerator {
             signalStrength = rssi
         }
         
-        if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any] {
+        let basicIdDict = message["Basic ID"] as? [String: Any]
+        let transportRaw = (basicIdDict?["transport"] as? String)?.lowercased() ?? ""
+
+        if !transportRaw.isEmpty {
+            switch transportRaw {
+            case "wifi":
+                type = .wifi
+                messageType = .wifi
+            case "ble":
+                type = .ble
+                messageType = .bt45
+                if let aext = message["aext"] as? [String: Any] {
+                    advMode = aext["AdvMode"] as? String
+                    advAddress = (aext["AdvA"] as? String)?.components(separatedBy: " ").first
+                    did = (aext["AdvDataInfo"] as? [String: Any])?["did"] as? Int
+                    sid = (aext["AdvDataInfo"] as? [String: Any])?["sid"] as? Int
+                }
+                if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any] {
+                    metadata = auxAdvInd
+                    channel = auxAdvInd["chan"] as? Int
+                }
+            case "uart":
+                type = .esp32
+                messageType = .esp32
+            case "dji":
+                type = .unknown
+                messageType = .bt45
+            default:
+                type = .unknown
+                messageType = .bt45
+            }
+        } else if let auxAdvInd = message["AUX_ADV_IND"] as? [String: Any] {
             type = .ble
             messageType = .bt45
             metadata = auxAdvInd
             channel = auxAdvInd["chan"] as? Int
-            
+
             if let aext = message["aext"] as? [String: Any] {
                 advMode = aext["AdvMode"] as? String
                 advAddress = (aext["AdvA"] as? String)?.components(separatedBy: " ").first
@@ -768,12 +799,49 @@ public final class DroneSignatureGenerator {
             expectedSignalStrength = calculateExpectedRSSI(distance: distanceFromOrigin)
         }
         
+        let basicFreqMHz: Double? = (basicIdDict?["frequency_mhz"] as? Double)
+            ?? (basicIdDict?["frequency_mhz"] as? Int).map(Double.init)
+        let freqMessageMHz: Double? = {
+            guard let fm = message["Frequency Message"] as? [String: Any] else { return nil }
+            if let f = fm["frequency"] as? Double { return f }
+            if let fi = fm["frequency"] as? Int { return Double(fi) }
+            return nil
+        }()
+        let chosenFrequency: Double? = basicFreqMHz ?? freqMessageMHz
+
+        var extras: [String: String] = [:]
+        if let loc = message["Location/Vector Message"] as? [String: Any] {
+            if let v = loc["timestamp_accuracy"] { extras["timestamp_accuracy"] = String(describing: v) }
+        }
+        if let sys = message["System Message"] as? [String: Any] {
+            if let v = sys["classification_type"] { extras["classification_type"] = String(describing: v) }
+            if let v = sys["operator_location_type"] { extras["operator_location_type"] = String(describing: v) }
+            if let v = sys["operator_altitude_geo"] { extras["operator_altitude_geo"] = String(describing: v) }
+            if let v = sys["area_count"] { extras["area_count"] = String(describing: v) }
+            if let v = sys["area_radius"] { extras["area_radius"] = String(describing: v) }
+            if let v = sys["area_floor"] { extras["area_floor"] = String(describing: v) }
+            if let v = sys["area_ceiling"] { extras["area_ceiling"] = String(describing: v) }
+        }
+        if let op = message["Operator ID Message"] as? [String: Any] {
+            if let v = op["operator_id_type"] { extras["operator_id_type"] = String(describing: v) }
+        }
+        if let selfId = message["Self-ID Message"] as? [String: Any] {
+            if let v = selfId["text_type"] { extras["self_id_text_type"] = String(describing: v) }
+        }
+        if let auth = message["Auth Message"] as? [String: Any] {
+            if let v = auth["auth_type"] { extras["auth_type"] = String(describing: v) }
+            if let v = auth["page"] { extras["auth_page"] = String(describing: v) }
+            if let v = auth["page_count"] { extras["auth_page_count"] = String(describing: v) }
+            if let v = auth["length"] { extras["auth_length"] = String(describing: v) }
+            if let v = auth["auth_data"] as? String { extras["auth_data"] = v }
+        }
+
         return DroneSignature.TransmissionInfo(
             transmissionType: type,
             signalStrength: signalStrength,
             expectedSignalStrength: expectedSignalStrength,
             macAddress: message["MAC"] as? String,
-            frequency: nil,
+            frequency: chosenFrequency,
             protocolType: .openDroneID,
             messageTypes: [messageType],
             timestamp: Date().timeIntervalSince1970,
@@ -782,9 +850,12 @@ public final class DroneSignatureGenerator {
             advMode: advMode,
             advAddress: advAddress,
             did: did,
-            sid: sid
+            sid: sid,
+            transport: transportRaw.isEmpty ? nil : transportRaw,
+            basicFrequencyMHz: basicFreqMHz,
+            frequencyMessageMHz: freqMessageMHz,
+            extras: extras
         )
-        
     }
     
     func calculateExpectedRSSI(distance: Double) -> Double? {

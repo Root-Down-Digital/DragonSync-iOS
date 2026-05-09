@@ -4,9 +4,38 @@ IFS=$'\n\t'
 
 DRONEID_REPO="https://github.com/alphafox02/DroneID.git"
 DRAGONSYNC_REPO="https://github.com/alphafox02/DragonSync.git"
+DRONEIDGO_REPO="https://github.com/alphafox02/droneid-go.git"
 DRONEID_DIR="DroneID"
 DRAGONSYNC_DIR="DragonSync"
+DRONEIDGO_DIR="droneid-go"
 VENV_DIR="drone_env"
+
+# Default mode: droneid-go (single Go binary, ports 4224 unified + 4225 system status)
+# Legacy mode (--legacy or LEGACY=1): old 3-process Python pipeline
+#   wifi_receiver:4223 + sniffle:4222 -> zmq_decoder:4224
+LEGACY_MODE="${LEGACY:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --legacy) LEGACY_MODE=1 ;;
+    --help|-h)
+      cat <<'HLP'
+WarDragon setup.sh
+
+Usage: ./setup.sh [--legacy]
+
+  (default)    Install droneid-go (single Go binary; replaces wifi_receiver +
+               sniffle + zmq_decoder.py). Publishes unified ZMQ on tcp://*:4224.
+               Recommended for new installs.
+
+  --legacy     Install the legacy 3-process Python pipeline (DroneID +
+               DragonSync). Use only if your hardware/workflow needs it.
+
+Same numeric menu (1-6) is shown either way.
+HLP
+      exit 0
+      ;;
+  esac
+done
 
 detect_os() {
   if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -751,10 +780,37 @@ Default port (from flash): $FLASHED_PORT"
     example_port="$FLASHED_PORT"
   fi
   
+  if [[ "$LEGACY_MODE" -eq 0 ]]; then
+    cat << EOF
+
+===================================================
+WarDragon Setup Complete (droneid-go mode)
+===================================================
+
+System Information:
+- Your local IP address: $local_ip
+- Detected OS: $os$port_note
+
+Repositories:
+- $DRONEIDGO_DIR (unified Go receiver — WiFi/BLE/UART/DJI -> tcp://*:4224)
+- $DRAGONSYNC_DIR (multicast/CoT/MQTT/TAK fan-out)
+
+Quick Start:
+- Service control:  sudo systemctl status zmq-decoder
+- Service logs:     sudo journalctl -u zmq-decoder -f
+- Health check:     $DRONEIDGO_DIR/droneid-check.sh
+- iOS app: connect to ${local_ip}:4224 (telemetry) and ${local_ip}:4225 (system status)
+
+To switch back to the legacy 3-process pipeline (wifi_receiver + sniffle +
+zmq_decoder.py), re-run with:  ./setup.sh --legacy
+EOF
+    return
+  fi
+
   cat << EOF
 
 ===================================================
-WarDragon DroneID Setup Complete
+WarDragon DroneID Setup Complete (LEGACY mode)
 ===================================================
 
 System Information:
@@ -774,30 +830,76 @@ Quick Start:
 ./run_wardragon_monitor.sh 0.0.0.0 4225 30
 
 Need help? Check the README files in $DRONEID_DIR and $DRAGONSYNC_DIR
+
+To switch to the new droneid-go single-binary install, re-run without --legacy.
 EOF
+}
+
+install_droneidgo() {
+  local os="$1"
+
+  echo "Installing droneid-go (default unified receiver)..."
+  echo
+
+  if [[ "$os" != "linux" ]]; then
+    echo "WARNING: droneid-go ships Linux x86_64 / ARM64 binaries only."
+    echo "  On macOS, install on a WarDragon kit / Linux host instead."
+    echo "  Cloning the repo here for inspection only."
+  fi
+
+  clone_or_update "$DRONEIDGO_REPO" "$DRONEIDGO_DIR"
+
+  if [[ "$os" == "linux" ]]; then
+    if [[ -x "$DRONEIDGO_DIR/install.sh" ]]; then
+      echo "Running droneid-go installer (requires sudo)..."
+      ( cd "$DRONEIDGO_DIR" && sudo ./install.sh )
+    else
+      echo "WARN: $DRONEIDGO_DIR/install.sh not found or not executable. Skipping installer."
+    fi
+  fi
+
+  # DragonSync is still consumed for multicast/CoT/MQTT/TAK fan-out, even in droneid-go mode.
+  clone_or_update "$DRAGONSYNC_REPO" "$DRAGONSYNC_DIR"
+  setup_venv
+  install_python_deps "$DRAGONSYNC_DIR"
+
+  echo
+  echo "✔ droneid-go installed. zmq-decoder service publishes on tcp://*:4224."
+  echo "  - Status:  sudo systemctl status zmq-decoder"
+  echo "  - Logs:    sudo journalctl -u zmq-decoder -f"
+  echo "  - Health:  $DRONEIDGO_DIR/droneid-check.sh"
 }
 
 install_software() {
   local os
   os=$(detect_os)
-  
-  echo "Installing WarDragon DroneID software..."
+
+  if [[ "$LEGACY_MODE" -eq 0 ]]; then
+    echo "Installing WarDragon (droneid-go default)..."
+    echo "Detected OS: $os"
+    echo
+    install_system_deps "$os"
+    install_droneidgo "$os"
+    return
+  fi
+
+  echo "Installing WarDragon DroneID software (LEGACY 3-process pipeline)..."
   echo "Detected OS: $os"
   echo
-  
+
   install_system_deps "$os"
   setup_venv
-  
+
   clone_or_update "$DRONEID_REPO" "$DRONEID_DIR"
   clone_or_update "$DRAGONSYNC_REPO" "$DRAGONSYNC_DIR"
-  
+
   install_python_deps "$DRONEID_DIR"
   install_python_deps "$DRAGONSYNC_DIR"
-  
+
   create_run_scripts
-  
+
   echo
-  echo "✔ Software installation complete!"
+  echo "✔ Legacy software installation complete!"
 }
 
 flash_firmware_only() {
@@ -895,21 +997,33 @@ flash_standalone_only() {
 install_and_flash() {
   local os
   os=$(detect_os)
-  
+
   echo "Installing software and flashing firmware..."
   echo "Detected OS: $os"
   echo
-  
+
   install_system_deps "$os"
+
+  if [[ "$LEGACY_MODE" -eq 0 ]]; then
+    install_droneidgo "$os"
+    install_esptool
+    flash_firmware "$os"
+    echo
+    echo "✔ droneid-go installed + firmware flashed."
+    echo "  No legacy run_*.sh scripts created (droneid-go runs as systemd zmq-decoder service)."
+    print_usage
+    return
+  fi
+
   setup_venv
   install_esptool
-  
+
   clone_or_update "$DRONEID_REPO" "$DRONEID_DIR"
   clone_or_update "$DRAGONSYNC_REPO" "$DRAGONSYNC_DIR"
-  
+
   install_python_deps "$DRONEID_DIR"
   install_python_deps "$DRAGONSYNC_DIR"
-  
+
   flash_firmware "$os"
   create_run_scripts
   
@@ -1058,6 +1172,12 @@ EOF
 main() {
   echo "====================================================="
   echo "WarDragon DroneID Setup Script"
+  if [[ "$LEGACY_MODE" -eq 1 ]]; then
+    echo "  Mode: LEGACY (3-process Python pipeline)"
+  else
+    echo "  Mode: droneid-go (default unified receiver)"
+    echo "  (pass --legacy to install the old DroneID + sniffle + zmq_decoder.py path)"
+  fi
   echo "====================================================="
   echo ""
   echo "OPTIONS:"

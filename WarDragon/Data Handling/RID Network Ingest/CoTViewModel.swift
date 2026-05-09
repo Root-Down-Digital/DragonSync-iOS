@@ -296,6 +296,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         var ridModel: String?
         var ridSource: String?
         var ridLookupSuccess: Bool = false
+
+        // MARK: - droneid-go schema additions
+        var transport: String?
+        var basicFrequencyMHz: Double?
+        var frequencyMessageMHz: Double?
+        var selfIdTextType: String?
+        var authPageCount: String?
         
         // MARK: - FPV Signal Conversion
         
@@ -687,7 +694,19 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             dict["fpvEstimatedDistance"] = self.fpvEstimatedDistance
             dict["fpvSensorLat"] = self.fpvSensorLat
             dict["fpvSensorLon"] = self.fpvSensorLon
-            
+
+            // MARK: - droneid-go envelope passthrough
+            for envelopeKey in ["Basic ID", "Location/Vector Message", "System Message",
+                                "Self-ID Message", "Operator ID Message", "Auth Message",
+                                "Frequency Message", "AUX_ADV_IND", "aext"] {
+                if let v = self.rawMessage[envelopeKey] {
+                    dict[envelopeKey] = v
+                }
+            }
+            dict["transport"] = self.transport
+            dict["basic_frequency_mhz"] = self.basicFrequencyMHz
+            dict["frequency_message_mhz"] = self.frequencyMessageMHz
+
             return dict
         }
         

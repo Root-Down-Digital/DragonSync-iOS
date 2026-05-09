@@ -350,6 +350,17 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             droneData["rssi"] = basicId["RSSI"]
             droneData["protocol_version"] = basicId["protocol_version"]
             droneData["ua_type"] = basicId["ua_type"]
+            if let transport = basicId["transport"] {
+                droneData["transport"] = transport
+            }
+            if let basicFreq = basicId["frequency_mhz"] {
+                droneData["basic_frequency_mhz"] = basicFreq
+            }
+        }
+
+        if let freqMsg = message["Frequency Message"] as? [String: Any],
+           let f = freqMsg["frequency"] {
+            droneData["frequency_message_mhz"] = f
         }
         
         if let location = message["Location/Vector Message"] as? [String: Any] {
@@ -420,6 +431,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             if let pressAlt = location["pressure_altitude"] {
                 droneData["pressure_altitude"] = pressAlt
             }
+            if let tsAcc = location["timestamp_accuracy"] {
+                droneData["timestamp_accuracy"] = tsAcc
+            }
         }
         
         if let system = message["System Message"] as? [String: Any] {
@@ -446,8 +460,17 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             if let opAltGeo = system["operator_alt_geo"] {
                 droneData["operator_alt_geo"] = opAltGeo
             }
+            if let opAltGeoCanonical = system["operator_altitude_geo"] {
+                droneData["operator_alt_geo"] = opAltGeoCanonical
+            }
             if let classification = system["classification"] {
                 droneData["classification"] = classification
+            }
+            if let classificationType = system["classification_type"] {
+                droneData["classification_type"] = classificationType
+            }
+            if let opLocType = system["operator_location_type"] {
+                droneData["operator_location_type"] = opLocType
             }
             if let sysTs = system["timestamp"] {
                 droneData["system_timestamp"] = sysTs
@@ -463,6 +486,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             }
             if let descType = selfId["description_type"] {
                 droneData["description_type"] = descType
+            }
+            if let textType = selfId["text_type"] {
+                droneData["self_id_text_type"] = textType
             }
         }
         
@@ -484,6 +510,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             }
             if let authPage = authMessage["page"] {
                 droneData["auth_page"] = authPage
+            }
+            if let authPageCount = authMessage["page_count"] {
+                droneData["auth_page_count"] = authPageCount
             }
             if let authLength = authMessage["length"] {
                 droneData["auth_length"] = authLength
@@ -616,7 +645,61 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
         message.alt_pressure = droneData["alt_pressure"] as? Double
         message.horiz_acc = droneData["horiz_acc"] as? Int
         message.description_type = droneData["description_type"] as? Int
-        
+
+        // MARK: - droneid-go schema fields
+        message.transport = (droneData["transport"] as? String)
+        if let basicFreqDouble = droneData["basic_frequency_mhz"] as? Double {
+            message.basicFrequencyMHz = basicFreqDouble
+        } else if let basicFreqInt = droneData["basic_frequency_mhz"] as? Int {
+            message.basicFrequencyMHz = Double(basicFreqInt)
+        }
+        if let freqMsgDouble = droneData["frequency_message_mhz"] as? Double {
+            message.frequencyMessageMHz = freqMsgDouble
+        } else if let freqMsgInt = droneData["frequency_message_mhz"] as? Int {
+            message.frequencyMessageMHz = Double(freqMsgInt)
+        }
+        if let textTypeStr = droneData["self_id_text_type"] as? String {
+            message.selfIdTextType = textTypeStr
+        } else if let textTypeInt = droneData["self_id_text_type"] as? Int {
+            message.selfIdTextType = String(textTypeInt)
+        }
+        if let authPageCountInt = droneData["auth_page_count"] as? Int {
+            message.authPageCount = String(authPageCountInt)
+        } else if let authPageCountStr = droneData["auth_page_count"] as? String {
+            message.authPageCount = authPageCountStr
+        }
+        if let classificationType = droneData["classification_type"] as? String {
+            message.classification_type = classificationType
+        }
+        if let opLocType = droneData["operator_location_type"] as? String {
+            message.operator_location_type = opLocType
+        }
+        if let opAltGeoStr = droneData["operator_alt_geo"] as? String {
+            message.operatorAltGeo = opAltGeoStr
+        } else if let opAltGeoDouble = droneData["operator_alt_geo"] as? Double {
+            message.operatorAltGeo = String(opAltGeoDouble)
+        }
+        if let areaCount = droneData["area_count"] {
+            message.area_count = String(describing: areaCount)
+            message.areaCount = String(describing: areaCount)
+        }
+        if let areaRadius = droneData["area_radius"] {
+            message.area_radius = String(describing: areaRadius)
+            message.areaRadius = String(describing: areaRadius)
+        }
+        if let areaCeiling = droneData["area_ceiling"] {
+            message.area_ceiling = String(describing: areaCeiling)
+            message.areaCeiling = String(describing: areaCeiling)
+        }
+        if let areaFloor = droneData["area_floor"] {
+            message.area_floor = String(describing: areaFloor)
+            message.areaFloor = String(describing: areaFloor)
+        }
+        if let timestampAcc = droneData["timestamp_accuracy"] as? String {
+            message.timestamp_accuracy = timestampAcc
+            message.timestampAccuracy = timestampAcc
+        }
+
         cotMessage = message
     }
     
@@ -786,7 +869,67 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
             message.alt_pressure = location?["alt_pressure"] as? Double
             message.horiz_acc = location?["horiz_acc"] as? Int
             message.description_type = selfId?["description_type"] as? Int
-            
+
+            // MARK: - droneid-go schema fields (ESP32 path)
+            message.transport = basicId["transport"] as? String
+            if let basicFreqDouble = basicId["frequency_mhz"] as? Double {
+                message.basicFrequencyMHz = basicFreqDouble
+            } else if let basicFreqInt = basicId["frequency_mhz"] as? Int {
+                message.basicFrequencyMHz = Double(basicFreqInt)
+            }
+            if let freqMsg = jsonData["Frequency Message"] as? [String: Any] {
+                if let f = freqMsg["frequency"] as? Double {
+                    message.frequencyMessageMHz = f
+                } else if let fi = freqMsg["frequency"] as? Int {
+                    message.frequencyMessageMHz = Double(fi)
+                }
+            }
+            if let textTypeStr = selfId?["text_type"] as? String {
+                message.selfIdTextType = textTypeStr
+            } else if let textTypeInt = selfId?["text_type"] as? Int {
+                message.selfIdTextType = String(textTypeInt)
+            }
+            if let authPageCountInt = authMsg?["page_count"] as? Int {
+                message.authPageCount = String(authPageCountInt)
+            } else if let authPageCountStr = authMsg?["page_count"] as? String {
+                message.authPageCount = authPageCountStr
+            }
+            if let classificationType = system?["classification_type"] as? String {
+                message.classification_type = classificationType
+            }
+            if let opLocType = system?["operator_location_type"] as? String {
+                message.operator_location_type = opLocType
+            }
+            if let opAltGeoCanonical = system?["operator_altitude_geo"] {
+                message.operatorAltGeo = String(describing: opAltGeoCanonical)
+            } else if let opAltGeoLegacy = system?["operator_alt_geo"] {
+                message.operatorAltGeo = String(describing: opAltGeoLegacy)
+            }
+            if let areaCount = system?["area_count"] {
+                let s = String(describing: areaCount)
+                message.area_count = s
+                message.areaCount = s
+            }
+            if let areaRadius = system?["area_radius"] {
+                let s = String(describing: areaRadius)
+                message.area_radius = s
+                message.areaRadius = s
+            }
+            if let areaCeiling = system?["area_ceiling"] {
+                let s = String(describing: areaCeiling)
+                message.area_ceiling = s
+                message.areaCeiling = s
+            }
+            if let areaFloor = system?["area_floor"] {
+                let s = String(describing: areaFloor)
+                message.area_floor = s
+                message.areaFloor = s
+            }
+            if let timestampAcc = location?["timestamp_accuracy"] as? String {
+                message.timestamp_accuracy = timestampAcc
+                message.timestampAccuracy = timestampAcc
+            }
+
             return message
         }
         return nil
@@ -1074,7 +1217,9 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 
 //                print("DEBUG XML Parser (remarks path): Track data - course: \(String(describing: message.trackCourse)), speed: \(String(describing: message.trackSpeed))")
                 message.originalRawString = originalRawString
-                
+
+                applyDroneidGoRemarks(remarks, to: &message)
+
                 cotMessage = message
             }
         case "location_protocol", "op_status", "height_type", "ew_dir_segment",
@@ -1590,8 +1735,12 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
                 vspeed = Double(trimmed.dropFirst(11).replacingOccurrences(of: "m/s", with: "").trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Geodetic Altitude:") {
                 alt = Double(trimmed.dropFirst(18).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
+            } else if trimmed.hasPrefix("Altitude:") {
+                alt = Double(trimmed.dropFirst(9).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Height AGL:") {
                 heightAGL = Double(trimmed.dropFirst(11).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
+            } else if trimmed.hasPrefix("AGL:") {
+                heightAGL = Double(trimmed.dropFirst(4).replacingOccurrences(of: "m", with: "").trimmingCharacters(in: .whitespaces))
             } else if trimmed.hasPrefix("Height Type:") {
                 heightType = trimmed.dropFirst(12).trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("Pressure Altitude:") {
@@ -1852,6 +2001,86 @@ class CoTMessageParser: NSObject, XMLParserDelegate {
     
     
     
+    // MARK: - droneid-go remarks token scan
+    private func applyDroneidGoRemarks(_ remarks: String, to message: inout CoTViewModel.CoTMessage) {
+        let normalized = remarks
+            .replacingOccurrences(of: "; ", with: "|")
+            .replacingOccurrences(of: ", ", with: "|")
+        let components = normalized.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+
+        for component in components {
+            if component.hasPrefix("Transport:") {
+                let v = component.dropFirst("Transport:".count).trimmingCharacters(in: .whitespaces)
+                if !v.isEmpty { message.transport = v }
+            } else if component.hasPrefix("BasicFrequency:") {
+                let raw = component.dropFirst("BasicFrequency:".count)
+                    .replacingOccurrences(of: "MHz", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                if let v = Double(raw) { message.basicFrequencyMHz = v }
+            } else if component.hasPrefix("FrequencyMessage:") {
+                let raw = component.dropFirst("FrequencyMessage:".count)
+                    .replacingOccurrences(of: "MHz", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                if let v = Double(raw) { message.frequencyMessageMHz = v }
+            } else if component.hasPrefix("Timestamp Accuracy:") {
+                let v = component.dropFirst("Timestamp Accuracy:".count).trimmingCharacters(in: .whitespaces)
+                if !v.isEmpty {
+                    message.timestamp_accuracy = v
+                    message.timestampAccuracy = v
+                }
+            } else if component.hasPrefix("Classification Type:") {
+                message.classification_type = component.dropFirst("Classification Type:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Operator ID Type:") {
+                message.operator_id_type = component.dropFirst("Operator ID Type:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Operator Location Type:") {
+                message.operator_location_type = component.dropFirst("Operator Location Type:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Self-ID Text Type:") {
+                message.selfIdTextType = component.dropFirst("Self-ID Text Type:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Area Count:") {
+                let v = component.dropFirst("Area Count:".count).trimmingCharacters(in: .whitespaces)
+                message.area_count = v
+                message.areaCount = v
+            } else if component.hasPrefix("Area Radius:") {
+                let v = component.dropFirst("Area Radius:".count)
+                    .replacingOccurrences(of: " m", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                message.area_radius = v
+                message.areaRadius = v
+            } else if component.hasPrefix("Area Floor:") {
+                let v = component.dropFirst("Area Floor:".count)
+                    .replacingOccurrences(of: " m", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                message.area_floor = v
+                message.areaFloor = v
+            } else if component.hasPrefix("Area Ceiling:") {
+                let v = component.dropFirst("Area Ceiling:".count)
+                    .replacingOccurrences(of: " m", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                message.area_ceiling = v
+                message.areaCeiling = v
+            } else if component.hasPrefix("Auth Type:") {
+                message.authType = component.dropFirst("Auth Type:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Auth Page Count:") {
+                message.authPageCount = component.dropFirst("Auth Page Count:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Auth Page:") {
+                message.authPage = component.dropFirst("Auth Page:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Auth Length:") {
+                message.authLength = component.dropFirst("Auth Length:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            } else if component.hasPrefix("Auth Data:") {
+                message.authData = component.dropFirst("Auth Data:".count)
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+    }
+
     private func handleLocationFields(_ elementName: String) {
         if cotMessage == nil { return }
         

@@ -125,7 +125,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 - **Webhooks** - Discord, Slack, custom HTTP POST with event filtering
 
 **Receive Data From:**
-- **ZMQ** - Ports 4224 (detections) and 4225 (system status) from DroneID backend
+- **ZMQ** - Ports 4224 (detections, droneid-go unified output — falls back to legacy zmq_decoder.py) and 4225 (system status from `wardragon_monitor`)
 - **Multicast CoT** - 239.2.3.1:6969 from DragonSync.py wrapper
 - **ADS-B** - readsb, tar1090, dump1090 JSON feeds and [OpenSky Network](https://opensky-network.org)
 - **Background Mode** - Continuous monitoring with local notifications
@@ -148,9 +148,10 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 
 
-- Be sure to `git pull` in both DroneID and DragonSync directories. 
-- Use the troubleshooting guide to fix common issues.
-- Multicast/`dragonsync.py` is not a requirement for FPV. Run the `fpv_receiver.py` in this [zmq_decoder fork](https://github.com/lukeswitz/DroneID)
+- New default backend: **[droneid-go](https://github.com/alphafox02/droneid-go)** — single Go binary (`zmq-decoder` systemd service) that replaces the old `wifi_receiver` + `sniffle` + `zmq_decoder.py` Python pipeline. Same wire port (4224), richer JSON (adds `transport`, `frequency_mhz`, `Frequency Message`, `Auth Message`, area beacons, full ASTM accuracy fields).
+- Existing legacy installs (`DroneID` + `DragonSync` 3-process pipeline) still work — the iOS parser supports both. Run `setup.sh --legacy` to install that path.
+- For new kits: `git pull` in `droneid-go` and `DragonSync`. (`DroneID` and `Sniffle` Python clones are no longer required.)
+- Multicast/`dragonsync.py` is not a requirement for FPV. Run `fpv_mdn_receiver.py` from the `DroneID` repo if you need FPV detection.
 
 ## Option 1: WarDragon Pro (Powerful)
 
@@ -216,44 +217,81 @@ esptool.py --chip auto --port /dev/YOUR_PORT --baud 115200 \
 
 ## Option 3: Custom Build (Full Features)
 
-Complete detection stack with all protocols.
+Complete detection stack with all protocols. Default install uses **droneid-go** — a single Go binary that replaces the old `wifi_receiver.py` + `sniffle` + `zmq_decoder.py` Python pipeline. The iOS app is fully compatible with both backends.
 
 **Hardware Requirements:**
-- Dual-band WiFi adapter (2.4/5GHz)
-- Sniffle Bluetooth sniffer dongle
-- Optional: ANTSDR E200 (SDR), GPS module, RX5808 (FPV)
+- Dual-band WiFi adapter (2.4/5GHz, monitor-mode capable)
+- Sniffle-compatible BLE dongle (nRF52840 or Sonoff CC2652P, pre-flashed with Sniffle firmware)
+- Optional: DragonSDR / ANTSDR E200 (DJI DroneID), GPS module, RX5808 (FPV)
 
-**Automated Install:**
+**Automated Install (droneid-go default):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Root-Down-Digital/DragonSync-iOS/refs/heads/main/Util/setup.sh -o setup.sh
-chmod +x setup.sh && ./setup.sh
-# Follow prompts for your platform
+chmod +x setup.sh && ./setup.sh           # droneid-go install (recommended)
+# or, to install the legacy 3-process Python pipeline:
+./setup.sh --legacy
 ```
 
 <details>
 <summary>Manual Installation Steps</summary>
 
-**Linux:**
+**Default — droneid-go (Linux x86_64 / ARM64):**
 ```bash
 sudo apt update
+sudo apt install -y libpcap0.8 libzmq5 git
+cd /home/dragon/WarDragon
+git clone https://github.com/alphafox02/droneid-go.git
+cd droneid-go
+sudo ./install.sh
+```
+
+The installer:
+- Drops the binary at `/home/dragon/WarDragon/droneid-go/droneid`
+- Stops/disables legacy `wifi-receiver` and `sniff-receiver` services
+- Installs and enables a `zmq-decoder` systemd service that publishes unified JSON on `tcp://*:4224`
+- Health probe: `./droneid-check.sh`
+
+DragonSync still handles multicast CoT / TAK / MQTT fan-out:
+```bash
+git clone https://github.com/alphafox02/DragonSync.git
+cd DragonSync && pip install -r requirements.txt
+```
+
+**Legacy — Python 3-process pipeline (use only if you need it):**
+```bash
 sudo apt install -y python3 python3-pip git gpsd gpsd-clients lm-sensors
 git clone https://github.com/alphafox02/DroneID.git
 git clone https://github.com/alphafox02/DragonSync.git
 cd DroneID && git submodule update --init && ./setup.sh
 ```
 
-**macOS:**
-```bash
-brew install python3 git gpsd
-git clone https://github.com/alphafox02/DroneID.git
-git clone https://github.com/alphafox02/DragonSync.git
-cd DroneID && git submodule update --init && ./setup.sh
-```
+**macOS:** droneid-go ships Linux binaries only. Install on a Linux host (WarDragon kit / Pi). Use macOS for the iOS app build only.
 
-**Windows:** Use WSL2 or manually install Python 3.9+ and Git
+**Windows:** Use WSL2.
 </details>
 
-**Run Detection Stack:**
+**Run Detection Stack — droneid-go (default):**
+```bash
+# Single service, all sources unified on tcp://*:4224
+sudo systemctl status zmq-decoder
+sudo journalctl -u zmq-decoder -f
+
+# Manual run with everything enabled (WiFi 5GHz hop + native BLE + ESP32 UART + DJI DroneID)
+sudo /home/dragon/WarDragon/droneid-go/droneid \
+    -g -ble auto -uart /dev/esp0 -dji 127.0.0.1:4221 \
+    -z -zmqsetting 0.0.0.0:4224
+
+# System health monitor (separate from drone telemetry)
+cd DragonSync
+python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
+
+# Optional FPV
+cd DroneID && python3 fpv_mdn_receiver.py --serial /dev/ttyFPV --baud 115200 --zmq-port 4226 --stationary --debug
+```
+
+<details>
+<summary>Run Detection Stack — Legacy 3-process pipeline</summary>
+
 ```bash
 # Terminal 1 - WiFi RID Receiver
 cd DroneID
@@ -270,45 +308,47 @@ python3 zmq_decoder.py -z --dji 127.0.0.1:4221 --zmqsetting 0.0.0.0:4224 --zmqcl
 # Terminal 4 - System Health Monitor
 cd DragonSync
 python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30
-
-# Terminal 5 - (Optional) FPV Detections
-cd DroneID
-fpv_mdn_receiver.py --serial /dev/ttyFPV --baud 115200 --zmq-port 4226 --stationary --debug
 ```
 
+</details>
+
 **iOS App Configuration:**
-- Settings → ZMQ → Host IP address, Port 4224
-- Advanced → Status Port 4225
+- Settings → ZMQ → Host IP address, Port **4224** (telemetry — droneid-go default)
+- Advanced → Status Port **4225** (system health from `wardragon_monitor.py`)
 - Enable ADS-B, MQTT, TAK, webhooks as needed
+
+The app's parser supports both droneid-go (canonical long-form keys, `transport`, `frequency_mhz`, `Frequency Message`, `Auth Message`, area beacons) and legacy zmq_decoder.py (short-form accuracy keys). No app reconfiguration needed when switching backends.
 
 
 
 <img width="736" height="848" alt="63D3EB3E-ACFC-481D-8E17-954FA5F22D40" src="https://github.com/user-attachments/assets/70b2b109-21bd-4de2-a702-7427acb9fc02" />
 
 
-**Persistence:** Use [systemd service files](https://github.com/alphafox02/DragonSync/tree/main/services) for auto-start
+**Persistence:** droneid-go installs its own `zmq-decoder` systemd unit. For the legacy path, use [DragonSync systemd files](https://github.com/alphafox02/DragonSync/tree/main/services).
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│               Detection Sources                     │
-│                                                     │
-│  WiFi RID (2.4/5GHz) ─── wifi_receiver.py           │
-│  Bluetooth RID ────────── sniff_receiver.py         │
-│  SDR Decode ──────────── ANTSDR E200                │
-│  FPV Video ───────────── RX5808 + fpv_mdn_receiver  │
-│  ESP32 Standalone ────── Drag0net WiFi 2.4GHz       │
-└────────────────────┬────────────────────────────────┘
-                     │
+┌──────────────────────────────────────────────────────┐
+│               Detection Sources                      │
+│                                                      │
+│  WiFi RID (2.4/5GHz) ──┐                             │
+│  Bluetooth RID (Sniffle)┤                            │
+│  ESP32 UART passthrough ┼──► droneid-go (Go binary)  │
+│  DJI DroneID (DragonSDR)┘     unified ZMQ tcp:4224   │
+│  FPV Video ─────────── RX5808 + fpv_mdn_receiver     │
+│  ESP32 Standalone ──── Drag0net WiFi 2.4GHz          │
+└────────────────────┬─────────────────────────────────┘
+                     │ JSON (Basic ID / Location/Vector / System / Self-ID / Operator ID / Auth / Frequency Message + transport + frequency_mhz)
         ┌────────────┴────────────┐
         │                         │
  ┌──────▼────────┐       ┌────────▼────────┐
- │ zmq_decoder   │       │ DragonSync.py   │
+ │ droneid-go    │       │ DragonSync.py   │
  │ Port 4224     │       │ (wrapper)       │
  │ (JSON)        │       │ Multicast CoT   │
+ │ + health      │       │ + MQTT/TAK      │
  └──────┬────────┘       └────────┬────────┘
         │                         │
         └──────────┬──────────────┘
@@ -331,7 +371,7 @@ fpv_mdn_receiver.py --serial /dev/ttyFPV --baud 115200 --zmq-port 4226 --station
 ```
 
 **Data Flow:**
-- **Ingestion**: ZMQ JSON (4224 detections, 4225 status), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
+- **Ingestion**: ZMQ JSON (4224 unified detections from droneid-go, 4225 system status from `wardragon_monitor`), Multicast CoT (239.2.3.1:6969), ADS-B HTTP
 - **Processing**: SwiftData persistence, spoof detection, signature analysis, rate limiting
 - **Output**: MQTT, TAK/ATAK, Webhooks & Lattice
 
@@ -341,13 +381,17 @@ fpv_mdn_receiver.py --serial /dev/ttyFPV --baud 115200 --zmq-port 4226 --station
 
 | Task | Command |
 |------|---------|
+| **droneid-go (all sources)** | `sudo /home/dragon/WarDragon/droneid-go/droneid -g -ble auto -uart /dev/esp0 -dji 127.0.0.1:4221 -z -zmqsetting 0.0.0.0:4224` |
+| **droneid-go health probe** | `/home/dragon/WarDragon/droneid-go/droneid-check.sh` |
 | **System Monitor** | `python3 wardragon_monitor.py --zmq_host 0.0.0.0 --zmq_port 4225 --interval 30` |
 | **Static GPS** | `python3 wardragon_monitor.py --static_gps 37.7749,-122.4194,10` |
-| **SDR Decode** | `python3 zmq_decoder.py --dji -z --zmqsetting 0.0.0.0:4224` |
-| **WiFi Sniffer** | `python3 wifi_receiver.py --interface wlan0 -z --zmqsetting 127.0.0.1:4223` |
-| **BT Sniffer** | `python3 Sniffle/python_cli/sniff_receiver.py -l -e -a -z -b 2000000` |
-| **Decoder** | `python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v` |
+| **WiFi only (droneid-go)** | `sudo droneid -i wlan1 -g -z -v` |
+| **BLE only (droneid-go)** | `sudo droneid -ble auto -z -v` |
+| **DJI only (droneid-go)** | `droneid -dji 127.0.0.1:4221 -z -v` |
 | **FPV Detection** | `python3 fpv_mdn_receiver.py -z --zmqsetting 127.0.0.1:4222` |
+| **Legacy WiFi Sniffer** | `python3 wifi_receiver.py --interface wlan0 -z --zmqsetting 127.0.0.1:4223` |
+| **Legacy BT Sniffer** | `python3 Sniffle/python_cli/sniff_receiver.py -l -e -a -z -b 2000000` |
+| **Legacy Decoder** | `python3 zmq_decoder.py -z --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222,127.0.0.1:4223 -v` |
 
 ---
 
