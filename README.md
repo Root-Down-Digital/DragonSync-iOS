@@ -12,6 +12,8 @@
 
 Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing & Randomization Sniffers
 
+Works with the WarDragon Pro out of the box
+
 [Get Started](#installation) • [What It Detects](#what-it-detects) • [In-Action](#in-action) • [Integrations](#integrations) • [Legal](#legal-disclaimer)
 
 </div>
@@ -19,10 +21,6 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 ---
 
 
-
-> [!NOTE]
-> Due to rapid code development of DroneID and Dragonsync, this app will always be a work in progress. You can use the fork of DroneID for FPV & Full ESP32 parsing as described below if outdated.
->
 
 ## What It Detects
 
@@ -144,7 +142,7 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 | Setup | Time | WiFi RID | BT RID | SDR | FPV | Best For |
 |-------|------|----------|--------|-----|-----|----------|
-| **WarDragon Pro** | 5 min | ✓ | ✓ | ✓ | ✓ | Full-spectrum deployment |
+| **WarDragon Pro** | 30 sec | ✓ | ✓ | ✓ | ✓ | Full-spectrum deployment |
 | **Drag0net ESP32** | 15 min | ✓ 2.4GHz | ✗ | ✗ | ✗ | Portable WiFi RID only |
 | **Custom Build** | 60 min | ✓ | ✓ | ✓ | ✓ | DIY / maximum control |
 
@@ -161,7 +159,6 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
-**DOES NOT WORK OUT OF THE BOX, MODS NEEDED TO SERVICE/WRAPPER FILES**
 
 **Quick Start:**
 1. Power on device
@@ -175,7 +172,7 @@ No Network Connection/Data:
 
 A. Toggling the in-app connection off and on is sometimes needed first run for Apple to request connections. 
 
-B. Backend ***WarDragon connection settings*** that may need modification:
+B. Backend ***WarDragon connection settings*** that may need modification if not using droneid-go:
 
    - Edit the Config file: `/home/dragon/WarDragon/DragonSync/config.ini`
      - Change if localhost fails to ***connect to zmq**
@@ -185,7 +182,7 @@ B. Backend ***WarDragon connection settings*** that may need modification:
 
 System Status: 
 
-A. To send data, `wardragon_monitor.py` ***requires GPS lock*** (use `--static_gps` flag or wait for lock)
+A. In prior versions `wardragon_monitor.py` ***requires GPS lock*** (use `--static_gps` flag or wait for lock) to send data. 
 
 B. ***SDR temps*** require DJI firmware on ANTSDR (UHD firmware won't report temps)
 
