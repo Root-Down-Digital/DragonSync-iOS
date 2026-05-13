@@ -62,13 +62,62 @@ struct DronesStatusTab: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Main list
-            if cotViewModel.parsedMessages.isEmpty {
-                emptyStateView
-            } else {
-                VStack(spacing: 0) {
-                    // Map with header - fixed at top
+        // Main list
+        if cotViewModel.parsedMessages.isEmpty {
+            emptyStateView
+                .navigationTitle("Drones")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        // Filter button
+                        Button {
+                            showFilters.toggle()
+                        } label: {
+                            Label("Filter", systemImage: filterOptions.showAll ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Filter drones")
+                        .disabled(true)
+                        
+                        // Sort menu
+                        Menu {
+                            ForEach(SortOption.allCases, id: \.self) { option in
+                                Button {
+                                    sortBy = option
+                                } label: {
+                                    HStack {
+                                        Text(option.rawValue)
+                                        Spacer()
+                                        if sortBy == option {
+                                            Image(systemName: "checkmark")
+                                                .foregroundColor(.accentColor)
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label("Sort", systemImage: "arrow.up.arrow.down.circle")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Sort drones")
+                        .disabled(true)
+                        
+                        // Clear button
+                        Button {
+                            clearAllDrones()
+                        } label: {
+                            Label("Clear All", systemImage: "trash")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Clear all drone detections")
+                        .disabled(true)
+                    }
+                }
+        } else {
+            // Use a List with custom sections instead of nested VStack
+            List {
+                // Map section
+                Section {
                     VStack(spacing: 0) {
                         HStack {
                             Text("OVERVIEW")
@@ -79,82 +128,80 @@ struct DronesStatusTab: View {
                                 .font(.system(.subheadline))
                                 .foregroundColor(.secondary)
                         }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
                         .padding(.bottom, 8)
                         
                         CompactMapView(cotViewModel: cotViewModel, drones: filteredAndSortedDrones)
                             .frame(height: 250)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    
-                    // Scrollable list of drones
-                    List {
-                        Section(header: sectionHeader) {
-                            ForEach(filteredAndSortedDrones) { drone in
-                                MessageRow(message: drone, cotViewModel: cotViewModel, isCompact: false)
-                                    .id(drone.uid)
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowBackground(Color.clear)
                 }
-                .refreshable {
-                    // Pull to refresh on the list
+                
+                // Drones section
+                Section(header: sectionHeader) {
+                    ForEach(filteredAndSortedDrones) { drone in
+                        MessageRow(message: drone, cotViewModel: cotViewModel, isCompact: false)
+                            .id(drone.uid)
+                    }
                 }
             }
-        }
-        .navigationTitle("Drones")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                // Filter button
-                Button {
-                    showFilters.toggle()
-                } label: {
-                    Label("Filter", systemImage: filterOptions.showAll ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Filter drones")
-                
-                // Sort menu
-                Menu {
-                    ForEach(SortOption.allCases, id: \.self) { option in
-                        Button {
-                            sortBy = option
-                        } label: {
-                            HStack {
-                                Text(option.rawValue)
-                                Spacer()
-                                if sortBy == option {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(.accentColor)
+            .listStyle(.insetGrouped)
+            .refreshable {
+                // Pull to refresh on the list
+            }
+            .navigationTitle("Drones")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Filter button
+                    Button {
+                        showFilters.toggle()
+                    } label: {
+                        Label("Filter", systemImage: filterOptions.showAll ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Filter drones")
+                    
+                    // Sort menu
+                    Menu {
+                        ForEach(SortOption.allCases, id: \.self) { option in
+                            Button {
+                                sortBy = option
+                            } label: {
+                                HStack {
+                                    Text(option.rawValue)
+                                    Spacer()
+                                    if sortBy == option {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.accentColor)
+                                    }
                                 }
                             }
                         }
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down.circle")
+                            .labelStyle(.iconOnly)
                     }
-                } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down.circle")
-                        .labelStyle(.iconOnly)
+                    .help("Sort drones")
+                    
+                    // Clear button
+                    Button {
+                        clearAllDrones()
+                    } label: {
+                        Label("Clear All", systemImage: "trash")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Clear all drone detections")
+                    .disabled(cotViewModel.parsedMessages.isEmpty)
                 }
-                .help("Sort drones")
-                
-                // Clear button
-                Button {
-                    clearAllDrones()
-                } label: {
-                    Label("Clear All", systemImage: "trash")
-                        .labelStyle(.iconOnly)
-                }
-                .help("Clear all drone detections")
-                .disabled(cotViewModel.parsedMessages.isEmpty)
             }
-        }
-        .sheet(isPresented: $showFilters) {
-            filterSheet
-        }
-        .sheet(isPresented: $editorManager.isPresented) {
-            DroneInfoEditorSheet()
+            .sheet(isPresented: $showFilters) {
+                filterSheet
+            }
+            .sheet(isPresented: $editorManager.isPresented) {
+                DroneInfoEditorSheet()
+            }
         }
     }
     
