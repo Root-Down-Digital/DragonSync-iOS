@@ -151,42 +151,58 @@ class ZMQHandler: ObservableObject {
         self.lastStatusHandler = onStatus
         
         guard !host.isEmpty && zmqTelemetryPort > 0 && zmqStatusPort > 0 else {
-            print("Invalid connection parameters")
+            print("ZMQ: Invalid connection parameters")
             return
         }
         
         guard !isConnected else {
-            print("Already connected")
+            print("ZMQ: Already connected")
             return
         }
         
-        disconnect()
+        // Ensure we're fully disconnected before connecting
+        if telemetrySocket != nil || statusSocket != nil || context != nil || poller != nil {
+            print("ZMQ: Cleaning up previous connection state before reconnecting")
+            disconnect()
+            // Give it a moment to fully clean up
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        
         shouldContinueRunning = true
         
         do {
             // Initialize context and poller
             context = try SwiftyZeroMQ.Context()
+            guard let context = context else {
+                throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create ZMQ context"])
+            }
+            
             poller = SwiftyZeroMQ.Poller()
+            guard let poller = poller else {
+                throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create ZMQ poller"])
+            }
             
             // Setup telemetry socket
-            telemetrySocket = try context?.socket(.subscribe)
-            try telemetrySocket?.setSubscribe("")
+            telemetrySocket = try context.socket(.subscribe)
             guard let telemetrySocket = telemetrySocket else {
                 throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create telemetry socket"])
             }
+            try telemetrySocket.setSubscribe("")
             try configureSocket(telemetrySocket)
             try telemetrySocket.connect("tcp://\(host):\(zmqTelemetryPort)")
-            try poller?.register(socket: telemetrySocket, flags: .pollIn)
+            try poller.register(socket: telemetrySocket, flags: .pollIn)
+            print("ZMQ: Telemetry socket connected to tcp://\(host):\(zmqTelemetryPort)")
             
             // Setup status socket
-            statusSocket = try context?.socket(.subscribe)
-            try statusSocket?.setSubscribe("")
+            statusSocket = try context.socket(.subscribe)
             guard let statusSocket = statusSocket else {
                 throw NSError(domain: "ZMQHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create status socket"])
             }
+            try statusSocket.setSubscribe("")
             try configureSocket(statusSocket)
             try statusSocket.connect("tcp://\(host):\(zmqStatusPort)")
-            try poller?.register(socket: statusSocket, flags: .pollIn)
+            try poller.register(socket: statusSocket, flags: .pollIn)
+            print("ZMQ: Status socket connected to tcp://\(host):\(zmqStatusPort)")
             
             // Start polling on background queue
             pollingQueue = DispatchQueue(label: "com.wardragon.zmq.polling")
@@ -206,20 +222,20 @@ class ZMQHandler: ObservableObject {
     }
     
     private func startConnectionMonitoring() {
-        // Stop any existing timer
         connectionMonitorTimer?.invalidate()
         
-        // Timer to periodically check the connection
         connectionMonitorTimer = Timer.scheduledTimer(withTimeInterval: connectionCheckInterval, repeats: true) { [weak self] _ in
             guard let self = self, self.isConnected else { return }
             
-            // Check if the connection is still valid
+            if self.isInBackgroundMode {
+                return
+            }
+            
             self.checkConnectionStatus()
         }
         
-        // Make sure the timer runs even when the app is in the background
         if let timer = connectionMonitorTimer {
-            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .default)
         }
     }
     
@@ -332,15 +348,19 @@ class ZMQHandler: ObservableObject {
                                     
                                     if socket === self.telemetrySocket {
                                         // Try to convert any telemetry message to XML
+                                        print("ZMQ: Received telemetry data (\(jsonString.count) bytes)")
                                         let xmlMessages = self.convertTelemetryToXMLArray(jsonString)
                                         if !xmlMessages.isEmpty {
+                                            print("ZMQ: Converted to \(xmlMessages.count) XML message(s), dispatching to handler")
                                             DispatchQueue.main.async {
                                                 for xmlMessage in xmlMessages {
                                                     onTelemetry(xmlMessage)
                                                 }
                                             }
+                                        } else {
+                                            print("ZMQ: ⚠️ Conversion returned empty array - message skipped")
+                                            print("ZMQ: First 200 chars: \(jsonString.prefix(200))")
                                         }
-                                        // If conversion fails, message is silently skipped (likely invalid/incomplete)
                                     } else if socket === self.statusSocket {
                                         // Deduplicate status messages
                                         if self.shouldDispatchStatusMessage(jsonString) {
@@ -388,7 +408,11 @@ class ZMQHandler: ObservableObject {
     
     //MARK: - Message Deduplication
     
-    /// Check if we should dispatch this status message or if it's a duplicate
+    func clearCaches() {
+        lastStatusMessageBySN.removeAll()
+        print("ZMQ: Cleared deduplication caches")
+    }
+    
     private func shouldDispatchStatusMessage(_ jsonString: String) -> Bool {
         // Extract serial number from JSON to use as key
         guard let data = jsonString.data(using: .utf8),
@@ -445,25 +469,34 @@ class ZMQHandler: ObservableObject {
     }
     
     func convertTelemetryToXMLArray(_ jsonString: String) -> [String] {
-        guard let data = jsonString.data(using: .utf8) else { return [] }
+        guard let data = jsonString.data(using: .utf8) else {
+            print("ZMQ: Failed to convert string to UTF8 data")
+            return []
+        }
 
         if let healthObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            isDroneidGoHealthMessage(healthObj) {
+            print("ZMQ: Detected health/heartbeat message, ingesting")
             ingestDroneidGoHealth(healthObj)
             return []
         }
 
+        // Determine message format
         if jsonString.contains("fpv") {
             messageFormat = .fpv
+            print("ZMQ: Detected FPV message format")
         } else if jsonString.contains("\"index\":") &&
             jsonString.contains("\"runtime\":") &&
             (jsonString.range(of: "\"index\":\\s*([1-9]\\d*)", options: .regularExpression) != nil) &&
             (jsonString.range(of: "\"runtime\":\\s*([1-9]\\d*)", options: .regularExpression) != nil) {
             messageFormat = .wifi
+            print("ZMQ: Detected WiFi message format (has index + runtime)")
         } else if jsonString.hasPrefix("[") {
             messageFormat = .bluetooth
+            print("ZMQ: Detected BLE array format")
         } else {
             messageFormat = .sdr
+            print("ZMQ: Detected SDR/unknown format")
         }
         
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
@@ -605,6 +638,7 @@ class ZMQHandler: ObservableObject {
         
         guard let basicId = basicId else {
             // Silently skip - this is expected for incomplete message fragments
+            print("ZMQ: ⚠️ processJsonObject: No valid Basic ID found in message")
             return nil
         }
         
@@ -847,16 +881,21 @@ class ZMQHandler: ObservableObject {
             }
         }()
         
-        // Generate XML
+        // Generate XML with properly escaped remarks content
         let now = ISO8601DateFormatter().string(from: Date())
         let stale = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
+        
+        // Build remarks string and escape special XML characters
+        let remarksContent = "Transmission Type: \(transmissionType), MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)\(droneidGoExtras)"
+        
+        let escapedRemarks = xmlEscape(remarksContent)
         
         let xmlOutput = """
         <event version="2.0" uid="drone-\(droneId)" type="a-u-A-M-H-R" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
             <point lat="\(lat)" lon="\(lon)" hae="\(alt)" ce="9999999" le="999999"/>
             <detail>
                 <track course="\(direction)" speed="\(speed)"/>
-                <remarks>Transmission Type: \(transmissionType), MAC: \(mac), RSSI: \(rssi)dBm, CAA: \(caaReg), ID Type: \(idType), UA Type: \(uaType), Manufacturer: \(manufacturer), Channel: \(String(describing: channel)), PHY: \(String(describing: phy)), Operator ID: \(opID), Access Address: \(String(describing: accessAddress)), Advertisement Mode: \(String(describing: advMode)), Device ID: \(String(describing: deviceId)), Sequence ID: \(String(describing: sequenceId)), Advertisement Address: \(String(describing: advAddress)), Protocol Version: \(protocol_version.isEmpty ? mProtocol : protocol_version), Location/Vector: [Speed: \(speed) m/s, Vert Speed: \(vspeed) m/s, Geodetic Altitude: \(alt) m, Altitude \(operator_alt_geo) m, Classification: \(classification), Height AGL: \(height_agl) m, Height Type: \(height_type), Pressure Altitude: \(pressure_altitude) m, EW Direction Segment: \(ew_dir_segment), Speed Multiplier: \(speed_multiplier), Operational Status: \(op_status), Direction: \(direction), Course: \(direction)°, Track Speed: \(speed) m/s, Timestamp: \(timestamp), Runtime: \(mRuntime), Index: \(mIndex), Status: \(status), Alt Pressure: \(alt_pressure) m, Horizontal Accuracy: \(horiz_acc), Vertical Accuracy: \(vert_acc), Baro Accuracy: \(baro_acc), Speed Accuracy: \(speed_acc)], Text: \(selfIDtext), Description: \(desc), SelfID Description: \(selfIDDesc), System: [Operator Lat: \(operator_lat), Operator Lon: \(operator_lon), Home Lat: \(homeLat), Home Lon: \(homeLon)]\(backendMetadata)\(ridInfo)\(droneidGoExtras)</remarks>
+                <remarks>\(escapedRemarks)</remarks>
                 <contact endpoint="" phone="" callsign="drone-\(droneId)"/>
                 <precisionlocation geopointsrc="GPS" altsrc="GPS"/>
                 <color argb="-256"/>
@@ -967,6 +1006,16 @@ class ZMQHandler: ObservableObject {
 
     
     //MARK - Parse and format data
+    
+    /// XML-escape special characters to prevent parsing errors
+    private func xmlEscape(_ text: String) -> String {
+        return text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
     
     private func formatDoubleValue(_ value: Any?) -> String {
         if let doubleVal = value as? Double {
@@ -1471,25 +1520,56 @@ class ZMQHandler: ObservableObject {
         // Clear deduplication cache
         lastStatusMessageBySN.removeAll()
         
+        // Give polling loop time to exit
+        if pollingQueue != nil {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        
         if let queue = pollingQueue {
             queue.sync {
                 do {
+                    // Unregister sockets from poller before closing
+                    if let telemetrySocket = telemetrySocket {
+                        try? poller?.unregister(socket: telemetrySocket)
+                    }
+                    if let statusSocket = statusSocket {
+                        try? poller?.unregister(socket: statusSocket)
+                    }
+                    
+                    // Close sockets
                     try telemetrySocket?.close()
                     try statusSocket?.close()
+                    
+                    // Terminate context last
                     try context?.terminate()
                 } catch {
                     print("ZMQ Cleanup Error: \(error)")
                 }
                 
+                poller = nil
                 telemetrySocket = nil
                 statusSocket = nil
-                poller = nil
                 context = nil
             }
         } else {
+            // No queue, clean up directly
+            do {
+                if let telemetrySocket = telemetrySocket {
+                    try? poller?.unregister(socket: telemetrySocket)
+                }
+                if let statusSocket = statusSocket {
+                    try? poller?.unregister(socket: statusSocket)
+                }
+                try telemetrySocket?.close()
+                try statusSocket?.close()
+                try context?.terminate()
+            } catch {
+                print("ZMQ Cleanup Error: \(error)")
+            }
+            
+            poller = nil
             telemetrySocket = nil
             statusSocket = nil
-            poller = nil
             context = nil
         }
         

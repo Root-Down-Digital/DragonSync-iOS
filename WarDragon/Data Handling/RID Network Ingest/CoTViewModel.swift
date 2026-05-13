@@ -1193,14 +1193,16 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         parameters.prohibitedInterfaceTypes = [.cellular]
         parameters.requiredInterfaceType = .wifi
         
-        // Configure multicast options
+        // Configure multicast options - FORCE IPv4 only
         if let udpOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
             udpOptions.version = .v4
         }
         
         do {
-            // Create listener on the multicast port
-            cotListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: cachedMulticastPort))
+            // Create listener bound to the multicast port
+            // NWListener will bind to all IPv4 interfaces by default
+            let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
+            cotListener = try NWListener(using: parameters, on: port)
             
             cotListener?.stateUpdateHandler = { [weak self] state in
                 switch state {
@@ -1268,9 +1270,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         parameters.allowLocalEndpointReuse = true
         parameters.requiredInterfaceType = .wifi
         
-        // Set up multicast options
-        if let udpOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
-            udpOptions.version = .v4
+        // Configure IP version for multicast
+        if let ipOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOptions.version = .v4
         }
         
         // Create endpoint for multicast group
@@ -1278,7 +1280,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
         let multicastEndpoint = NWEndpoint.hostPort(host: host, port: port)
         
-        // Create connection to multicast group - THIS triggers the permission dialog
+        print("Joining multicast group \(cachedMulticastHost):\(cachedMulticastPort)")
         multicastConnection = NWConnection(to: multicastEndpoint, using: parameters)
         
         multicastConnection?.stateUpdateHandler = { [weak self] state in
@@ -1291,17 +1293,21 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     print("ERROR: Multicast connection is nil after ready state")
                     return
                 }
+                print("📡 Starting to receive multicast messages...")
                 self.receiveMessages(from: connection)
             case .failed(let error):
                 print("Failed to join multicast group: \(error)")
             case .waiting(let error):
-                print("Waiting to join multicast group: \(error)")
+                print("⏳ Waiting to join multicast group: \(error)")
+            case .cancelled:
+                print("🚫 Multicast connection cancelled")
             default:
-                break
+                print("🔄 Multicast connection state: \(state)")
             }
         }
         
         multicastConnection?.start(queue: listenerQueue)
+        print("🚀 Multicast connection started on queue")
     }
     
     private func startZMQListening() {
@@ -3830,6 +3836,16 @@ extension CoTViewModel {
         return String(format: "%dh %dm", hours, minutes)
     }
     
+    /// XML-escape special characters
+    private func xmlEscape(_ text: String) -> String {
+        return text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+    
     /// Generate CoT XML from message (for TAK server)
     func generateCoTXML(from message: CoTMessage) -> String? {
         let dateFormatter = ISO8601DateFormatter()
@@ -3839,14 +3855,18 @@ extension CoTViewModel {
         let staleDate = Date().addingTimeInterval(900)
         let stale = dateFormatter.string(from: staleDate)
         
+        // Escape special characters in text fields
+        let escapedCallsign = xmlEscape(message.deviceName)
+        let escapedRemarks = xmlEscape(message.selfIDText)
+        
         // Build CoT XML
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <event version="2.0" uid="\(message.uid)" type="a-f-A-M-H-Q" time="\(now)" start="\(now)" stale="\(stale)" how="m-g">
             <point lat="\(message.lat)" lon="\(message.lon)" hae="\(message.alt)" ce="10.0" le="10.0"/>
             <detail>
-                <contact callsign="\(message.deviceName)"/>
-                <remarks>\(message.selfIDText)</remarks>
+                <contact callsign="\(escapedCallsign)"/>
+                <remarks>\(escapedRemarks)</remarks>
                 <track course="\(message.direction ?? "0")" speed="\(message.speed)"/>
                 <uid Droneid="\(message.uid)"/>
             </detail>
