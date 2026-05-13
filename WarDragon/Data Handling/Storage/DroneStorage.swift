@@ -392,7 +392,7 @@ class DroneStorageManager: ObservableObject {
         UserDefaults.standard.synchronize()
         print("🗑️ Cleared UserDefaults backup")
         
-        print("✅ Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
+        print("Deleted all encounters from SwiftData, UserDefaults, and in-memory cache")
     }
     
     func saveToStorage() {
@@ -410,9 +410,9 @@ class DroneStorageManager: ObservableObject {
         if swiftDataCount == 0 && !migrationCompleted {
             print("⚠️ SwiftData empty - migration may not be complete yet")
         } else if swiftDataCount == 0 && migrationCompleted {
-            print("✅ Migration completed - SwiftData is empty (fresh start or all deleted)")
+            print("Migration completed - SwiftData is empty (fresh start or all deleted)")
         } else {
-            print("✅ Using \(swiftDataCount) encounters from SwiftData")
+            print("Using \(swiftDataCount) encounters from SwiftData")
         }
     }
     

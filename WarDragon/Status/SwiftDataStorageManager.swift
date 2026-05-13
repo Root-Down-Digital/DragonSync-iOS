@@ -175,7 +175,7 @@ class SwiftDataStorageManager: ObservableObject {
                 SwiftDataStorageManager.shared.saveIfNeeded()
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .default)
         return timer
     }
     

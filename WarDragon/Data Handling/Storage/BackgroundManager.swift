@@ -52,9 +52,11 @@ final class BackgroundManager {
 
         if useBackgroundTask {
             beginDrainTask()
-            // Reduced refresh interval for better RID message capture
             bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.checkAndRefreshBackgroundTask()
+            }
+            if let timer = bgRefreshTimer {
+                RunLoop.main.add(timer, forMode: .default)
             }
         }
 

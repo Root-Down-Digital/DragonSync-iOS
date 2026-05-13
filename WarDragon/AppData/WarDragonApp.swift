@@ -113,15 +113,11 @@ struct WarDragonApp: App {
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .background:
-                print("App moved to background")
+                print("📱 Scene Phase: Background")
             case .inactive:
-                print("App became inactive")
-                if oldPhase == .background {
-                    print("App terminating - triggering cleanup via scene phase")
-                    BackgroundManager.shared.endAllBackgroundTasks()
-                }
+                print("📱 Scene Phase: Inactive (from \(oldPhase))")
             case .active:
-                print("App became active")
+                print("📱 Scene Phase: Active")
             @unknown default:
                 break
             }
@@ -308,25 +304,60 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                                                selector: #selector(appMovingToForeground),
                                                name: UIApplication.willEnterForegroundNotification,
                                                object: nil)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(handleMemoryWarning),
+                                               name: UIApplication.didReceiveMemoryWarningNotification,
+                                               object: nil)
     }
-
-    @objc private func appMovingToBackground() {
-        // Force save all pending data before backgrounding
+    
+    @objc private func handleMemoryWarning() {
+        print("⚠️ Memory warning received - performing cleanup")
+        
         Task { @MainActor in
             DroneStorageManager.shared.forceSave()
             SwiftDataStorageManager.shared.forceSave()
+            URLCache.shared.removeAllCachedResponses()
+            ZMQHandler.shared.clearCaches()
+            
+            print("Memory warning cleanup completed")
+        }
+    }
+
+    @objc private func appMovingToBackground() {
+        print("📱 App moving to background")
+        
+        Task { @MainActor in
+            DroneStorageManager.shared.forceSave()
+            SwiftDataStorageManager.shared.forceSave()
+            print("Forced data save completed")
         }
         
         if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
-            // Mark that we're going to background with active monitoring
             UserDefaults.standard.set(true, forKey: "BackgroundMonitoringActive")
+            UserDefaults.standard.synchronize()
+            
+            ZMQHandler.shared.setBackgroundMode(true)
+            
             BackgroundManager.shared.startBackgroundProcessing()
+            print("🔄 Background monitoring enabled")
+        } else {
+            UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+            UserDefaults.standard.synchronize()
+            print("⏸️ Background monitoring disabled")
         }
     }
 
     @objc private func appMovingToForeground() {
-        // Clear background monitoring flag when returning to foreground
+        print("📱 App moving to foreground")
+        
+        ZMQHandler.shared.setBackgroundMode(false)
+        
         UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+        UserDefaults.standard.synchronize()
+        
+        BackgroundManager.shared.stopBackgroundProcessing()
+        
+        print("Returned to foreground mode")
     }
 
     private func registerBGTasks() {
@@ -338,6 +369,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func scheduleAllBGTasks() {
+        guard Settings.shared.enableBackgroundDetection else {
+            print("Background detection disabled - skipping BGTask scheduling")
+            return
+        }
+        
         bgIDs.forEach { id in scheduleBGTask(id: id, delay: 15*60) }
     }
 
@@ -356,7 +392,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
     
     func applicationWillTerminate(_ application: UIApplication) {
-        // Clean stop - ensure listening is disabled
         Task { @MainActor in
             Settings.shared.isListening = false
         }

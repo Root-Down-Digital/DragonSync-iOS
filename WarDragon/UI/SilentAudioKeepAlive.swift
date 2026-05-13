@@ -24,6 +24,18 @@ final class SilentAudioKeepAlive {
         configureEngine()
         startEngine()
         registerObservers()
+        
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] timer in
+            guard let self = self, self.started else {
+                timer.invalidate()
+                return
+            }
+            
+            if !self.engine.isRunning {
+                os_log("Audio engine stopped unexpectedly, restarting", log: self.log, type: .error)
+                self.reconfigureAndRestart()
+            }
+        }
     }
     
     func stop() {

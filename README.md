@@ -133,6 +133,10 @@ Remote/Drone ID • ADS-B • FPV Detection • Encrypted Drone ID • Spoofing 
 
 ---
 
+> **Android & Linux users:** See [DragonSync KMP](https://github.com/Root-Down-Digital/dragonsync-kmp) for the cross-platform version targeting Android and Linux desktop.
+
+---
+
 
 # Installation
 
