@@ -404,9 +404,8 @@ class DroneStorageManager: ObservableObject {
         // Check if migration has been completed
         let migrationCompleted = UserDefaults.standard.bool(forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
         
-        // FIXED: Don't eagerly load all encounters - just count them without loading full data
         let swiftDataCount = swiftDataManager.countEncounters()
-        print("📊 Found \(swiftDataCount) encounters in SwiftData (not loaded into memory)")
+        print("Found \(swiftDataCount) encounters in SwiftData (not loaded into memory)")
         
         if swiftDataCount == 0 && !migrationCompleted {
             print("⚠️ SwiftData empty - migration may not be complete yet")

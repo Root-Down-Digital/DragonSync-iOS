@@ -255,23 +255,15 @@ public final class DroneSignatureGenerator {
     }
     
     public func calculateDistance(_ rssi: Double) -> Double {
-        let referenceDistance: Double = 1.0
-        let referenceRSSI: Double = -40.0
-        let pathLossExponent: Double = 2.2
-        let frequencyInGHz = 2.4
-        let signalFrequencyLoss = 20 * log10(frequencyInGHz)
+        // MARK: Log-distance path loss (2.4 GHz, outdoor LOS-ish, n≈2.5)
+        // Reference: -30 dBm @ 10m (typical for WiFi/BLE drone RID transmitters)
+        // Yields: -30→10m, -45→~40m, -60→~158m, -75→~631m, -90→~2.5km
+        let referenceDistance: Double = 10.0
+        let referenceRSSI: Double = -30.0
+        let pathLossExponent: Double = 2.5
 
-        // Calculate distance using log-distance path loss model
-        let distance = pow(10.0, (referenceRSSI - rssi - signalFrequencyLoss) / (10.0 * pathLossExponent)) * referenceDistance
-        
-        //    Using these values, we get:
-            
-        //    RSSI (dBm)   Distance (meters)   Distance (feet)
-        //    --------------------------------------------------
-        //    -22           0.133               0.436
-        //    -97           64.49               211.59
-
-        return max(distance, 0.0)
+        let distance = referenceDistance * pow(10.0, (referenceRSSI - rssi) / (10.0 * pathLossExponent))
+        return max(min(distance, 5000.0), 5.0)
     }
     
 

@@ -47,7 +47,7 @@ class Settings: ObservableObject {
             objectWillChange.send()
         }
     }
-    @AppStorage("multicastHost") var multicastHost: String = "224.0.0.1" {
+    @AppStorage("multicastHost") var multicastHost: String = "239.2.3.1" {
         didSet {
             objectWillChange.send()
         }

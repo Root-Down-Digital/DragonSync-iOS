@@ -16,6 +16,7 @@ struct DronesStatusTab: View {
     @State private var showFilters = false
     @State private var filterOptions = FilterOptions()
     @ObservedObject private var editorManager = DroneEditorManager.shared
+    @State private var isFiltersActive = false
     
     enum SortOption: String, CaseIterable {
         case lastSeen = "Last Seen"
@@ -34,27 +35,22 @@ struct DronesStatusTab: View {
     private var filteredAndSortedDrones: [CoTViewModel.CoTMessage] {
         var drones = cotViewModel.parsedMessages
         
-        // Apply filters
         drones = drones.filter { drone in
-            // Filter by type
             if !filterOptions.showSpoofed && drone.isSpoofed { return false }
             if !filterOptions.showFPV && drone.isFPVDetection { return false }
             if !filterOptions.showNormal && !drone.isSpoofed && !drone.isFPVDetection { return false }
             
-            // Filter by RSSI
             if let rssi = drone.rssi, rssi < filterOptions.minimumRSSI { return false }
             
             return true
         }
         
-        // Sort
         switch sortBy {
         case .lastSeen:
             return drones.sorted { $0.lastUpdated > $1.lastUpdated }
         case .rssi:
             return drones.sorted { ($0.rssi ?? -100) > ($1.rssi ?? -100) }
         case .distance:
-            // Would need user location for true distance sorting
             return drones.sorted { ($0.rssi ?? -100) > ($1.rssi ?? -100) }
         case .manufacturer:
             return drones.sorted { $0.idType < $1.idType }
@@ -73,7 +69,7 @@ struct DronesStatusTab: View {
                         Button {
                             showFilters.toggle()
                         } label: {
-                            Label("Filter", systemImage: filterOptions.showAll ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                            Label("Filter", systemImage: isFiltersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                                 .labelStyle(.iconOnly)
                         }
                         .help("Filter drones")
@@ -114,10 +110,10 @@ struct DronesStatusTab: View {
                     }
                 }
         } else {
-            // Use a List with custom sections instead of nested VStack
-            List {
-                // Map section
-                Section {
+            // Use GeometryReader to properly divide screen space
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    // Map takes 30% of available height
                     VStack(spacing: 0) {
                         HStack {
                             Text("OVERVIEW")
@@ -128,28 +124,35 @@ struct DronesStatusTab: View {
                                 .font(.system(.subheadline))
                                 .foregroundColor(.secondary)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
                         .padding(.bottom, 8)
                         
                         CompactMapView(cotViewModel: cotViewModel, drones: filteredAndSortedDrones)
-                            .frame(height: mapHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .frame(height: geometry.size.height * 0.3)
+                            .cornerRadius(12)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowBackground(Color.clear)
-                }
-                
-                // Drones section
-                Section(header: sectionHeader) {
-                    ForEach(filteredAndSortedDrones) { drone in
-                        MessageRow(message: drone, cotViewModel: cotViewModel, isCompact: false)
-                            .id(drone.uid)
+                    .frame(height: geometry.size.height * 0.3 + 50) // Fixed height for map section
+                    .background(Color(UIColor.systemGroupedBackground))
+                    
+                    // List takes remaining 70% of height
+                    List {
+                        Section(header: sectionHeader) {
+                            ForEach(filteredAndSortedDrones) { drone in
+                                MessageRow(message: drone, cotViewModel: cotViewModel, isCompact: false)
+                                    .id(drone.uid)
+                            }
+                        }
+                    }
+                    .frame(height: geometry.size.height * 0.7 - 50) // Fixed height for list
+                    .listStyle(.insetGrouped)
+                    .scrollContentBackground(.visible)
+                    .refreshable {
+                        // Pull to refresh on the list
                     }
                 }
-            }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.visible)
-            .refreshable {
-                // Pull to refresh on the list
             }
             .navigationTitle("Drones")
             .navigationBarTitleDisplayMode(.large)
@@ -159,7 +162,7 @@ struct DronesStatusTab: View {
                     Button {
                         showFilters.toggle()
                     } label: {
-                        Label("Filter", systemImage: filterOptions.showAll ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                        Label("Filter", systemImage: isFiltersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                             .labelStyle(.iconOnly)
                     }
                     .help("Filter drones")
@@ -278,9 +281,14 @@ struct DronesStatusTab: View {
                 Section {
                     Button("Reset Filters") {
                         filterOptions = FilterOptions()
+                        updateFilterState()
                     }
                 }
             }
+            .onChange(of: filterOptions.showNormal) { updateFilterState() }
+            .onChange(of: filterOptions.showSpoofed) { updateFilterState() }
+            .onChange(of: filterOptions.showFPV) { updateFilterState() }
+            .onChange(of: filterOptions.minimumRSSI) { updateFilterState() }
             .navigationTitle("Filter Drones")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -389,24 +397,13 @@ struct DronesStatusTab: View {
     
     // MARK: - Computed Properties
     
-    /// Dynamically adjust map height for iPad landscape to ensure list is scrollable
+    /// Dynamically adjust map height to ensure drone list is always visible
     private var mapHeight: CGFloat {
         #if targetEnvironment(macCatalyst)
         return 200
         #else
-        // Check if we're on iPad in landscape
-        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        let isLandscape = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?
-            .interfaceOrientation
-            .isLandscape ?? false
-        
-        if isIPad && isLandscape {
-            return 180 // Smaller map on iPad landscape to ensure drone list is visible
-        } else {
-            return 250 // Default height for other configurations
-        }
+        // FIXED HEIGHT: Small enough to ensure list is always scrollable and visible
+        return 180
         #endif
     }
     
@@ -494,6 +491,10 @@ struct DronesStatusTab: View {
         cotViewModel.macIdHistory.removeAll()
         cotViewModel.macProcessing.removeAll()
         cotViewModel.alertRings.removeAll()
+    }
+    
+    private func updateFilterState() {
+        isFiltersActive = !filterOptions.showAll
     }
 }
 
@@ -701,6 +702,35 @@ private struct CompactMapView: View {
     
     var body: some View {
         Map(position: $mapCameraPosition, interactionModes: .all) {
+            // Alert rings for drones without GPS (proximity detections)
+            ForEach(cotViewModel.alertRings.filter { ring in
+                // Only show rings for drones in our filtered list
+                drones.contains { drone in
+                    drone.uid == ring.droneId || 
+                    drone.uid.hasPrefix(ring.droneId.components(separatedBy: "-").dropLast().joined(separator: "-"))
+                }
+            }, id: \.droneId) { ring in
+                // Use minimum 100m radius if ring radius is 0 or too small
+                let displayRadius = ring.radius > 0 ? ring.radius : 100.0
+                
+                MapCircle(center: ring.centerCoordinate, radius: CLLocationDistance(displayRadius))
+                    .foregroundStyle(.red.opacity(0.15))
+                    .stroke(.red, lineWidth: 2)
+                
+                // Center marker for the alert ring
+                Annotation("Detection", coordinate: ring.centerCoordinate) {
+                    ZStack {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 24, height: 24)
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            
             if showPaths {
                 ForEach(drones, id: \.uid) { drone in
                     if let path = getPath(for: drone), path.count > 1 {
@@ -776,11 +806,21 @@ private struct CompactMapView: View {
     private func updateMapRegion() {
         var allCoords: [CLLocationCoordinate2D] = []
         
+        // Add drone coordinates that have valid GPS
         allCoords += drones.compactMap { drone -> CLLocationCoordinate2D? in
             guard let coord = drone.coordinate else { return nil }
             if coord.latitude == 0 && coord.longitude == 0 { return nil }
             return coord
         }
+        
+        // Add alert ring center coordinates for drones without GPS
+        let relevantRings = cotViewModel.alertRings.filter { ring in
+            drones.contains { drone in
+                drone.uid == ring.droneId || 
+                drone.uid.hasPrefix(ring.droneId.components(separatedBy: "-").dropLast().joined(separator: "-"))
+            }
+        }
+        allCoords += relevantRings.map { $0.centerCoordinate }
         
         guard !allCoords.isEmpty else {
             mapCameraPosition = .automatic

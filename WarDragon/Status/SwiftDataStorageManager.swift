@@ -82,7 +82,7 @@ class SwiftDataStorageManager: ObservableObject {
         
         // Log based on severity
         if duration > PerformanceThresholds.criticalOperation {
-            logger.error("CRITICAL: Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
+            logger.error("Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
         } else if duration > PerformanceThresholds.slowOperation {
             logger.warning("SLOW: Storage operation '\(operation)' took \(String(format: "%.3f", duration))s")
         } else if duration > PerformanceThresholds.moderateOperation {
@@ -90,7 +90,7 @@ class SwiftDataStorageManager: ObservableObject {
         }
         // Fast operations (< 50ms) are not logged to reduce noise
     }
-    
+      
     /// Measure and log storage operation performance
     @discardableResult
     private func measureOperation<T>(_ operation: String, block: () throws -> T) rethrows -> T {
@@ -496,6 +496,12 @@ class SwiftDataStorageManager: ObservableObject {
                     }) {
                         encounter.flightPoints[replaceIndex] = proximityPoint
                     }
+                }
+                
+                if let viewModel = cotViewModel {
+                    var proximityMessage = message
+                    proximityMessage.rssi = rssi
+                    viewModel.updateAlertRing(for: proximityMessage)
                 }
             }
         }

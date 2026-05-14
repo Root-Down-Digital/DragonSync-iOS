@@ -513,7 +513,10 @@ struct LiveMapView: View {
                             return isMatch && hasZeroCoords
                         }
                     }, id: \.id) { ring in
-                        MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                        // Ensure minimum visible radius (fallback to 100m if radius is 0 or too small)
+                        let displayRadius = ring.radius > 0 ? ring.radius : 100.0
+                        
+                        MapCircle(center: ring.centerCoordinate, radius: displayRadius)
                             .foregroundStyle(.yellow.opacity(0.1))
                             .stroke(.yellow, lineWidth: 2)
                         
@@ -522,7 +525,7 @@ struct LiveMapView: View {
                             VStack {
                                 Text("Encrypted Drone")
                                     .font(.caption)
-                                Text("\(Int(ring.radius))m radius")
+                                Text("\(Int(displayRadius))m radius")
                                     .font(.caption)
                                     .foregroundColor(.primary)
                             }

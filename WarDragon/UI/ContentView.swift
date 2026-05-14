@@ -312,36 +312,35 @@ struct ContentView: View {
     }
     
     private var bothDetectionsList: some View {
-        List {
-            Section {
-                unifiedMapView(showAircraft: true)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .frame(height: mapHeight)
-            }
-            
-            if hasDrones {
-                Section("Drones (\(cotViewModel.parsedMessages.count))") {
-                    ForEach(cotViewModel.parsedMessages) { item in
-                        MessageRow(
-                            message: item,
-                            cotViewModel: cotViewModel,
-                            isCompact: true
-                        )
-                        .id(item.uid)
+        VStack(spacing: 0) {
+            unifiedMapView(showAircraft: true)
+                .frame(height: mapHeight)
+                .padding(.vertical, 4)
+
+            List {
+                if hasDrones {
+                    Section("Drones (\(cotViewModel.parsedMessages.count))") {
+                        ForEach(cotViewModel.parsedMessages) { item in
+                            MessageRow(
+                                message: item,
+                                cotViewModel: cotViewModel,
+                                isCompact: true
+                            )
+                            .id(item.uid)
+                        }
+                    }
+                }
+
+                if hasAircraft {
+                    Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
+                        ForEach(cotViewModel.aircraftTracks) { aircraft in
+                            AircraftRow(aircraft: aircraft)
+                        }
                     }
                 }
             }
-            
-            if hasAircraft {
-                Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
-                    ForEach(cotViewModel.aircraftTracks) { aircraft in
-                        AircraftRow(aircraft: aircraft)
-                    }
-                }
-            }
+            .scrollContentBackground(.visible)
         }
-        .scrollContentBackground(.visible)
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
@@ -519,9 +518,9 @@ struct ContentView: View {
             .first?.interfaceOrientation.isLandscape ?? false
         
         if isIPad && isLandscape {
-            return 180 // Smaller map on iPad landscape to ensure drone list is visible
+            return 280 // Fits map + bottom controls + "Tap to view full map" capsule
         } else {
-            return 250 // Default height for other configurations
+            return 320 // Portrait: extra room for stats panel + map controls + capsule
         }
         #endif
     }
@@ -604,27 +603,26 @@ struct ContentView: View {
     
     private var droneList: some View {
         ScrollViewReader { proxy in
-            List {
-                Section {
-                    unifiedMapView(showAircraft: false)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                        .frame(height: mapHeight)
-                }
-                
-                Section {
-                    ForEach(cotViewModel.parsedMessages) { item in
-                        MessageRow(
-                            message: item,
-                            cotViewModel: cotViewModel,
-                            isCompact: true
-                        )
-                        .id(item.uid)
+            VStack(spacing: 0) {
+                unifiedMapView(showAircraft: false)
+                    .frame(height: mapHeight)
+                    .padding(.vertical, 4)
+
+                List {
+                    Section {
+                        ForEach(cotViewModel.parsedMessages) { item in
+                            MessageRow(
+                                message: item,
+                                cotViewModel: cotViewModel,
+                                isCompact: true
+                            )
+                            .id(item.uid)
+                        }
                     }
                 }
+                .listStyle(.inset)
+                .scrollContentBackground(.visible)
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.visible)
             .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
                 if oldMessages.count < newMessages.count {
                     if let latest = newMessages.last {
@@ -1002,10 +1000,11 @@ private struct LiveMapPreview: View {
                     
                     ForEach(cotViewModel.alertRings) { ring in
                         if !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
-                            MapCircle(center: ring.centerCoordinate, radius: ring.radius)
+                            let displayRadius = ring.radius > 5 ? ring.radius : 50.0
+                            MapCircle(center: ring.centerCoordinate, radius: displayRadius)
                                 .foregroundStyle(.orange.opacity(0.1))
                                 .stroke(.orange, lineWidth: 2)
-                            
+
                             Annotation("Monitor", coordinate: ring.centerCoordinate) {
                                 Image(systemName: "dot.radiowaves.left.and.right")
                                     .foregroundColor(.orange)
@@ -1345,20 +1344,16 @@ private struct LiveMapPreview: View {
     private static func calculateRegion(cotViewModel: CoTViewModel, showAircraft: Bool) -> MKCoordinateRegion {
         var allCoords: [CLLocationCoordinate2D] = []
         
-        // Always add drone coordinates (excluding FPV and 0/0)
+        // Add drone coordinates. For FPV or any drone missing valid GPS, fall back to alert ring center.
         allCoords += cotViewModel.parsedMessages.compactMap { message -> CLLocationCoordinate2D? in
-            // For FPV detections, try to use alert ring center instead of drone coordinate
-            if message.isFPVDetection {
+            let coord = message.coordinate
+            let hasValidGPS = coord.map { !($0.latitude == 0 && $0.longitude == 0) } ?? false
+
+            if !hasValidGPS {
                 if let ring = cotViewModel.alertRings.first(where: { $0.droneId == message.uid }),
                    !(ring.centerCoordinate.latitude == 0 && ring.centerCoordinate.longitude == 0) {
                     return ring.centerCoordinate
                 }
-                return nil
-            }
-            
-            guard let coord = message.coordinate else { return nil }
-            
-            if coord.latitude == 0 && coord.longitude == 0 {
                 return nil
             }
             return coord
