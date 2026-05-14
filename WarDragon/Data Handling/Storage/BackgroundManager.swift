@@ -285,10 +285,9 @@ final class BackgroundManager: @unchecked Sendable {
             let memoryMB = Double(taskInfo.resident_size) / 1024.0 / 1024.0
             
             // iOS kills background apps >50MB. You're at 123MB
-            if memoryMB > 40 {
-                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - iOS will kill us soon!")
+            if memoryMB > 70 {
+                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - iOS will kill us soon..maybe")
                 
-                // AGGRESSIVE cleanup
                 ZMQHandler.shared.clearCaches()
                 URLCache.shared.removeAllCachedResponses()
                 
@@ -298,8 +297,8 @@ final class BackgroundManager: @unchecked Sendable {
                 }
                 
                 // If still critical, stop background processing to avoid termination
-                if memoryMB > 70 {
-                    print("❌ CRITICAL MEMORY (\(String(format: "%.1f", memoryMB))MB) - STOPPING to avoid termination")
+                if memoryMB > 90 {
+                    print("❌ CRITICAL MEMORY (\(String(format: "%.1f", memoryMB))MB) - Pausing to avoid termination")
                     _internalStopBackgroundProcessing()
                 }
             }

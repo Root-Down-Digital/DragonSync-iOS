@@ -317,6 +317,7 @@ struct ContentView: View {
                 unifiedMapView(showAircraft: true)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                    .frame(height: mapHeight)
             }
             
             if hasDrones {
@@ -340,6 +341,7 @@ struct ContentView: View {
                 }
             }
         }
+        .scrollContentBackground(.visible)
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
@@ -505,6 +507,25 @@ struct ContentView: View {
     
     // MARK: - Helper Properties
     
+    /// Dynamically adjust map height for iPad landscape to ensure list is scrollable
+    private var mapHeight: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 200
+        #else
+        // Check if we're on iPad in landscape
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        let isLandscape = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.interfaceOrientation.isLandscape ?? false
+        
+        if isIPad && isLandscape {
+            return 180 // Smaller map on iPad landscape to ensure drone list is visible
+        } else {
+            return 250 // Default height for other configurations
+        }
+        #endif
+    }
+    
     private var hasDrones: Bool {
         !cotViewModel.parsedMessages.isEmpty
     }
@@ -588,6 +609,7 @@ struct ContentView: View {
                     unifiedMapView(showAircraft: false)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
+                        .frame(height: mapHeight)
                 }
                 
                 Section {
@@ -602,6 +624,7 @@ struct ContentView: View {
                 }
             }
             .listStyle(.inset)
+            .scrollContentBackground(.visible)
             .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
                 if oldMessages.count < newMessages.count {
                     if let latest = newMessages.last {
@@ -920,9 +943,40 @@ private struct LiveMapPreview: View {
         self._showUnifiedMap = showUnifiedMap
     }
     
+    /// Position controls at bottom on iPad landscape to avoid header overlap
+    private var controlsAlignment: Alignment {
+        #if targetEnvironment(macCatalyst)
+        return .top
+        #else
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        let isLandscape = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.interfaceOrientation.isLandscape ?? false
+        
+        return (isIPad && isLandscape) ? .bottom : .top
+        #endif
+    }
+    
+    /// Adjust padding based on control position
+    private var controlsPadding: EdgeInsets {
+        #if targetEnvironment(macCatalyst)
+        return EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0)
+        #else
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        let isLandscape = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.interfaceOrientation.isLandscape ?? false
+        
+        // On iPad landscape, move controls to bottom with extra padding to avoid "Tap to view full map" button
+        return (isIPad && isLandscape) 
+            ? EdgeInsets(top: 0, leading: 0, bottom: 45, trailing: 0)
+            : EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0)
+        #endif
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .top) {
+            ZStack(alignment: controlsAlignment) {
                 Map(position: $mapCameraPosition) {
                     if showFlightPaths {
                         ForEach(cotViewModel.parsedMessages) { message in
@@ -1126,7 +1180,7 @@ private struct LiveMapPreview: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
+                .padding(controlsPadding)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(

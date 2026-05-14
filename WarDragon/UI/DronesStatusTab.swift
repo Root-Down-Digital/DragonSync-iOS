@@ -131,7 +131,7 @@ struct DronesStatusTab: View {
                         .padding(.bottom, 8)
                         
                         CompactMapView(cotViewModel: cotViewModel, drones: filteredAndSortedDrones)
-                            .frame(height: 250)
+                            .frame(height: mapHeight)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -147,6 +147,7 @@ struct DronesStatusTab: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.visible)
             .refreshable {
                 // Pull to refresh on the list
             }
@@ -387,6 +388,23 @@ struct DronesStatusTab: View {
     }
     
     // MARK: - Computed Properties
+    
+    /// Dynamically adjust map height for iPad landscape to ensure list is scrollable
+    private var mapHeight: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 200
+        #else
+        // Check if we're on iPad in landscape
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        let isLandscape = UIApplication.shared.windows.first?.windowScene?.interfaceOrientation.isLandscape ?? false
+        
+        if isIPad && isLandscape {
+            return 180 // Smaller map on iPad landscape to ensure drone list is visible
+        } else {
+            return 250 // Default height for other configurations
+        }
+        #endif
+    }
     
     private var uniqueMACCount: Int {
         Set(cotViewModel.parsedMessages.compactMap { $0.mac }).count
