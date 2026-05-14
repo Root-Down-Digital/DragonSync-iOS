@@ -396,7 +396,11 @@ struct DronesStatusTab: View {
         #else
         // Check if we're on iPad in landscape
         let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        let isLandscape = UIApplication.shared.windows.first?.windowScene?.interfaceOrientation.isLandscape ?? false
+        let isLandscape = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .interfaceOrientation
+            .isLandscape ?? false
         
         if isIPad && isLandscape {
             return 180 // Smaller map on iPad landscape to ensure drone list is visible
