@@ -57,7 +57,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cachedMessageProcessingInterval: TimeInterval = 0.5
     private var cachedBackgroundMessageInterval: TimeInterval = 2.0
     private var cachedIsListening: Bool = false
-    private var cachedEnableBackgroundDetection: Bool = false
     
     private let listenerQueue = DispatchQueue(label: "CoTListenerQueue")
     public var isListeningCot = false
@@ -726,10 +725,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
             self.cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
             self.cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
-            self.cachedIsListening = false
-            self.cachedEnableBackgroundDetection = Settings.shared.enableBackgroundDetection
             
-            Settings.shared.isListening = false
+            // Don't force isListening to false - preserve user's previous state
+            self.cachedIsListening = Settings.shared.isListening
             self.isListeningCot = false
             
             self.checkPermissions()
@@ -858,22 +856,66 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
         cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
         cachedIsListening = Settings.shared.isListening
-        cachedEnableBackgroundDetection = Settings.shared.enableBackgroundDetection
     }
     
     
     @objc private func handleAppDidEnterBackground() {
+        print("App entering background - ALWAYS continue monitoring")
         isInBackground = true
+        
+        // Pause UI-related timers (they consume battery and aren't needed in background)
+        inactivityCleanupTimer?.invalidate()
+        inactivityCleanupTimer = nil
+        
+        backgroundMaintenanceTimer?.invalidate()
+        backgroundMaintenanceTimer = nil
+        
+        // Save current state before going to background
         Task { @MainActor in
-            prepareForBackgroundExpiry()
+            self.alertRings.removeAll()
+            print("Cleared alert rings for background (will restore on foreground)")
+            
+            DroneStorageManager.shared.forceSave()
+            SwiftDataStorageManager.shared.forceSave()
+            
+            print("Background monitoring - continuing detection")
+            self.prepareForBackgroundExpiry()
         }
     }
 
     @objc private func handleAppWillEnterForeground() {
+        print("App entering foreground - resuming")
         isInBackground = false
-        // Process any buffered messages from background
-        processBackgroundBuffer()
-        resumeFromBackground()
+        
+        // Stop any background tasks
+        BackgroundManager.shared.endAllBackgroundTasks()
+
+        Task { @MainActor in
+            // Restart timers
+            self.startInactivityCleanupTimer()
+            
+            // Restore alert rings
+            self.restoreAlertRingsFromStorage()
+            
+            // Process any buffered messages
+            self.processBackgroundBuffer()
+            
+            // Check if we need to reconnect
+            if Settings.shared.isListening {
+                // Only reconnect if we're not already connected
+                if !self.isListeningCot {
+                    print("Reconnecting after foreground transition...")
+                    self.resumeFromBackground()
+                } else {
+                    print("Already connected, skipping reconnect")
+                }
+            } else {
+                print("Not listening, skipping reconnect")
+            }
+            
+            // Force UI refresh
+            self.objectWillChange.send()
+        }
     }
     
     @objc private func handleAppWillTerminate() {
@@ -980,10 +1022,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         // Stop any existing timer
         inactivityCleanupTimer?.invalidate()
         
-        // Run cleanup every 10 seconds to check for stale detections
-        inactivityCleanupTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        // REDUCED: Run cleanup every 60 seconds instead of 10 to reduce background load
+        // iOS will kill the app if we do too much work in background
+        inactivityCleanupTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            // Only run cleanup if app is in foreground
+            guard let self = self, !self.isInBackground else { return }
             Task { @MainActor in
-                await self?.cleanupInactiveDetections()
+                await self.cleanupInactiveDetections()
             }
         }
     }
@@ -1171,10 +1216,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.startZMQListening()
             }
             
-            // Start background processing if enabled
-            if self.cachedEnableBackgroundDetection {
-                self.backgroundManager.startBackgroundProcessing()
-            }
+            // Start background processing when listening
+            self.backgroundManager.startBackgroundProcessing()
             
             // Clear reconnecting flag after a delay to ensure connection is established
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -1302,7 +1345,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             case .cancelled:
                 print("🚫 Multicast connection cancelled")
             default:
-                print("🔄 Multicast connection state: \(state)")
+                print("Multicast connection state: \(state)")
             }
         }
         
@@ -1905,8 +1948,17 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         return formatter.string(from: staleTime)
     }
     
-    // Make RSSI rings for history encounters in storage
     func restoreAlertRingsFromStorage() {
+        guard !isInBackground else {
+            print("⚠️ Skipping alert ring restoration while in background")
+            return
+        }
+        
+        guard UIApplication.shared.applicationState == .active else {
+            print("⚠️ Skipping alert ring restoration - app not active")
+            return
+        }
+        
         Task { @MainActor in
             print("Restoring alert rings from storage...")
             
@@ -2193,46 +2245,46 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self else { return }
             
-            defer {
-                if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
-                    self.receiveMessages(from: connection, isZMQ: isZMQ)
-                } else {
-                    connection.cancel()
-                }
-            }
-            
             if let error = error {
                 print("Error receiving data: \(error.localizedDescription)")
+                if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
+                    self.receiveMessages(from: connection, isZMQ: isZMQ)
+                }
                 return
             }
             
             guard let data = data, !data.isEmpty else {
-                print("No data received.")
-                return
-            }
-            
-            // Adaptive throttling based on app state
-            let now = Date()
-            let throttleInterval = self.isInBackground ?
-                self.cachedBackgroundMessageInterval :
-                self.cachedMessageProcessingInterval
-                
-            if now.timeIntervalSince(self.lastProcessTime) < throttleInterval {
-                // In background mode, buffer messages instead of dropping them
-                if self.isInBackground {
-                    self.backgroundBufferLock.lock()
-                    self.backgroundMessageBuffer.append(data)
-                    // Keep only last 50 messages to prevent memory issues
-                    if self.backgroundMessageBuffer.count > 50 {
-                        self.backgroundMessageBuffer.removeFirst(self.backgroundMessageBuffer.count - 50)
-                    }
-                    self.backgroundBufferLock.unlock()
+                if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
+                    self.receiveMessages(from: connection, isZMQ: isZMQ)
                 }
                 return
             }
-            self.lastProcessTime = now
             
-            self.processIncomingMessage(data)
+            if self.isInBackground && UIApplication.shared.applicationState == .background {
+                self.backgroundBufferLock.lock()
+                self.backgroundMessageBuffer.append(data)
+                if self.backgroundMessageBuffer.count > 100 {
+                    self.backgroundMessageBuffer.removeFirst()
+                }
+                self.backgroundBufferLock.unlock()
+                
+                if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
+                    self.receiveMessages(from: connection, isZMQ: isZMQ)
+                }
+                return
+            }
+            
+            let now = Date()
+            let processingInterval = self.isInBackground ? 5.0 : self.cachedMessageProcessingInterval
+            
+            if now.timeIntervalSince(self.lastProcessTime) >= processingInterval {
+                self.lastProcessTime = now
+                self.processIncomingMessage(data)
+            }
+            
+            if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
+                self.receiveMessages(from: connection, isZMQ: isZMQ)
+            }
         }
     }
 
@@ -2420,77 +2472,41 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     @MainActor
     func prepareForBackgroundExpiry() {
-        // Record state for potential resumption
-        let wasListening = isListeningCot
+        print("WarDragon preparing for background - ALWAYS monitoring")
         
-        // Log background transition
-        print("WarDragon preparing for background expiry...")
+        // Don't end existing tasks - the silent audio will keep us alive indefinitely
         
-        isReconnecting = true
+        // Start background processing (this also starts SilentAudioKeepAlive)
+        BackgroundManager.shared.startBackgroundProcessing()
         
-        // For ZMQ reduce activity but maintain connection
-        if let zmqHandler = self.zmqHandler {
-            if zmqHandler.isConnected {
-                print("Reducing ZMQ activity for background mode")
-                zmqHandler.setBackgroundMode(true)
-                
-                // Force a subscription check to ensure we're still connected
-                verifyZMQSubscription()
-            }
-        }
-        
-        // For multicast connections keep open but reduce rate
-        if multicastConnection != nil {
-            print("Reducing multicast processing for background mode")
-        }
-        
-        objectWillChange.send()
-        
-        if wasListening {
-            // Only start background processing if not already running and invalidate old timers
-            if !BackgroundManager.shared.isBackgroundModeActive {
-                BackgroundManager.shared.startBackgroundProcessing()
-            }
-            backgroundMaintenanceTimer?.invalidate()
-            
-            // Set a timer to periodically check status
-            backgroundMaintenanceTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { @Sendable [weak self] timer in
-                Task { @MainActor [weak self] in
-                    guard let self = self, self.isListeningCot else {
-                        timer.invalidate()
-                        self?.backgroundMaintenanceTimer = nil
-                        return
-                    }
-                    print("Background maintenance check: \(Date())")
-                    self.verifyZMQSubscription()
-                }
-            }
-        }
-        print("WarDragon background preparation complete")
+        print("Background detection enabled - no timeout, audio keepalive active")
     }
     
     func resumeFromBackground() {
         print("WarDragon resuming from background...")
         
-        // Clear the reconnecting flag
+        // Clear reconnecting flag
         isReconnecting = false
         
-        // Restore ZMQ to normal operation if it was modified
-        if let zmqHandler = self.zmqHandler, zmqHandler.isConnected {
-            print("Restoring ZMQ normal activity")
-            zmqHandler.setBackgroundMode(false)
+        Task { @MainActor in
+            guard Settings.shared.isListening else {
+                print("Not listening, skipping resume")
+                return
+            }
             
-            // Verify subscription is still active
-            verifyZMQSubscription()
+            // Check if already connected
+            if isListeningCot {
+                print("Already listening, just refreshing state")
+                self.objectWillChange.send()
+                return
+            }
+            
+            // Not connected but should be - reconnect
+            print("Restarting listening after background...")
+            startListening()
+            objectWillChange.send()
+            print("WarDragon successfully resumed from background")
         }
-        
-        // Stop background task management
-        BackgroundManager.shared.stopBackgroundProcessing()
-        
-        // Force an update to UI
-        objectWillChange.send()
-        
-        print("WarDragon successfully resumed from background")
     }
     
     // Reconnect BG if we need to

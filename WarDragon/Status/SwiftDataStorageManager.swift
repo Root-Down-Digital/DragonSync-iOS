@@ -189,6 +189,10 @@ class SwiftDataStorageManager: ObservableObject {
     
     private func saveIfNeeded() {
         guard needsSave, let context = modelContext else { return }
+        guard context.hasChanges else {
+            needsSave = false
+            return
+        }
         
         measureOperation("Auto-save") {
             do {
@@ -202,6 +206,11 @@ class SwiftDataStorageManager: ObservableObject {
     
     func forceSave() {
         guard let context = modelContext else { return }
+        guard context.hasChanges else {
+            needsSave = false
+            return
+        }
+        
         measureOperation("Force save") {
             do {
                 try context.save()
@@ -211,6 +220,37 @@ class SwiftDataStorageManager: ObservableObject {
                 logger.error("Force save failed: \(error.localizedDescription)")
             }
         }
+    }
+    
+    /// Release heavy data from memory when entering background
+    /// This clears the SwiftData context cache to free up memory
+    func releaseBackgroundMemory() {
+        guard let context = modelContext else { return }
+        
+        if context.hasChanges {
+            try? context.save()
+        }
+        
+        // Clear local caches
+        macToIdCache.removeAll()
+        caaToIdCache.removeAll()
+        pendingCacheUpdates.removeAll()
+        operationMetrics.removeAll()
+        
+        // Nil out the modelContext temporarily to force release of cached objects
+        // Save reference and restore after a brief moment
+        let savedContext = modelContext
+        modelContext = nil
+        
+        // Force a brief delay to allow Swift to release the objects
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            await MainActor.run {
+                self.modelContext = savedContext
+            }
+        }
+        
+        logger.info("Released background memory - cleared caches and released context")
     }
     
     // MARK: - Batched Cache Updates (Performance Optimization)
@@ -626,6 +666,23 @@ class SwiftDataStorageManager: ObservableObject {
         } // End measureOperation
     }
     
+    /// Count total encounters without loading them into memory
+    /// This is much more memory-efficient than fetchAllEncounters().count
+    func countEncounters() -> Int {
+        return measureOperation("countEncounters") {
+            guard let context = modelContext else { return 0 }
+            
+            let descriptor = FetchDescriptor<StoredDroneEncounter>()
+            
+            do {
+                return try context.fetchCount(descriptor)
+            } catch {
+                logger.error("Failed to count encounters: \(error.localizedDescription)")
+                return 0
+            }
+        }
+    }
+    
     func fetchAllEncounters() -> [StoredDroneEncounter] {
         return measureOperation("fetchAllEncounters") {
             guard let context = modelContext else { return [] }
@@ -968,44 +1025,32 @@ class SwiftDataStorageManager: ObservableObject {
         var descriptor = FetchDescriptor<StoredDroneEncounter>(
             sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
         )
-        descriptor.relationshipKeyPathsForPrefetching = [
-            \.flightPoints,
-            \.signatures
-        ]
+        descriptor.fetchLimit = 10
+        descriptor.relationshipKeyPathsForPrefetching = []
         
-        let allEncounters: [StoredDroneEncounter]
         do {
-            allEncounters = try context.fetch(descriptor).filter { $0.modelContext != nil }
-        } catch {
-            logger.error("Failed to fetch encounters for repair: \(error.localizedDescription)")
-            return
-        }
-        
-        var repairedCount = 0
-        
-        for encounter in allEncounters {
-            let needsRepair = encounter.cachedFlightPointCount == 0 || 
-                             encounter.cachedSignatureCount == 0
+            let allEncounters = try context.fetch(descriptor).filter { $0.modelContext != nil }
             
-            if needsRepair {
-                encounter.updateCachedStats()
-                repairedCount += 1
+            var repairedCount = 0
+            
+            for encounter in allEncounters {
+                let needsRepair = encounter.cachedFlightPointCount == 0 || 
+                                 encounter.cachedSignatureCount == 0
                 
-                if repairedCount % 10 == 0 {
-                    logger.info("Repaired \(repairedCount) encounters so far...")
+                if needsRepair {
+                    encounter.updateCachedStats()
+                    repairedCount += 1
                 }
             }
-        }
-        
-        if repairedCount > 0 {
-            do {
+            
+            if repairedCount > 0 {
                 try context.save()
                 logger.info("Repaired cached stats for \(repairedCount) encounters")
-            } catch {
-                logger.error("Failed to save repaired stats: \(error.localizedDescription)")
+            } else {
+                logger.info("All encounters have valid cached stats")
             }
-        } else {
-            logger.info("All encounters have valid cached stats")
+        } catch {
+            logger.error("Failed to repair stats: \(error.localizedDescription)")
         }
     }
     
@@ -1289,7 +1334,8 @@ class SwiftDataStorageManager: ObservableObject {
         
         do {
             var descriptor = FetchDescriptor<StoredDroneEncounter>()
-            descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints, \.signatures]
+            descriptor.fetchLimit = 10
+            descriptor.relationshipKeyPathsForPrefetching = []
             
             let allEncounters = try context.fetch(descriptor).filter { encounter in
                 guard encounter.modelContext != nil else { return false }
@@ -1329,7 +1375,8 @@ class SwiftDataStorageManager: ObservableObject {
         
         do {
             var descriptor = FetchDescriptor<StoredDroneEncounter>()
-            descriptor.relationshipKeyPathsForPrefetching = [\.flightPoints]
+            descriptor.fetchLimit = 10
+            descriptor.relationshipKeyPathsForPrefetching = []
             
             let allEncounters = try context.fetch(descriptor).filter { $0.modelContext != nil }
             

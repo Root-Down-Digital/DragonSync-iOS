@@ -1672,54 +1672,57 @@ extension ZMQHandler {
 
     @discardableResult
     func drainOnce() -> Bool {
-        guard isConnected,
-              pollingLock.try() else {
-            return false
-        }
-        
-        defer { pollingLock.unlock() }
-        
-        guard !isPollingActive,
-              let telemetrySocket = self.telemetrySocket,
-              let statusSocket = self.statusSocket else {
-            return false
-        }
-        
-        var drained = false
-
-        do {
-            if let payload = try telemetrySocket.recv(bufferLength: 32768),
-               !payload.isEmpty,
-               let text = String(data: payload, encoding: .utf8) {
-                lastTelemetryHandler(text)
-                drained = true
+        // CRITICAL: Wrap entire function in autoreleasepool to prevent memory buildup in background
+        return autoreleasepool {
+            guard isConnected,
+                  pollingLock.try() else {
+                return false
             }
-        } catch let error as SwiftyZeroMQ.ZeroMQError {
-            if error.description != "Resource temporarily unavailable" &&
-               error.description != "Operation would block" {
+            
+            defer { pollingLock.unlock() }
+            
+            guard !isPollingActive,
+                  let telemetrySocket = self.telemetrySocket,
+                  let statusSocket = self.statusSocket else {
+                return false
+            }
+            
+            var drained = false
+
+            do {
+                if let payload = try telemetrySocket.recv(bufferLength: 32768),
+                   !payload.isEmpty,
+                   let text = String(data: payload, encoding: .utf8) {
+                    lastTelemetryHandler(text)
+                    drained = true
+                }
+            } catch let error as SwiftyZeroMQ.ZeroMQError {
+                if error.description != "Resource temporarily unavailable" &&
+                   error.description != "Operation would block" {
+                    print("ZMQ telemetry drain error: \(error)")
+                }
+            } catch {
                 print("ZMQ telemetry drain error: \(error)")
             }
-        } catch {
-            print("ZMQ telemetry drain error: \(error)")
-        }
-        
-        do {
-            if let payload = try statusSocket.recv(bufferLength: 32768),
-               !payload.isEmpty,
-               let text = String(data: payload, encoding: .utf8) {
-                lastStatusHandler(text)
-                drained = true
-            }
-        } catch let error as SwiftyZeroMQ.ZeroMQError {
-            if error.description != "Resource temporarily unavailable" &&
-               error.description != "Operation would block" {
+            
+            do {
+                if let payload = try statusSocket.recv(bufferLength: 32768),
+                   !payload.isEmpty,
+                   let text = String(data: payload, encoding: .utf8) {
+                    lastStatusHandler(text)
+                    drained = true
+                }
+            } catch let error as SwiftyZeroMQ.ZeroMQError {
+                if error.description != "Resource temporarily unavailable" &&
+                   error.description != "Operation would block" {
+                    print("ZMQ status drain error: \(error)")
+                }
+            } catch {
                 print("ZMQ status drain error: \(error)")
             }
-        } catch {
-            print("ZMQ status drain error: \(error)")
+            
+            return drained
         }
-        
-        return drained
     }
 
 }

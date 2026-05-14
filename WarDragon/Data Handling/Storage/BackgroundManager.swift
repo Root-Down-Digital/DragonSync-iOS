@@ -10,7 +10,7 @@ import Network
 import UIKit
 import AVFAudio
 
-final class BackgroundManager {
+final class BackgroundManager: @unchecked Sendable {
 
     static let shared = BackgroundManager()
 
@@ -27,7 +27,9 @@ final class BackgroundManager {
     private let monitor = NWPathMonitor()
     private var hasConnection = true
     private var taskStartTime: Date?
-    private let maxTaskDuration: TimeInterval = 20
+    private let maxTaskDuration: TimeInterval = 150
+    private var memoryCheckCounter = 0
+    private let memoryCheckInterval = 50  // Check memory every 50 iterations (~5 seconds)
     
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -46,27 +48,46 @@ final class BackgroundManager {
         if running {
             return
         }
+        
+        Task { @MainActor in
+            let isListening = Settings.shared.isListening
+            let enableBg = Settings.shared.enableBackgroundDetection
+            print("BackgroundManager: isListening=\(isListening), enableBackgroundDetection=\(enableBg)")
+            
+            guard isListening && enableBg else {
+                print("BackgroundManager: NOT starting - user not listening or background detection disabled")
+                return
+            }
+            
+            await self._internalStartBackgroundProcessing(useBackgroundTask: useBackgroundTask)
+        }
+    }
+    
+    private func _internalStartBackgroundProcessing(useBackgroundTask: Bool) async {
         running = true
 
         SilentAudioKeepAlive.shared.start()
 
         if useBackgroundTask {
-            beginDrainTask()
-            bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-                self?.checkAndRefreshBackgroundTask()
-            }
-            if let timer = bgRefreshTimer {
-                RunLoop.main.add(timer, forMode: .default)
+            await MainActor.run {
+                beginDrainTask()
+                bgRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.checkAndRefreshBackgroundTask()
+                    }
+                }
+                if let timer = bgRefreshTimer {
+                    RunLoop.main.add(timer, forMode: .default)
+                }
             }
         }
 
+        let connectionMode = await MainActor.run {
+            Settings.shared.connectionMode
+        }
+        
         Task.detached { [weak self] in
             guard let self else { return }
-            
-            // Get connection mode on main actor
-            let connectionMode = await MainActor.run {
-                Settings.shared.connectionMode
-            }
             
             switch connectionMode {
             case .multicast:
@@ -75,29 +96,42 @@ final class BackgroundManager {
                 ZMQHandler.shared.connectIfNeeded()
             }
 
-            while self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
-                autoreleasepool {
-                    // Check connection mode each iteration in case it changed
-                    Task {
-                        let currentMode = await MainActor.run {
-                            Settings.shared.connectionMode
-                        }
-                        
-                        switch currentMode {
-                        case .multicast:
-                            break
-                        case .zmq:
-                            if ZMQHandler.shared.isConnected {
-                                ZMQHandler.shared.drainOnce()
-                            }
+            while await self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
+                // Check memory periodically
+                self.memoryCheckCounter += 1
+                if self.memoryCheckCounter >= self.memoryCheckInterval {
+                    self.memoryCheckCounter = 0
+                    
+                    let isInBackground = await MainActor.run {
+                        UIApplication.shared.applicationState == .background
+                    }
+                    
+                    if isInBackground {
+                        autoreleasepool {
+                            self.checkMemoryUsage()
                         }
                     }
-                    // Reduced sleep time for faster message processing
-                    Thread.sleep(forTimeInterval: 0.02)
                 }
+                
+                let currentMode = await MainActor.run {
+                    Settings.shared.connectionMode
+                }
+                
+                autoreleasepool {
+                    switch currentMode {
+                    case .multicast:
+                        break
+                    case .zmq:
+                        if ZMQHandler.shared.isConnected {
+                            ZMQHandler.shared.drainOnce()
+                        }
+                    }
+                }
+                
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             }
 
-            await self.cleanup()
+            self._internalStopBackgroundProcessing()
         }
     }
     
@@ -129,10 +163,14 @@ final class BackgroundManager {
     }
     
     private func cleanup() async {
-        self.stopBackgroundProcessing()
+        self._internalStopBackgroundProcessing()
     }
 
     func stopBackgroundProcessing() {
+        _internalStopBackgroundProcessing()
+    }
+    
+    private func _internalStopBackgroundProcessing() {
         let wasRunning = running
         running = false
         guard wasRunning else { return }
@@ -140,21 +178,30 @@ final class BackgroundManager {
         ZMQHandler.shared.disconnect()
         disconnectMulticast()
 
-        bgRefreshTimer?.invalidate()
-        bgRefreshTimer = nil
-        endDrainTask()
+        DispatchQueue.main.async { [weak self] in
+            self?.bgRefreshTimer?.invalidate()
+            self?.bgRefreshTimer = nil
+            self?.endDrainTask()
+        }
         SilentAudioKeepAlive.shared.stop()
     }
 
-    private func isRunningAndBackgroundOK(useBackgroundTask: Bool) -> Bool {
+    private func isRunningAndBackgroundOK(useBackgroundTask: Bool) async -> Bool {
         let run = running
         
-        let backgroundTimeOK = useBackgroundTask ?
-            UIApplication.shared.backgroundTimeRemaining > 10 : true
+        let backgroundTimeOK: Bool
+        if useBackgroundTask {
+            backgroundTimeOK = await MainActor.run {
+                UIApplication.shared.backgroundTimeRemaining > 5
+            }
+        } else {
+            backgroundTimeOK = true
+        }
             
         return run && backgroundTimeOK
     }
 
+    @MainActor
     private func checkAndRefreshBackgroundTask() {
         guard bgTaskID != .invalid else { return }
         
@@ -162,29 +209,51 @@ final class BackgroundManager {
         let timeRemaining = UIApplication.shared.backgroundTimeRemaining
         
         if let startTime = taskStartTime,
-           currentTime.timeIntervalSince(startTime) >= maxTaskDuration || timeRemaining < 15 {
+           currentTime.timeIntervalSince(startTime) >= 20 || timeRemaining < 30 {
+            let age = Int(currentTime.timeIntervalSince(startTime))
+            let remainingString: String
+            if timeRemaining == .greatestFiniteMagnitude || timeRemaining > Double(Int.max) {
+                remainingString = "unlimited"
+            } else {
+                remainingString = "\(Int(timeRemaining))s"
+            }
+            print("Refreshing background task (age: \(age)s, remaining: \(remainingString))")
             endDrainTask()
             beginDrainTask()
         }
     }
 
+    @MainActor
     private func beginDrainTask() {
         endDrainTask()
         
         taskStartTime = Date()
-        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") { [weak self] in
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") {
+            print("⚠️ Background task about to expire - refreshing...")
             NotificationCenter.default.post(name: NSNotification.Name("BackgroundTaskExpiring"), object: nil)
-            self?.endDrainTask()
         }
         
         guard bgTaskID != .invalid else {
-            print("Failed to begin background task")
+            print("❌ Failed to begin background task - iOS may have denied it")
             return
         }
+        
+        let timeRemaining = UIApplication.shared.backgroundTimeRemaining
+        let timeString: String
+        if timeRemaining == .greatestFiniteMagnitude {
+            timeString = "unlimited"
+        } else if timeRemaining > Double(Int.max) {
+            timeString = "unlimited"
+        } else {
+            timeString = "\(Int(timeRemaining))s"
+        }
+        print("Background task started - ID: \(bgTaskID.rawValue), time remaining: \(timeString)")
     }
 
+    @MainActor
     private func endDrainTask() {
         if bgTaskID != .invalid {
+            print("Ending background task - ID: \(bgTaskID.rawValue)")
             UIApplication.shared.endBackgroundTask(bgTaskID)
             bgTaskID = .invalid
             taskStartTime = nil
@@ -194,22 +263,46 @@ final class BackgroundManager {
     /// Force end all background tasks (for app termination)
     func endAllBackgroundTasks() {
         print("BackgroundManager: Ending all background tasks")
-        
-        // Stop the entire background processing system
-        stopBackgroundProcessing()
-        
-        // Ensure the task is ended
-        endDrainTask()
-        
-        // Cancel the timer
-        bgRefreshTimer?.invalidate()
-        bgRefreshTimer = nil
-        
+        _internalStopBackgroundProcessing()
         print(" BackgroundManager: All tasks ended")
     }
     
     private func disconnectMulticast() {
         group?.cancel()
         group = nil
+    }
+    
+    private func checkMemoryUsage() {
+        var taskInfo = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &taskInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            let memoryMB = Double(taskInfo.resident_size) / 1024.0 / 1024.0
+            
+            // iOS kills background apps >50MB. You're at 123MB
+            if memoryMB > 40 {
+                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - iOS will kill us soon!")
+                
+                // AGGRESSIVE cleanup
+                ZMQHandler.shared.clearCaches()
+                URLCache.shared.removeAllCachedResponses()
+                
+                Task { @MainActor in
+                    SwiftDataStorageManager.shared.releaseBackgroundMemory()
+                    DroneStorageManager.shared.forceSave()
+                }
+                
+                // If still critical, stop background processing to avoid termination
+                if memoryMB > 70 {
+                    print("❌ CRITICAL MEMORY (\(String(format: "%.1f", memoryMB))MB) - STOPPING to avoid termination")
+                    _internalStopBackgroundProcessing()
+                }
+            }
+        }
     }
 }

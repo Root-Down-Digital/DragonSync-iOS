@@ -172,8 +172,11 @@ class StatusViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.lastSeen, order: .reverse)]
         )
         
-        if let stored = try? context.fetch(descriptor) {
-            adsbEncounterHistory = stored.map { $0.toLegacy() }
+        do {
+            let stored = try context.fetch(descriptor)
+            self.adsbEncounterHistory = stored.map { $0.toLegacy() }
+        } catch {
+            print("Failed to load ADSB encounters: \(error)")
         }
     }
     

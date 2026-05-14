@@ -404,15 +404,16 @@ class DroneStorageManager: ObservableObject {
         // Check if migration has been completed
         let migrationCompleted = UserDefaults.standard.bool(forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
         
-        let swiftDataCount = fetchAllEncounters().count
-        print("📊 Loaded \(swiftDataCount) encounters from SwiftData")
+        // FIXED: Don't eagerly load all encounters - just count them without loading full data
+        let swiftDataCount = swiftDataManager.countEncounters()
+        print("📊 Found \(swiftDataCount) encounters in SwiftData (not loaded into memory)")
         
         if swiftDataCount == 0 && !migrationCompleted {
             print("⚠️ SwiftData empty - migration may not be complete yet")
         } else if swiftDataCount == 0 && migrationCompleted {
             print("Migration completed - SwiftData is empty (fresh start or all deleted)")
         } else {
-            print("Using \(swiftDataCount) encounters from SwiftData")
+            print("Using \(swiftDataCount) encounters from SwiftData (lazy loading enabled)")
         }
     }
     
@@ -475,9 +476,9 @@ class DroneStorageManager: ObservableObject {
     func updateProximityPointsWithCorrectRadius() {
         let allEncounters = swiftDataManager.fetchAllEncounters()
         
-        for storedEncounter in allEncounters {
-            guard storedEncounter.metadata["hasProximityPoints"] == "true" else { continue }
-            
+        var updateCount = 0
+        
+        for storedEncounter in allEncounters where storedEncounter.metadata["hasProximityPoints"] == "true" {
             var updatedFlightPoints: [StoredFlightPoint] = []
             var needsUpdate = false
             
@@ -512,10 +513,13 @@ class DroneStorageManager: ObservableObject {
             if needsUpdate {
                 storedEncounter.flightPoints.removeAll()
                 storedEncounter.flightPoints.append(contentsOf: updatedFlightPoints)
+                updateCount += 1
             }
         }
         
-        swiftDataManager.forceSave()
+        if updateCount > 0 {
+            swiftDataManager.forceSave()
+        }
     }
     
     func exportToCSV() -> String {

@@ -113,11 +113,11 @@ struct WarDragonApp: App {
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .background:
-                print("📱 Scene Phase: Background")
+                print("Scene Phase: Background")
             case .inactive:
-                print("📱 Scene Phase: Inactive (from \(oldPhase))")
+                print("Scene Phase: Inactive (from \(oldPhase))")
             case .active:
-                print("📱 Scene Phase: Active")
+                print("Scene Phase: Active")
             @unknown default:
                 break
             }
@@ -192,25 +192,33 @@ struct WarDragonApp: App {
                 print("   New Migration Status: \(migrationManager.migrationStatus)")
                 
                 // Verify migration by checking data count
-                let descriptor = FetchDescriptor<StoredDroneEncounter>()
-                let count = try context.fetchCount(descriptor)
+                let verifyDescriptor = FetchDescriptor<StoredDroneEncounter>()
+                let count = try context.fetchCount(verifyDescriptor)
                 print("Verification: \(count) encounters now stored in SwiftData")
                 
                 // Force DroneStorageManager to reload from SwiftData
                 DroneStorageManager.shared.loadFromStorage()
-                print("DEBUG:  Updating cached stats for all encounters...")
-                let allEncounters = try context.fetch(FetchDescriptor<StoredDroneEncounter>())
-                var updatedCount = 0
-                for encounter in allEncounters {
-                    // Only update if caches are empty (old data)
-                    if encounter.cachedFlightPointCount == 0 || encounter.cachedMaxAltitude == 0 {
-                        encounter.updateCachedStats()
-                        updatedCount += 1
+                
+                // Update cached stats in batches to avoid loading everything at once
+                print("DEBUG:  Checking for encounters needing stat updates...")
+                var updateDescriptor = FetchDescriptor<StoredDroneEncounter>(
+                    predicate: #Predicate<StoredDroneEncounter> { encounter in
+                        encounter.cachedFlightPointCount == 0 || encounter.cachedMaxAltitude == 0
                     }
-                }
-                if updatedCount > 0 {
+                )
+                updateDescriptor.fetchLimit = 50  // Process 50 at a time max
+                
+                let encountersNeedingUpdate = try context.fetch(updateDescriptor)
+                
+                if !encountersNeedingUpdate.isEmpty {
+                    print("   Updating cached stats for \(encountersNeedingUpdate.count) encounters...")
+                    for encounter in encountersNeedingUpdate {
+                        encounter.updateCachedStats()
+                    }
                     try context.save()
-                    print(" Updated cached stats for \(updatedCount) encounters")
+                    print(" Updated cached stats for \(encountersNeedingUpdate.count) encounters")
+                } else {
+                    print("   All encounters already have cached stats - skipping")
                 }
                 
                 print("Migration complete - app is now using the new storage system")
@@ -249,21 +257,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
-        // Check if we were monitoring in background before termination
-        let wasBackgroundMonitoring = UserDefaults.standard.bool(forKey: "BackgroundMonitoringActive")
-        
+        // Always reset listening state on app launch
+        // User must explicitly tap "Start" to begin monitoring
         Task { @MainActor in
-            if wasBackgroundMonitoring {
-                print("App restored after background termination - resuming monitoring")
-                if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
-                    BackgroundManager.shared.startBackgroundProcessing()
-                }
-            } else {
-                // Clean state on fresh launch
-                Settings.shared.isListening = false
-                print("Fresh app launch - reset listening state")
-            }
+            Settings.shared.isListening = false
+            print("App launch - reset listening state (user must explicitly start)")
         }
+        
+        // Clear background monitoring flag on startup
+        UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+        UserDefaults.standard.synchronize()
 
         UNUserNotificationCenter.current().delegate = self
         setupAppLifecycleObservers()
@@ -311,53 +314,115 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
     
     @objc private func handleMemoryWarning() {
-        print("⚠️ Memory warning received - performing cleanup")
+        print("⚠️ Memory warning received - performing aggressive cleanup")
         
         Task { @MainActor in
+            // Get memory info before cleanup
+            let memoryBefore = getMemoryUsage()
+            print("   Memory before cleanup: \(memoryBefore)MB")
+            
             DroneStorageManager.shared.forceSave()
             SwiftDataStorageManager.shared.forceSave()
             URLCache.shared.removeAllCachedResponses()
             ZMQHandler.shared.clearCaches()
             
-            print("Memory warning cleanup completed")
+            // If in background and memory is critical, temporarily pause processing
+            if UIApplication.shared.applicationState == .background {
+                let memoryAfter = getMemoryUsage()
+                print("   Memory after cleanup: \(memoryAfter)MB")
+                
+                if memoryAfter > 80 {  // If still using >80MB in background, that's a lot
+                    print("⚠️ High memory usage in background - consider pausing if issues persist")
+                }
+            }
+            
+            print("✅ Memory warning cleanup completed")
         }
+    }
+    
+    private func getMemoryUsage() -> Double {
+        var taskInfo = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &taskInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            return Double(taskInfo.resident_size) / 1024.0 / 1024.0
+        }
+        return 0
     }
 
     @objc private func appMovingToBackground() {
-        print("📱 App moving to background")
+        print("App moving to background")
         
         Task { @MainActor in
+            let memoryBefore = getMemoryUsage()
+            print("   Memory before background prep: \(memoryBefore)MB")
+            
+            // AGGRESSIVE memory cleanup for background
+            SwiftDataStorageManager.shared.releaseBackgroundMemory()
             DroneStorageManager.shared.forceSave()
-            SwiftDataStorageManager.shared.forceSave()
-            print("Forced data save completed")
-        }
-        
-        if Settings.shared.isListening && Settings.shared.enableBackgroundDetection {
-            UserDefaults.standard.set(true, forKey: "BackgroundMonitoringActive")
-            UserDefaults.standard.synchronize()
             
-            ZMQHandler.shared.setBackgroundMode(true)
+            // Clear ALL caches
+            URLCache.shared.removeAllCachedResponses()
+            URLCache.shared.memoryCapacity = 0  // Disable memory cache
+            URLCache.shared.diskCapacity = 0     // Disable disk cache
             
-            BackgroundManager.shared.startBackgroundProcessing()
-            print("🔄 Background monitoring enabled")
-        } else {
-            UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
-            UserDefaults.standard.synchronize()
-            print("⏸️ Background monitoring disabled")
+            ZMQHandler.shared.clearCaches()
+            
+            // Force garbage collection
+            autoreleasepool {
+                // Intentionally empty - just forces cleanup
+            }
+            
+            let memoryAfter = getMemoryUsage()
+            print("   Memory after cleanup: \(memoryAfter)MB (freed \(String(format: "%.1f", memoryBefore - memoryAfter))MB)")
+            
+            // iOS kills apps >50MB in background. If we're still high, warn
+            if memoryAfter > 50 {
+                print("⚠️ WARNING: Still using \(memoryAfter)MB - iOS may kill us!")
+                print("   Normal background limit is 50-80MB")
+            }
+            
+            print("Forced data save and memory cleanup completed")
+            
+            let isListening = Settings.shared.isListening
+            let enableBg = Settings.shared.enableBackgroundDetection
+            
+            print("AppDelegate: isListening=\(isListening), enableBackgroundDetection=\(enableBg)")
+            
+            if isListening && enableBg {
+                print("App entering background - ALWAYS continue monitoring")
+                UserDefaults.standard.set(true, forKey: "BackgroundMonitoringActive")
+                UserDefaults.standard.synchronize()
+                
+                ZMQHandler.shared.setBackgroundMode(true)
+                BackgroundManager.shared.startBackgroundProcessing()
+                print("Background monitoring enabled with task rotation")
+            } else {
+                print("App entering background - NOT monitoring (user not listening or bg disabled)")
+                UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+                UserDefaults.standard.synchronize()
+            }
         }
     }
 
     @objc private func appMovingToForeground() {
-        print("📱 App moving to foreground")
+        print("App moving to foreground")
         
-        ZMQHandler.shared.setBackgroundMode(false)
-        
-        UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
-        UserDefaults.standard.synchronize()
-        
-        BackgroundManager.shared.stopBackgroundProcessing()
-        
-        print("Returned to foreground mode")
+        Task { @MainActor in
+            ZMQHandler.shared.setBackgroundMode(false)
+            
+            UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
+            UserDefaults.standard.synchronize()
+            
+            BackgroundManager.shared.stopBackgroundProcessing()
+            
+            print("Returned to foreground mode")
+        }
     }
 
     private func registerBGTasks() {
@@ -369,12 +434,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func scheduleAllBGTasks() {
-        guard Settings.shared.enableBackgroundDetection else {
-            print("Background detection disabled - skipping BGTask scheduling")
-            return
+        Task { @MainActor in
+            guard Settings.shared.enableBackgroundDetection else {
+                print("Background detection disabled - skipping BGTask scheduling")
+                return
+            }
+            
+            bgIDs.forEach { id in scheduleBGTask(id: id, delay: 15*60) }
         }
-        
-        bgIDs.forEach { id in scheduleBGTask(id: id, delay: 15*60) }
     }
 
     private func scheduleBGTask(id: String, delay: TimeInterval) {
@@ -385,7 +452,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func handleBGTask(_ task: BGProcessingTask) {
-        task.expirationHandler = { BackgroundManager.shared.stopBackgroundProcessing() }
+        task.expirationHandler = {
+            BackgroundManager.shared.stopBackgroundProcessing()
+        }
         BackgroundManager.shared.startBackgroundProcessing(useBackgroundTask: false)
         task.setTaskCompleted(success: true)
         scheduleBGTask(id: task.identifier, delay: 15*60)

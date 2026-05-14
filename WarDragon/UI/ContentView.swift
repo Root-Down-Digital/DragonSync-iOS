@@ -126,7 +126,6 @@ struct ContentView: View {
             
             updateDetectionMode()
             
-            // Setup notification observers for background connection management
             NotificationCenter.default.addObserver(
                 forName: NSNotification.Name("LightweightConnectionCheck"),
                 object: nil,
@@ -135,17 +134,6 @@ struct ContentView: View {
                 guard let cotViewModel = cotViewModel else { return }
                 MainActor.assumeIsolated {
                     cotViewModel.checkConnectionStatus()
-                }
-            }
-            
-            NotificationCenter.default.addObserver(
-                forName: NSNotification.Name("BackgroundTaskExpiring"),
-                object: nil,
-                queue: .main
-            ) { [weak cotViewModel] _ in
-                guard let cotViewModel = cotViewModel else { return }
-                MainActor.assumeIsolated {
-                    cotViewModel.prepareForBackgroundExpiry()
                 }
             }
         }
