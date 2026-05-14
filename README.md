@@ -170,15 +170,13 @@ Pre-configured system with ANTSDR E200, WiFi/BT, GPS hardware
 
 No Network Connection/Data: 
 
-A. Toggling the in-app connection off and on is sometimes needed first run for Apple to request connections. 
+- Ensure iOS app permission granted in Settings > Apps > DragonSync > Network
+- Multicast: Toggle the connect button if first launch, needs to request permissions.
 
-B. Backend ***WarDragon connection settings*** that may need modification if not using droneid-go:
+RSSI rings not showing for encrypted/fpv:
 
-   - Edit the Config file: `/home/dragon/WarDragon/DragonSync/config.ini`
-     - Change if localhost fails to ***connect to zmq**
-     `zmq_host = 0.0.0.0`
-     - Alternative ***multicast connection*** address
-     `tak_multicast_addr = 224.0.0.1`  
+- Needs GPS data for the host in Status from `wardragonmonitor.py`
+   - Ensure iOS app permission granted in Settings > Apps > DragonSync > Location 
 
 System Status: 
 
@@ -336,13 +334,13 @@ The app's parser supports both droneid-go (canonical long-form keys, `transport`
 │               Detection Sources                      │
 │                                                      │
 │  WiFi RID (2.4/5GHz) ──┐                             │
-│  Bluetooth RID (Sniffle)┤                             │
+│  Bluetooth RID (Sniffle)┤                            │
 │  ESP32 UART passthrough ┼──► droneid-go (Go binary)  │
-│  DJI DroneID (DragonSDR)┘     unified ZMQ tcp:4224    │
+│  DJI DroneID (DragonSDR)┘     unified ZMQ tcp:4224   │
 │  FPV Video ─────────── RX5808 + fpv_mdn_receiver     │
 │  ESP32 Standalone ──── Drag0net WiFi 2.4GHz          │
 └────────────────────┬─────────────────────────────────┘
-                     │ JSON (Basic ID / Location/Vector / System / Self-ID / Operator ID / Auth / Frequency Message + transport + frequency_mhz)
+                     │ JSON Data 
         ┌────────────┴────────────┐
         │                         │
  ┌──────▼────────┐       ┌────────▼────────┐
