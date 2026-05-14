@@ -31,7 +31,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private let backgroundManager = BackgroundManager.shared
     private var cotListener: NWListener?
     private var statusListener: NWListener?
-    private var multicastConnection: NWConnection?
+    private var multicastGroup: NWConnectionGroup?
     
     // ADS-B update counters (moved from extension)
     private var openSkyUpdateCount: Int = 0
@@ -49,7 +49,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     // Cached settings values to avoid main actor access issues
     private var cachedConnectionMode: ConnectionMode = .multicast
-    private var cachedMulticastHost: String = "224.0.0.1"
+    private var cachedMulticastHost: String = "239.2.3.1"
     private var cachedMulticastPort: UInt16 = 6969
     private var cachedZmqHost: String = "192.168.2.1"
     private var cachedZmqTelemetryPort: UInt16 = 45454
@@ -64,6 +64,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     public var macIdHistory: [String: Set<String>] = [:]
     public var macProcessing: [String: Bool] = [:]
     private var lastNotificationTime: Date?
+    private var notifiedDrones: Set<String> = []  // Track which drones we've already notified about
     private var macToCAA: [String: String] = [:]
     private var backgroundMaintenanceTimer: Timer?
     private var macToHomeLoc: [String: (lat: Double, lon: Double)] = [:]
@@ -818,7 +819,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         backgroundMaintenanceTimer?.invalidate()
         
         // Cancel all network connections (non-isolated)
-        multicastConnection?.cancel()
+        multicastGroup?.cancel()
         cotListener?.cancel()
         statusListener?.cancel()
         
@@ -995,8 +996,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     
                     switch self.cachedConnectionMode {
                     case .multicast:
-                        self.multicastConnection?.cancel()
-                        self.multicastConnection = nil
+                        self.multicastGroup?.cancel()
+                        self.multicastGroup = nil
                         self.startMulticastListening()
                     case .zmq:
                         self.zmqHandler?.disconnect()
@@ -1163,11 +1164,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         print("Cleaning up existing connections before restart...")
         
         // FORCE CLEANUP - Cancel any existing connection synchronously
-        if let existing = multicastConnection {
+        if let existing = multicastGroup {
             existing.cancel()
-            multicastConnection = nil
+            multicastGroup = nil
         }
-        
+
         if let existing = cotListener {
             existing.cancel()
             cotListener = nil
@@ -1216,8 +1217,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.startZMQListening()
             }
             
-            // Start background processing when listening
-            self.backgroundManager.startBackgroundProcessing()
+            // ✅ ONLY start background processing if we're already in background
+            // Otherwise, wait for the app to actually enter background
+            if self.isInBackground && UIApplication.shared.applicationState == .background {
+                print("Starting background processing (app is in background)")
+                self.backgroundManager.startBackgroundProcessing()
+            } else {
+                print("Foreground listening started - background processing will start when app backgrounds")
+            }
             
             // Clear reconnecting flag after a delay to ensure connection is established
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -1228,129 +1235,83 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     private func startMulticastListening() {
-        let parameters = NWParameters.udp
-        parameters.allowLocalEndpointReuse = true
-        parameters.acceptLocalOnly = false
-        
-        // Network requirements
-        parameters.prohibitedInterfaceTypes = [.cellular]
-        parameters.requiredInterfaceType = .wifi
-        
-        // Configure multicast options - FORCE IPv4 only
-        if let udpOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
-            udpOptions.version = .v4
+        let host = NWEndpoint.Host(cachedMulticastHost)
+        let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
+
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = true
+        params.prohibitedInterfaceTypes = [.cellular]
+        if let ipOpts = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOpts.version = .v4
         }
-        
+
         do {
-            // Create listener bound to the multicast port
-            // NWListener will bind to all IPv4 interfaces by default
-            let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
-            cotListener = try NWListener(using: parameters, on: port)
-            
-            cotListener?.stateUpdateHandler = { [weak self] state in
+            let desc = try NWMulticastGroup(for: [.hostPort(host: host, port: port)])
+            let group = NWConnectionGroup(with: desc, using: params)
+
+            group.setReceiveHandler(maximumMessageSize: 65_535, rejectOversizedMessages: true) { [weak self] _, data, _ in
+                guard let self = self, let data = data, !data.isEmpty else { return }
+
+                if self.isInBackground && UIApplication.shared.applicationState == .background {
+                    self.backgroundBufferLock.lock()
+                    self.backgroundMessageBuffer.append(data)
+                    if self.backgroundMessageBuffer.count > 100 {
+                        self.backgroundMessageBuffer.removeFirst()
+                    }
+                    self.backgroundBufferLock.unlock()
+                    return
+                }
+
+                let now = Date()
+                let interval = self.isInBackground ? 5.0 : self.cachedMessageProcessingInterval
+                if now.timeIntervalSince(self.lastProcessTime) >= interval {
+                    self.lastProcessTime = now
+                    self.processIncomingMessage(data)
+                }
+            }
+
+            group.stateUpdateHandler = { [weak self] state in
+                guard let self = self else { return }
                 switch state {
                 case .ready:
-                    print("Multicast listener ready - now joining multicast group...")
-                    // When listener is ready, create connection to join multicast group
-                    self?.joinMulticastGroup()
-                    DispatchQueue.main.async {
-                        self?.isListeningCot = true
-                    }
+                    print("Successfully joined multicast group \(self.cachedMulticastHost):\(self.cachedMulticastPort)")
+                    DispatchQueue.main.async { self.isListeningCot = true }
                 case .failed(let error):
-                    print("Multicast listener failed: \(error)")
+                    print("Multicast group failed: \(error)")
                     DispatchQueue.main.async {
-                        self?.isListeningCot = false
-                        // REMOVED automatic recovery to prevent reconnection loops
-                        // User can manually restart via UI
-                        print("Multicast connection failed. Please stop and restart listening manually.")
-                        
-                        // Optional: Show notification to user
+                        self.isListeningCot = false
                         let content = UNMutableNotificationContent()
                         content.title = "Connection Error"
                         content.body = "Multicast connection failed. Tap to reconnect."
                         content.sound = .default
-                        
                         let request = UNNotificationRequest(
                             identifier: "multicast-error",
                             content: content,
                             trigger: nil
                         )
-                        
-                        UNUserNotificationCenter.current().add(request) { error in
-                            if let error = error {
-                                print("Failed to show notification: \(error)")
-                            }
+                        UNUserNotificationCenter.current().add(request) { err in
+                            if let err = err { print("Failed to show notification: \(err)") }
                         }
                     }
+                case .waiting(let error):
+                    print("Multicast group waiting: \(error)")
                 case .cancelled:
-                    print("Multicast listener cancelled.")
-                    DispatchQueue.main.async {
-                        self?.isListeningCot = false
-                    }
+                    print("Multicast group cancelled")
+                    DispatchQueue.main.async { self.isListeningCot = false }
                 default:
                     break
                 }
             }
-            
-            cotListener?.newConnectionHandler = { [weak self] connection in
-                print("New multicast connection received")
-                connection.start(queue: self?.listenerQueue ?? .main)
-                self?.receiveMessages(from: connection)
-            }
-            
-            cotListener?.start(queue: listenerQueue)
-            
+
+            multicastGroup = group
+            group.start(queue: listenerQueue)
+            print("Joining multicast group \(cachedMulticastHost):\(cachedMulticastPort)")
         } catch {
-            print("Failed to create multicast listener: \(error)")
+            print("Failed to create multicast group: \(error)")
             if let nwError = error as? NWError {
                 print("NWError details: \(nwError)")
             }
         }
-    }
-    
-    private func joinMulticastGroup() {
-        let parameters = NWParameters.udp
-        parameters.allowLocalEndpointReuse = true
-        parameters.requiredInterfaceType = .wifi
-        
-        // Configure IP version for multicast
-        if let ipOptions = parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
-            ipOptions.version = .v4
-        }
-        
-        // Create endpoint for multicast group
-        let host = NWEndpoint.Host(cachedMulticastHost)
-        let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
-        let multicastEndpoint = NWEndpoint.hostPort(host: host, port: port)
-        
-        print("Joining multicast group \(cachedMulticastHost):\(cachedMulticastPort)")
-        multicastConnection = NWConnection(to: multicastEndpoint, using: parameters)
-        
-        multicastConnection?.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
-            switch state {
-            case .ready:
-                print("Successfully joined multicast group \(self.cachedMulticastHost):\(self.cachedMulticastPort)")
-                // Start receiving data immediately after joining
-                guard let connection = self.multicastConnection else {
-                    print("ERROR: Multicast connection is nil after ready state")
-                    return
-                }
-                print("📡 Starting to receive multicast messages...")
-                self.receiveMessages(from: connection)
-            case .failed(let error):
-                print("Failed to join multicast group: \(error)")
-            case .waiting(let error):
-                print("⏳ Waiting to join multicast group: \(error)")
-            case .cancelled:
-                print("🚫 Multicast connection cancelled")
-            default:
-                print("Multicast connection state: \(state)")
-            }
-        }
-        
-        multicastConnection?.start(queue: listenerQueue)
-        print("🚀 Multicast connection started on queue")
     }
     
     private func startZMQListening() {
@@ -2662,9 +2623,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             }
         }
         
-        // Update alert ring if zero coordinate drone
-        self.updateAlertRing(for: updatedMessage)
-        
         // Determine signal type and update sources
         _ = self.determineSignalType(message: message, mac: mac, rssi: updatedMessage.rssi, updatedMessage: &updatedMessage)
         
@@ -2980,10 +2938,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let latValue = Double(message.lat) ?? 0
         let lonValue = Double(message.lon) ?? 0
         
-        // Check if we have a drone with zero coordinates but valid RSSI
         if (latValue == 0 && lonValue == 0) && message.rssi != nil && message.rssi != 0 {
-            
-            // First try status message location
             Task { @MainActor in
                 var monitorLocation: CLLocationCoordinate2D?
                 
@@ -2991,60 +2946,54 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     let statusLat = monitorStatus.gpsData.latitude
                     let statusLon = monitorStatus.gpsData.longitude
                     
-                    // If status has valid coordinates, use them
                     if statusLat != 0.0 || statusLon != 0.0 {
                         monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
                     }
                 }
                 
-                // If no valid status location, use user location directly
                 if monitorLocation == nil,
                    let userLocation = LocationManager.shared.userLocation {
                     monitorLocation = userLocation.coordinate
                 }
                 
-                // Create alert ring with valid monitor location
-                if let location = monitorLocation,
-                   let rssi = message.rssi {
-                    let distance: Double
-                    let rssiValue = Double(rssi)
-                    
-                    // Handle different RSSI scales for FPV vs regular drones
-                    if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
-                        // FPV uses higher signal values (1000-3500 range) from raw RX5808 SPI RSSI pin
-                        distance = self.calculateFPVDistance(fpvRSSI)
-                    } else if rssiValue > 1000 {
-                        // MDN-style values
-                        distance = self.calculateFPVDistance(rssiValue)
-                    } else {
-                        // Standard dBm values
-                        let signatureGenerator = DroneSignatureGenerator()
-                        distance = signatureGenerator.calculateDistance(rssiValue)
-                    }
-                    
-                    // Wrap in MainActor to prevent background thread publishing
-                    Task { @MainActor in
-                        let rssiValue = message.rssi ?? 0
-                        if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
-                            self.alertRings[index] = AlertRing(
-                                droneId: message.uid,
-                                centerCoordinate: location,
-                                radius: distance,
-                                rssi: rssiValue
-                            )
-                        } else {
-                            self.alertRings.append(AlertRing(
-                                droneId: message.uid,
-                                centerCoordinate: location,
-                                radius: distance,
-                                rssi: rssiValue
-                            ))
-                        }
-                    }
+                guard let location = monitorLocation, let rssi = message.rssi else {
+                    print("❌ Cannot create alert ring for \(message.uid): no monitor location (statusLat=\(self.statusViewModel.statusMessages.last?.gpsData.latitude ?? 0), statusLon=\(self.statusViewModel.statusMessages.last?.gpsData.longitude ?? 0)) or no RSSI")
+                    return
                 }
+                
+                let rssiValue = Double(rssi)
+                let distance: Double
+                
+                if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+                    distance = self.calculateFPVDistance(fpvRSSI)
+                } else if rssiValue > 1000 {
+                    distance = self.calculateFPVDistance(rssiValue)
+                } else {
+                    distance = DroneSignatureGenerator().calculateDistance(rssiValue)
+                }
+                
+                if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
+                    self.alertRings[index] = AlertRing(
+                        droneId: message.uid,
+                        centerCoordinate: location,
+                        radius: distance,
+                        rssi: rssi
+                    )
+                    print("✅ Updated alert ring for \(message.uid): center=(\(location.latitude), \(location.longitude)), radius=\(Int(distance))m, RSSI=\(rssi)dBm")
+                } else {
+                    self.alertRings.append(AlertRing(
+                        droneId: message.uid,
+                        centerCoordinate: location,
+                        radius: distance,
+                        rssi: rssi
+                    ))
+                    print("✅ Created NEW alert ring for \(message.uid): center=(\(location.latitude), \(location.longitude)), radius=\(Int(distance))m, RSSI=\(rssi)dBm")
+                }
+                
+                // Force UI refresh to show the ring immediately
+                self.objectWillChange.send()
             }
         } else {
-            // Remove alert ring if coordinates are now valid - wrap in MainActor
             Task { @MainActor in
                 self.alertRings.removeAll(where: { $0.droneId == message.uid })
             }
@@ -3237,16 +3186,45 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             existingMessage.isSpoofed = messageToProcess.isSpoofed
             existingMessage.spoofingDetails = messageToProcess.spoofingDetails
             
-            Task { @MainActor in
-                self.parsedMessages[existingIndex] = existingMessage
+            // Check if anything meaningful changed before triggering UI update
+            let oldMessage = self.parsedMessages[existingIndex]
+            let hasSignificantChange = (
+                oldMessage.lat != existingMessage.lat ||
+                oldMessage.lon != existingMessage.lon ||
+                oldMessage.alt != existingMessage.alt ||
+                oldMessage.speed != existingMessage.speed ||
+                oldMessage.rssi != existingMessage.rssi ||
+                oldMessage.pilotLat != existingMessage.pilotLat ||
+                oldMessage.pilotLon != existingMessage.pilotLon
+            )
+            
+            // Already on @MainActor - no need for nested Task
+            self.parsedMessages[existingIndex] = existingMessage
+            
+            // Only update alert ring if drone has no GPS coords but has RSSI
+            let lat = Double(existingMessage.lat) ?? 0
+            let lon = Double(existingMessage.lon) ?? 0
+            if (lat == 0 && lon == 0) && existingMessage.rssi != nil && existingMessage.rssi != 0 {
+                self.updateAlertRing(for: existingMessage)
+            }
+            
+            // Only trigger UI refresh if something meaningful changed
+            if hasSignificantChange {
                 self.objectWillChange.send()
             }
             
         } else {
-            Task { @MainActor in
-                self.parsedMessages.append(messageToProcess)
-                self.enforceDetectionLimits()
+            // Already on @MainActor - no need for nested Task
+            self.parsedMessages.append(messageToProcess)
+            
+            // Only update alert ring if drone has no GPS coords but has RSSI
+            let lat = Double(messageToProcess.lat) ?? 0
+            let lon = Double(messageToProcess.lon) ?? 0
+            if (lat == 0 && lon == 0) && messageToProcess.rssi != nil && messageToProcess.rssi != 0 {
+                self.updateAlertRing(for: messageToProcess)
             }
+            
+            self.enforceDetectionLimits()
             
             if !messageToProcess.idType.contains("CAA") {
                 self.sendNotification(for: messageToProcess)
@@ -3282,7 +3260,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         Task { @MainActor in
             guard Settings.shared.notificationsEnabled else { return }
             
-            // Only send notification if more than 5 seconds have passed
+            // Only send notification ONCE per drone (check if we've already notified)
+            guard !self.notifiedDrones.contains(message.uid) else {
+                return
+            }
+            
+            // Global rate limit: Only send notification if more than 5 seconds have passed since ANY notification
             if let lastTime = self.lastNotificationTime,
                Date().timeIntervalSince(lastTime) < 5 {
                 return
@@ -3292,15 +3275,20 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.sendWebhookNotification(for: message)
             }
             
-            // Create and send notification
+            // Create and send notification with DRONE-SPECIFIC identifier
+            // Using the drone's UID as identifier ensures iOS replaces old notifications for the same drone
             let content = UNMutableNotificationContent()
-            print("Attempting to send notification for drone: \(message.uid)")
+            print("Sending notification for NEW drone: \(message.uid)")
             content.title = "Drone Detected"
             content.body = "ID: \(message.id)\nRSSI: \(message.rssi ?? 0)dBm"
-            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            
+            // Use drone UID as notification identifier so iOS replaces old notifications
+            let request = UNNotificationRequest(identifier: "drone-\(message.uid)", content: content, trigger: nil)
             
             try? await UNUserNotificationCenter.current().add(request)
             
+            // Mark this drone as notified
+            self.notifiedDrones.insert(message.uid)
             self.lastNotificationTime = Date()
         }
     }
@@ -3314,9 +3302,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     func stopListening() {
-        guard isListeningCot || multicastConnection != nil else { 
+        guard isListeningCot || multicastGroup != nil else {
             print("Already stopped, skipping stopListening()")
-            return 
+            return
         }
         
         print("Stopping all listeners")
@@ -3334,11 +3322,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             object: nil
         )
         
-        if let connection = multicastConnection {
-            connection.stateUpdateHandler = nil
-            connection.cancel()
-            multicastConnection = nil
-            print("Multicast connection cancelled")
+        if let group = multicastGroup {
+            group.stateUpdateHandler = nil
+            group.cancel()
+            multicastGroup = nil
+            print("Multicast group cancelled")
         }
         
         if let listener = cotListener {
@@ -3410,7 +3398,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             if cachedConnectionMode == .zmq {
                 verifyZMQSubscription()
             } else if cachedConnectionMode == .multicast {
-                if cotListener == nil || statusListener == nil {
+                if multicastGroup == nil {
                     print("Multicast connection lost in background, reconnecting...")
                     startMulticastListening()
                 }

@@ -108,6 +108,7 @@ class Config:
     status_bind: str = "0.0.0.0:4225"
     multicast_group: str = "239.2.3.1"
     multicast_port: int = 6969
+    multicast_iface: str = ""
     mqtt_broker: str = ""
     mqtt_port: int = 1883
     mqtt_topic: str = "wardragon/drone"
@@ -863,6 +864,13 @@ class Publisher:
         self.status_sock.bind(f"tcp://{cfg.status_bind}")
         self.mc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.mc_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        if cfg.multicast_iface:
+            try:
+                self.mc_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                                        socket.inet_aton(cfg.multicast_iface))
+                print(f"[mc]  egress iface forced to {cfg.multicast_iface}")
+            except OSError as exc:
+                print(f"[mc]  IP_MULTICAST_IF bind failed: {exc}", file=sys.stderr)
         self.mqtt_client = None
         if cfg.mqtt_broker:
             if not MQTT_AVAILABLE:
@@ -1061,8 +1069,11 @@ def parse_args():
     p.add_argument("--status-bind", default="0.0.0.0:4225",
                    help="wardragon_monitor JSON status publisher bind (default 0.0.0.0:4225)")
     p.add_argument("--multicast-group", default="239.2.3.1",
-                   help="DragonSync CoT multicast group (default 239.2.3.1)")
+                   help="DragonSync CoT multicast group (default 239.2.3.1, matches iOS app default)")
     p.add_argument("--multicast-port", type=int, default=6969)
+    p.add_argument("--multicast-iface", default="",
+                   help="local IPv4 to bind multicast egress (IP_MULTICAST_IF). "
+                        "Required when a VPN owns the default route. e.g. 192.168.0.210")
     p.add_argument("--mqtt-broker", default="",
                    help="MQTT broker host for mqtt_dict scenario (empty disables)")
     p.add_argument("--mqtt-port", type=int, default=1883)
@@ -1089,6 +1100,7 @@ def main():
         status_bind=args.status_bind,
         multicast_group=args.multicast_group,
         multicast_port=args.multicast_port,
+        multicast_iface=args.multicast_iface,
         mqtt_broker=args.mqtt_broker,
         mqtt_port=args.mqtt_port,
         mqtt_topic=args.mqtt_topic,
