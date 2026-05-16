@@ -48,17 +48,23 @@ final class BackgroundManager: @unchecked Sendable {
         if running {
             return
         }
-        
+
         Task { @MainActor in
             let isListening = Settings.shared.isListening
             let enableBg = Settings.shared.enableBackgroundDetection
-            print("BackgroundManager: isListening=\(isListening), enableBackgroundDetection=\(enableBg)")
-            
+            let appState = UIApplication.shared.applicationState
+            print("BackgroundManager: isListening=\(isListening), enableBackgroundDetection=\(enableBg), appState=\(appState.rawValue)")
+
             guard isListening && enableBg else {
                 print("BackgroundManager: NOT starting - user not listening or background detection disabled")
                 return
             }
-            
+
+            if useBackgroundTask && appState == .active {
+                print("BackgroundManager: NOT starting - app is foreground (would create spurious bgTask + 2s refresh timer)")
+                return
+            }
+
             await self._internalStartBackgroundProcessing(useBackgroundTask: useBackgroundTask)
         }
     }
