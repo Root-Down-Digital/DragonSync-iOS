@@ -283,21 +283,23 @@ final class BackgroundManager: @unchecked Sendable {
         
         if kerr == KERN_SUCCESS {
             let memoryMB = Double(taskInfo.resident_size) / 1024.0 / 1024.0
-            
-            // iOS kills background apps >50MB. You're at 123MB
-            if memoryMB > 70 {
-                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - iOS will kill us soon..maybe")
-                
+
+            // iOS jetsam threshold in background is ~50MB on many devices.
+            // React EARLY, not after we've already crossed the kill line.
+            if memoryMB > 40 {
+                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - early-release to stay below jetsam")
+
                 ZMQHandler.shared.clearCaches()
                 URLCache.shared.removeAllCachedResponses()
-                
+
                 Task { @MainActor in
                     SwiftDataStorageManager.shared.releaseBackgroundMemory()
                     DroneStorageManager.shared.forceSave()
+                    // Cap unbounded UI buffers that grow under BG ingest.
+                    self.cotViewModel?.trimDetectionBuffersForBackground()
                 }
-                
-                // If still critical, stop background processing to avoid termination
-                if memoryMB > 90 {
+
+                if memoryMB > 60 {
                     print("❌ CRITICAL MEMORY (\(String(format: "%.1f", memoryMB))MB) - Pausing to avoid termination")
                     _internalStopBackgroundProcessing()
                 }

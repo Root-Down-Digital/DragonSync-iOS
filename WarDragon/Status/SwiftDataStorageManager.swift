@@ -222,35 +222,32 @@ class SwiftDataStorageManager: ObservableObject {
         }
     }
     
-    /// Release heavy data from memory when entering background
-    /// This clears the SwiftData context cache to free up memory
+    /// Release heavy data from memory when entering background.
+    /// Persists pending changes, drops local caches, and asks SwiftData to flush
+    /// its row cache via `processPendingChanges`. The model context itself is
+    /// NEVER nilled — doing so orphans every `StoredDroneEncounter` reference
+    /// held by SwiftUI views, causing fault-fetch crashes on resume.
     func releaseBackgroundMemory() {
         guard let context = modelContext else { return }
-        
+
         if context.hasChanges {
-            try? context.save()
+            do {
+                try context.save()
+            } catch {
+                logger.error("releaseBackgroundMemory save failed: \(error.localizedDescription)")
+            }
         }
-        
-        // Clear local caches
+
         macToIdCache.removeAll()
         caaToIdCache.removeAll()
         pendingCacheUpdates.removeAll()
         operationMetrics.removeAll()
-        
-        // Nil out the modelContext temporarily to force release of cached objects
-        // Save reference and restore after a brief moment
-        let savedContext = modelContext
-        modelContext = nil
-        
-        // Force a brief delay to allow Swift to release the objects
-        Task.detached {
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-            await MainActor.run {
-                self.modelContext = savedContext
-            }
-        }
-        
-        logger.info("Released background memory - cleared caches and released context")
+
+        // Flush pending changes; SwiftData manages its own row cache. We do
+        // not touch `modelContext` here — bindings remain valid.
+        context.processPendingChanges()
+
+        logger.info("Released background memory - flushed caches; context retained")
     }
     
     // MARK: - Batched Cache Updates (Performance Optimization)

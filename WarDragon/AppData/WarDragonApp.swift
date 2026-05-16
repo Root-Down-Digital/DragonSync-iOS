@@ -84,12 +84,15 @@ struct WarDragonApp: App {
                 // Try creating container again
                 let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
                 print("Successfully recovered SwiftData store")
-                
-                // Reset migration flag so data gets re-migrated
-                UserDefaults.standard.set(false, forKey: "DataMigration_UserDefaultsToSwiftData_Completed")
-                UserDefaults.standard.set(0, forKey: "DataMigration_Version")
-                print("   Migration will run on next launch to restore your data")
-                
+
+                // Intentionally NOT resetting the migration flag. Resetting it
+                // caused ghost-drone re-imports from the legacy UserDefaults
+                // blob on every store-recovery. A salvage copy is preserved
+                // under DataMigration_LegacyEncounters_v1 — the UI must offer
+                // an explicit "Restore old encounters?" action via
+                // DataMigrationManager.restoreFromLegacySalvage.
+                print("   Store reset — encounters lost; user can opt-in to legacy salvage if present")
+
                 return container
             } catch {
                 print("Recovery failed: \(error.localizedDescription)")
@@ -106,6 +109,10 @@ struct WarDragonApp: App {
                 .environmentObject(spectrumViewModel)
                 .environmentObject(cotViewModel)
                 .task {
+                    // Wire the SwiftData context BEFORE migration / any save path
+                    // runs. ContentView.onAppear used to do this, but BG-launched
+                    // sessions never appear, so saves silently dropped.
+                    await wireSwiftDataContext()
                     await configureOpenSkyService()
                     await performMigrationIfNeeded()
                 }
@@ -124,6 +131,14 @@ struct WarDragonApp: App {
         }
     }
     
+    @MainActor
+    private func wireSwiftDataContext() async {
+        let context = modelContainer.mainContext
+        SwiftDataStorageManager.shared.modelContext = context
+        SwiftDataStorageManager.shared.statusViewModel = statusViewModel
+        statusViewModel.modelContext = context
+    }
+
     @MainActor
     private func configureOpenSkyService() async {
         let context = modelContainer.mainContext

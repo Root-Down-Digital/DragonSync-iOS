@@ -18,6 +18,11 @@ class DataMigrationManager {
     private let migrationCompletedKey = "DataMigration_UserDefaultsToSwiftData_Completed"
     private let migrationVersionKey = "DataMigration_Version"
     private let currentMigrationVersion = 1
+    // One-shot salvage copy of the legacy UserDefaults "DroneEncounters" blob.
+    // Written once on migration success, consulted ONLY when user explicitly
+    // restores from backup. Never re-read by normal migration flow.
+    private let legacyBlobBackupKey = "DataMigration_LegacyEncounters_v1"
+    private let legacyEncountersKey = "DroneEncounters"
     
     private init() {}
     
@@ -101,10 +106,18 @@ class DataMigrationManager {
 
             UserDefaults.standard.set(true, forKey: migrationCompletedKey)
             UserDefaults.standard.set(currentMigrationVersion, forKey: migrationVersionKey)
-            
-            // Save
+
+            // Move legacy blob aside to a one-shot salvage key, then delete
+            // the live key. This prevents ghost re-imports if the migration
+            // flag is ever reset (e.g. SwiftData store recovery).
+            if let legacyBlob = UserDefaults.standard.data(forKey: legacyEncountersKey) {
+                UserDefaults.standard.set(legacyBlob, forKey: legacyBlobBackupKey)
+                UserDefaults.standard.removeObject(forKey: legacyEncountersKey)
+                logger.info("Archived legacy UserDefaults blob to \(self.legacyBlobBackupKey) and removed live key")
+            }
+
             UserDefaults.standard.synchronize()
-            
+
             logger.info("Migration completed successfully - will not run again")
         } catch {
             logger.error("Migration failed: \(error.localizedDescription)")
@@ -176,8 +189,9 @@ class DataMigrationManager {
             throw error
         }
         
-        // Keep UserDefaults as backup for now (will clean up later after verification)
-        // UserDefaults.standard.removeObject(forKey: "DroneEncounters")
+        // Live "DroneEncounters" key is removed in migrate() once the
+        // SwiftData save succeeds; a salvage copy is preserved under
+        // legacyBlobBackupKey for explicit user-triggered restore.
     }
     
     /// Migrate ADS-B encounters
@@ -190,13 +204,50 @@ class DataMigrationManager {
         logger.info("ADS-B encounters are in-memory only, no migration needed")
     }
     
-    /// Clean up old UserDefaults data (call this after verifying migration)
+    /// Clean up old UserDefaults data (call this after verifying migration).
+    /// Removes BOTH the live key and the one-shot salvage copy. Irreversible.
     func cleanupLegacyData() {
         logger.info("Cleaning up legacy UserDefaults data...")
-        
-        UserDefaults.standard.removeObject(forKey: "DroneEncounters")
-        
+
+        UserDefaults.standard.removeObject(forKey: legacyEncountersKey)
+        UserDefaults.standard.removeObject(forKey: legacyBlobBackupKey)
+
         logger.info("Legacy data cleanup complete")
+    }
+
+    /// True if a one-shot salvage copy of the legacy encounters blob exists.
+    /// Surfaced in the SwiftData store-recovery flow so the user can opt in
+    /// to restoring their old encounters instead of silently re-importing.
+    var hasLegacySalvageBlob: Bool {
+        UserDefaults.standard.data(forKey: legacyBlobBackupKey) != nil
+    }
+
+    /// Explicitly restore from the legacy salvage blob. Only call this in
+    /// response to a user choice (e.g. "Recover old encounters?"). Never
+    /// invoked automatically.
+    func restoreFromLegacySalvage(modelContext: ModelContext) throws -> Int {
+        guard let data = UserDefaults.standard.data(forKey: legacyBlobBackupKey) else {
+            logger.warning("restoreFromLegacySalvage called with no salvage blob present")
+            return 0
+        }
+        let legacyEncounters = try JSONDecoder().decode([String: DroneEncounter].self, from: data)
+        var restored = 0
+        for (_, encounter) in legacyEncounters {
+            let predicate = #Predicate<StoredDroneEncounter> { stored in
+                stored.id == encounter.id
+            }
+            let descriptor = FetchDescriptor(predicate: predicate)
+            if (try? modelContext.fetch(descriptor).first) != nil { continue }
+            let stored = StoredDroneEncounter.from(legacy: encounter, context: modelContext)
+            modelContext.insert(stored)
+            stored.updateCachedStats()
+            restored += 1
+        }
+        try modelContext.save()
+        // Consume the salvage blob — restore is one-shot.
+        UserDefaults.standard.removeObject(forKey: legacyBlobBackupKey)
+        logger.info("Restored \(restored) encounters from legacy salvage blob; salvage consumed")
+        return restored
     }
     
     /// Rollback migration (for testing/debugging)

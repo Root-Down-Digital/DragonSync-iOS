@@ -110,10 +110,15 @@ struct ContentView: View {
             Text("ADS-B tracking has been automatically disabled because the connection to readsb failed repeatedly.\n\nPlease check that your readsb/dump1090 server is running and accessible, then re-enable ADS-B tracking in Settings.")
         }
         .onAppear {
-            SwiftDataStorageManager.shared.modelContext = modelContext
-            SwiftDataStorageManager.shared.statusViewModel = statusViewModel
-            statusViewModel.modelContext = modelContext
-            
+            // Context now wired in WarDragonApp.task via wireSwiftDataContext().
+            // We still set here as a safety net in case the view appears before
+            // that task completes (e.g. first-launch ordering).
+            if SwiftDataStorageManager.shared.modelContext == nil {
+                SwiftDataStorageManager.shared.modelContext = modelContext
+                SwiftDataStorageManager.shared.statusViewModel = statusViewModel
+                statusViewModel.modelContext = modelContext
+            }
+
             OpenSkyService.shared.configure(with: modelContext)
             
             SwiftDataStorageManager.shared.repairCachedStats()

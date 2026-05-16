@@ -1079,6 +1079,38 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     
     /// Enforce maximum detection limits (matches Python DragonSync max_drones behavior)
     /// When limit is exceeded, removes oldest detections (FIFO)
+    /// Aggressively trim unbounded UI buffers when memory is tight in the
+    /// background. Called by BackgroundManager.checkMemoryUsage before the
+    /// jetsam threshold is crossed. Idempotent.
+    @MainActor
+    func trimDetectionBuffersForBackground() {
+        let droneCap = 50
+        let aircraftCap = 50
+        let signatureCap = 100
+
+        if parsedMessages.count > (droneCap + aircraftCap) {
+            let sorted = parsedMessages.sorted { $0.lastUpdated > $1.lastUpdated }
+            var drones: [CoTMessage] = []
+            var aircraft: [CoTMessage] = []
+            for m in sorted {
+                if m.uid.hasPrefix("aircraft-") {
+                    if aircraft.count < aircraftCap { aircraft.append(m) }
+                } else {
+                    if drones.count < droneCap { drones.append(m) }
+                }
+            }
+            parsedMessages = drones + aircraft
+        }
+
+        if droneSignatures.count > signatureCap {
+            droneSignatures = Array(droneSignatures.suffix(signatureCap))
+        }
+
+        if aircraftTracks.count > aircraftCap {
+            aircraftTracks = Array(aircraftTracks.suffix(aircraftCap))
+        }
+    }
+
     @MainActor
     private func enforceDetectionLimits() {
         let maxDrones = Settings.shared.maxDrones
