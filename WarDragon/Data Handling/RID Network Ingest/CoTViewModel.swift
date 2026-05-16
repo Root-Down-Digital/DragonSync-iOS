@@ -2286,12 +2286,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         let bufferedMessages = backgroundMessageBuffer
         backgroundMessageBuffer.removeAll()
         backgroundBufferLock.unlock()
-        
+
         print("Processing \(bufferedMessages.count) buffered background messages")
-        for data in bufferedMessages {
-            processIncomingMessage(data)
-            // Small delay to prevent overwhelming the system
-            Thread.sleep(forTimeInterval: 0.01)
+
+        // Drain on a detached task so the main thread isn't blocked on resume.
+        // Each message hops back to main for UI mutation inside
+        // processIncomingMessage -> Task { @MainActor in ... }.
+        // Use Task.yield to give the UI scheduler breathing room between items
+        // instead of Thread.sleep (which previously froze main for up to ~1s
+        // when the buffer was full).
+        let messages = bufferedMessages
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            for data in messages {
+                await MainActor.run { self.processIncomingMessage(data) }
+                await Task.yield()
+            }
         }
     }
     

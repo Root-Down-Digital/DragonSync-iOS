@@ -88,10 +88,13 @@ final class BackgroundManager: @unchecked Sendable {
         
         Task.detached { [weak self] in
             guard let self else { return }
-            
+
             switch connectionMode {
             case .multicast:
-                await self.connectMulticast()
+                // No-op. CoTViewModel owns the NWConnectionGroup. Spawning a
+                // second group here previously posted notifications to a
+                // non-existent observer (dead path) and just held memory.
+                break
             case .zmq:
                 ZMQHandler.shared.connectIfNeeded()
             }
@@ -135,32 +138,9 @@ final class BackgroundManager: @unchecked Sendable {
         }
     }
     
-    private func connectMulticast() async {
-        guard group == nil else { return }
-        
-        let host = await MainActor.run { Settings.shared.multicastHost }
-        let port = await MainActor.run { Settings.shared.multicastPort }
-        
-        do {
-            let hostEndpoint = NWEndpoint.Host(host)
-            let portEndpoint = NWEndpoint.Port(integerLiteral: UInt16(port))
-            let desc = try NWMulticastGroup(for: [.hostPort(host: hostEndpoint, port: portEndpoint)])
-            let params = NWParameters.udp
-            params.allowLocalEndpointReuse = true
-
-            let g = NWConnectionGroup(with: desc, using: params)
-            g.setReceiveHandler(maximumMessageSize: 65_535) { _, data, _ in
-                if let d = data {
-                    NotificationCenter.default.post(name: .init("BackgroundMulticastData"), object: d)
-                }
-            }
-            g.start(queue: DispatchQueue.global(qos: .utility))
-            
-            group = g
-        } catch {
-            print("Failed to connect multicast: \(error)")
-        }
-    }
+    // Multicast group construction removed. CoTViewModel owns the
+    // NWConnectionGroup; BackgroundManager previously built a duplicate group
+    // whose receive-handler posted notifications no observer subscribed to.
     
     private func cleanup() async {
         self._internalStopBackgroundProcessing()
@@ -175,7 +155,11 @@ final class BackgroundManager: @unchecked Sendable {
         running = false
         guard wasRunning else { return }
 
-        ZMQHandler.shared.disconnect()
+        // Do NOT disconnect the shared ZMQHandler here — it is owned by
+        // CoTViewModel. We only stop OUR drain loop. ZMQHandler stays
+        // connected so foreground resumes instantly without a full reconnect.
+        // Multicast: BackgroundManager no longer maintains its own group; the
+        // CoTViewModel's NWConnectionGroup is kept alive by SilentAudioKeepAlive.
         disconnectMulticast()
 
         DispatchQueue.main.async { [weak self] in

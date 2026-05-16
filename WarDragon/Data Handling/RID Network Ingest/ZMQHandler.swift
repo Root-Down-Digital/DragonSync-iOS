@@ -31,6 +31,9 @@ class ZMQHandler: ObservableObject {
     private let connectionCheckInterval: TimeInterval = 30
     private var pollingLock = NSLock()
     private var isPollingActive = false
+    // Signaled by the polling loop when it exits. disconnect() waits on this
+    // off-main so it never blocks the UI. Recreated on each connect().
+    private var pollingExitSemaphore: DispatchSemaphore?
     
     // Status message deduplication - track last message per serial number
     private var lastStatusMessageBySN: [String: (timestamp: Date, jsonString: String)] = [:]
@@ -160,15 +163,16 @@ class ZMQHandler: ObservableObject {
             return
         }
         
-        // Ensure we're fully disconnected before connecting
+        // Ensure we're fully disconnected before connecting. disconnect() now
+        // performs its own off-main wait on the polling-exit semaphore, so no
+        // extra Thread.sleep is needed here.
         if telemetrySocket != nil || statusSocket != nil || context != nil || poller != nil {
             print("ZMQ: Cleaning up previous connection state before reconnecting")
             disconnect()
-            // Give it a moment to fully clean up
-            Thread.sleep(forTimeInterval: 0.1)
         }
-        
+
         shouldContinueRunning = true
+        pollingExitSemaphore = DispatchSemaphore(value: 0)
         
         do {
             // Initialize context and poller
@@ -292,14 +296,16 @@ class ZMQHandler: ObservableObject {
     func setBackgroundMode(_ enabled: Bool) {
         isInBackgroundMode = enabled
         print("ZMQ Background mode \(enabled ? "enabled" : "disabled")")
-        
-        if enabled {
-            try? telemetrySocket?.setRecvTimeout(2000)
-            try? statusSocket?.setRecvTimeout(2000)
-        } else {
-            try? telemetrySocket?.setRecvTimeout(500)
-            try? statusSocket?.setRecvTimeout(500)
-        }
+
+        // ZMQ socket options are not thread-safe; mutating them while the
+        // polling thread is mid-recv is undefined behavior. Serialize against
+        // the polling loop via pollingLock.
+        pollingLock.lock()
+        defer { pollingLock.unlock() }
+
+        let timeout: Int32 = enabled ? 2000 : 500
+        try? telemetrySocket?.setRecvTimeout(timeout)
+        try? statusSocket?.setRecvTimeout(timeout)
     }
     
     private func configureSocket(_ socket: SwiftyZeroMQ.Socket) throws {
@@ -403,6 +409,7 @@ class ZMQHandler: ObservableObject {
             }
             
             print("ZMQ: Polling stopped")
+            self.pollingExitSemaphore?.signal()
         }
     }
     
@@ -1509,74 +1516,61 @@ class ZMQHandler: ObservableObject {
         print("ZMQ: Disconnecting...")
         shouldContinueRunning = false
         isReconnecting = false  // Reset reconnection flag
-        
+
         pollingLock.lock()
         isPollingActive = false
         pollingLock.unlock()
-        
+
         connectionMonitorTimer?.invalidate()
         connectionMonitorTimer = nil
-        
-        // Clear deduplication cache
+
         lastStatusMessageBySN.removeAll()
-        
-        // Give polling loop time to exit
-        if pollingQueue != nil {
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        
-        if let queue = pollingQueue {
-            queue.sync {
-                do {
-                    // Unregister sockets from poller before closing
-                    if let telemetrySocket = telemetrySocket {
-                        try? poller?.unregister(socket: telemetrySocket)
-                    }
-                    if let statusSocket = statusSocket {
-                        try? poller?.unregister(socket: statusSocket)
-                    }
-                    
-                    // Close sockets
-                    try telemetrySocket?.close()
-                    try statusSocket?.close()
-                    
-                    // Terminate context last
-                    try context?.terminate()
-                } catch {
-                    print("ZMQ Cleanup Error: \(error)")
-                }
-                
-                poller = nil
-                telemetrySocket = nil
-                statusSocket = nil
-                context = nil
+
+        // Capture references; cleanup performed off-main so we never freeze
+        // the UI thread (previously up to ~400ms via Thread.sleep + queue.sync).
+        let queue = pollingQueue
+        let semaphore = pollingExitSemaphore
+        let capturedPoller = poller
+        let capturedTelemetry = telemetrySocket
+        let capturedStatus = statusSocket
+        let capturedContext = context
+
+        poller = nil
+        telemetrySocket = nil
+        statusSocket = nil
+        context = nil
+        pollingQueue = nil
+        pollingExitSemaphore = nil
+        isConnected = false
+        isSubscriptionActive = false
+
+        let cleanup: () -> Void = {
+            // Wait for the polling loop to exit (it signals on exit).
+            // 1s cap — if loop is wedged we close anyway to avoid leaking ZMQ
+            // resources; libzmq tolerates close of a poll-target socket.
+            if let semaphore = semaphore {
+                _ = semaphore.wait(timeout: .now() + 1.0)
             }
-        } else {
-            // No queue, clean up directly
             do {
-                if let telemetrySocket = telemetrySocket {
-                    try? poller?.unregister(socket: telemetrySocket)
-                }
-                if let statusSocket = statusSocket {
-                    try? poller?.unregister(socket: statusSocket)
-                }
-                try telemetrySocket?.close()
-                try statusSocket?.close()
-                try context?.terminate()
+                if let s = capturedTelemetry { try? capturedPoller?.unregister(socket: s) }
+                if let s = capturedStatus    { try? capturedPoller?.unregister(socket: s) }
+                try capturedTelemetry?.close()
+                try capturedStatus?.close()
+                try capturedContext?.terminate()
             } catch {
                 print("ZMQ Cleanup Error: \(error)")
             }
-            
-            poller = nil
-            telemetrySocket = nil
-            statusSocket = nil
-            context = nil
+            print("ZMQ: Disconnected")
         }
-        
-        pollingQueue = nil
-        isConnected = false
-        isSubscriptionActive = false
-        print("ZMQ: Disconnected")
+
+        if Thread.isMainThread {
+            // Off-load teardown so main is never blocked.
+            DispatchQueue.global(qos: .utility).async(execute: cleanup)
+        } else if let queue = queue {
+            queue.async(execute: cleanup)
+        } else {
+            cleanup()
+        }
     }
     
     /// Force reset connection state - useful when stuck in reconnecting loop
@@ -1610,25 +1604,16 @@ class ZMQHandler: ObservableObject {
         
         isReconnecting = true
         print("ZMQ: Reconnecting...")
-        
-        do {
-            try telemetrySocket?.close()
-            try statusSocket?.close()
-        } catch {
-            print("ZMQ Socket Close Error: \(error)")
-            disconnect()
-            isReconnecting = false
-            return
-        }
-        
-        telemetrySocket = nil
-        statusSocket = nil
-        isConnected = false
-        
+
+        // Full disconnect — this unregisters sockets from the poller before
+        // closing them (libzmq UB to close a registered, polled socket from
+        // another thread) and waits off-main for the polling loop to exit.
+        disconnect()
+
         // Small delay before reconnecting to avoid rapid reconnect loops
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self = self else { return }
-            
+
             self.connect(
                 host: self.lastHost,
                 zmqTelemetryPort: self.lastTelemetryPort,
@@ -1636,7 +1621,7 @@ class ZMQHandler: ObservableObject {
                 onTelemetry: self.lastTelemetryHandler,
                 onStatus: self.lastStatusHandler
             )
-            
+
             self.isReconnecting = false
         }
     }
