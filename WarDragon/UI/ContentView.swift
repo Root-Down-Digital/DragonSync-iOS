@@ -317,35 +317,57 @@ struct ContentView: View {
     }
     
     private var bothDetectionsList: some View {
-        VStack(spacing: 0) {
-            unifiedMapView(showAircraft: true)
-                .frame(height: mapHeight)
-                .padding(.vertical, 4)
+        GeometryReader { geo in
+            if useSideBySideMapList(for: geo.size) {
+                HStack(spacing: 0) {
+                    unifiedMapView(showAircraft: true)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.vertical, 4)
+                        .padding(.leading, 4)
+                        .layoutPriority(0)
 
-            List {
-                if hasDrones {
-                    Section("Drones (\(cotViewModel.parsedMessages.count))") {
-                        ForEach(cotViewModel.parsedMessages) { item in
-                            MessageRow(
-                                message: item,
-                                cotViewModel: cotViewModel,
-                                isCompact: true
-                            )
-                            .id(item.uid)
-                        }
-                    }
+                    Divider()
+
+                    bothList
+                        .frame(minWidth: 340, idealWidth: 420, maxWidth: 520)
+                        .layoutPriority(1)
                 }
+            } else {
+                VStack(spacing: 0) {
+                    unifiedMapView(showAircraft: true)
+                        .frame(height: mapHeight)
+                        .padding(.vertical, 4)
 
-                if hasAircraft {
-                    Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
-                        ForEach(cotViewModel.aircraftTracks) { aircraft in
-                            AircraftRow(aircraft: aircraft)
-                        }
+                    bothList
+                }
+            }
+        }
+    }
+
+    private var bothList: some View {
+        List {
+            if hasDrones {
+                Section("Drones (\(cotViewModel.parsedMessages.count))") {
+                    ForEach(cotViewModel.parsedMessages) { item in
+                        MessageRow(
+                            message: item,
+                            cotViewModel: cotViewModel,
+                            isCompact: true
+                        )
+                        .id(item.uid)
                     }
                 }
             }
-            .scrollContentBackground(.visible)
+
+            if hasAircraft {
+                Section("Aircraft (\(cotViewModel.aircraftTracks.count))") {
+                    ForEach(cotViewModel.aircraftTracks) { aircraft in
+                        AircraftRow(aircraft: aircraft)
+                    }
+                }
+            }
         }
+        .scrollContentBackground(.visible)
     }
     
     private func getValidFlightPath(for uid: String) -> [CLLocationCoordinate2D] {
@@ -516,17 +538,23 @@ struct ContentView: View {
         #if targetEnvironment(macCatalyst)
         return 200
         #else
-        // Check if we're on iPad in landscape
-        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        let isLandscape = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.interfaceOrientation.isLandscape ?? false
-        
-        if isIPad && isLandscape {
-            return 280 // Fits map + bottom controls + "Tap to view full map" capsule
-        } else {
-            return 320 // Portrait: extra room for stats panel + map controls + capsule
-        }
+        // On iPad-landscape we render map+list side-by-side, so height is
+        // driven by the container, not this constant. Vertical layouts only.
+        return 320
+        #endif
+    }
+
+    /// True when we should render map and list side-by-side instead of stacked.
+    /// Decision is geometry-driven so it reacts to rotation, split-view, and
+    /// Stage Manager resizing in real time.
+    private func useSideBySideMapList(for size: CGSize) -> Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        // Wider than tall AND wide enough to fit both panes comfortably.
+        // 900pt threshold filters out iPhone-Plus landscape (~736pt) and
+        // narrow Stage-Manager iPad windows.
+        return size.width > size.height && size.width >= 900
         #endif
     }
     
@@ -608,40 +636,64 @@ struct ContentView: View {
     
     private var droneList: some View {
         ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                unifiedMapView(showAircraft: false)
-                    .frame(height: mapHeight)
-                    .padding(.vertical, 4)
+            GeometryReader { geo in
+                Group {
+                    if useSideBySideMapList(for: geo.size) {
+                        HStack(spacing: 0) {
+                            unifiedMapView(showAircraft: false)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .padding(.vertical, 4)
+                                .padding(.leading, 4)
+                                .layoutPriority(0)
 
-                List {
-                    Section {
-                        ForEach(cotViewModel.parsedMessages) { item in
-                            MessageRow(
-                                message: item,
-                                cotViewModel: cotViewModel,
-                                isCompact: true
-                            )
-                            .id(item.uid)
+                            Divider()
+
+                            droneOnlyList
+                                .frame(minWidth: 340, idealWidth: 420, maxWidth: 520)
+                                .layoutPriority(1)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            unifiedMapView(showAircraft: false)
+                                .frame(height: mapHeight)
+                                .padding(.vertical, 4)
+
+                            droneOnlyList
                         }
                     }
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.visible)
-            }
-            .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
-                if oldMessages.count < newMessages.count {
-                    if let latest = newMessages.last {
-                        if !oldMessages.contains(where: { $0.id == latest.id }) {
-                            latestMessage = latest
-                            showAlert = false
-                            withAnimation {
-                                proxy.scrollTo(latest.id, anchor: .bottom)
+                .onChange(of: cotViewModel.parsedMessages) { oldMessages, newMessages in
+                    if oldMessages.count < newMessages.count {
+                        if let latest = newMessages.last {
+                            if !oldMessages.contains(where: { $0.id == latest.id }) {
+                                latestMessage = latest
+                                showAlert = false
+                                withAnimation {
+                                    proxy.scrollTo(latest.id, anchor: .bottom)
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    private var droneOnlyList: some View {
+        List {
+            Section {
+                ForEach(cotViewModel.parsedMessages) { item in
+                    MessageRow(
+                        message: item,
+                        cotViewModel: cotViewModel,
+                        isCompact: true
+                    )
+                    .id(item.uid)
+                }
+            }
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.visible)
     }
     
     private func unifiedMapView(showAircraft: Bool = true) -> some View {
