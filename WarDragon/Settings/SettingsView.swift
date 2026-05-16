@@ -215,23 +215,6 @@ struct SettingsView: View {
             }
             
             Section("Performance") {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Message Processing Interval")
-                        Spacer()
-                        Stepper(value: Binding(
-                            get: { settings.messageProcessingInterval },
-                            set: { settings.messageProcessingInterval = $0 }
-                        ), in: 50...2500, step: 50) {
-                            Text("\(settings.messageProcessingInterval) ms")
-                                .font(.appCaption)
-                                .bold()
-                                .foregroundColor(.primary)
-                                .frame(width: 100, alignment: .trailing)
-                        }
-                    }
-                }
-                
                 NavigationLink {
                     RateLimitSettingsView()
                 } label: {

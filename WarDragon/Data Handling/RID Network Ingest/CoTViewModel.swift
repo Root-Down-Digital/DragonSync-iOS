@@ -54,8 +54,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cachedZmqHost: String = "192.168.2.1"
     private var cachedZmqTelemetryPort: UInt16 = 45454
     private var cachedZmqStatusPort: UInt16 = 4225
-    private var cachedMessageProcessingInterval: TimeInterval = 0.5
-    private var cachedBackgroundMessageInterval: TimeInterval = 2.0
     private var cachedIsListening: Bool = false
     
     private let listenerQueue = DispatchQueue(label: "CoTListenerQueue")
@@ -724,9 +722,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.cachedZmqHost = Settings.shared.zmqHost
             self.cachedZmqTelemetryPort = UInt16(Settings.shared.zmqTelemetryPort)
             self.cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
-            self.cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
-            self.cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
-            
+
+
             // Don't force isListening to false - preserve user's previous state
             self.cachedIsListening = Settings.shared.isListening
             self.isListeningCot = false
@@ -854,8 +851,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         cachedZmqHost = Settings.shared.zmqHost
         cachedZmqTelemetryPort = UInt16(Settings.shared.zmqTelemetryPort)
         cachedZmqStatusPort = UInt16(Settings.shared.zmqStatusPort)
-        cachedMessageProcessingInterval = Settings.shared.messageProcessingIntervalSeconds
-        cachedBackgroundMessageInterval = Settings.shared.backgroundMessageIntervalSeconds
         cachedIsListening = Settings.shared.isListening
     }
     
@@ -1294,12 +1289,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     return
                 }
 
-                let now = Date()
-                let interval = self.isInBackground ? 5.0 : self.cachedMessageProcessingInterval
-                if now.timeIntervalSince(self.lastProcessTime) >= interval {
-                    self.lastProcessTime = now
-                    self.processIncomingMessage(data)
-                }
+                self.lastProcessTime = Date()
+                self.processIncomingMessage(data)
             }
 
             group.stateUpdateHandler = { [weak self] state in
@@ -1916,7 +1907,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         
         self.parsedMessages[index] = existingMessage
         self.updateAlertRing(for: existingMessage)
-        self.objectWillChange.send()
     }
 
     private func formatCurrentTimeForCoT() -> String {
@@ -2267,14 +2257,9 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 return
             }
             
-            let now = Date()
-            let processingInterval = self.isInBackground ? 5.0 : self.cachedMessageProcessingInterval
-            
-            if now.timeIntervalSince(self.lastProcessTime) >= processingInterval {
-                self.lastProcessTime = now
-                self.processIncomingMessage(data)
-            }
-            
+            self.lastProcessTime = Date()
+            self.processIncomingMessage(data)
+
             if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
                 self.receiveMessages(from: connection, isZMQ: isZMQ)
             }
@@ -3015,13 +3000,19 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 }
                 
                 if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
+                    let existing = self.alertRings[index]
+                    let latDelta = abs(existing.centerCoordinate.latitude - location.latitude)
+                    let lonDelta = abs(existing.centerCoordinate.longitude - location.longitude)
+                    let radiusDelta = abs(existing.radius - distance)
+                    if existing.rssi == rssi && radiusDelta < 1.0 && latDelta < 1e-6 && lonDelta < 1e-6 {
+                        return
+                    }
                     self.alertRings[index] = AlertRing(
                         droneId: message.uid,
                         centerCoordinate: location,
                         radius: distance,
                         rssi: rssi
                     )
-                    print("✅ Updated alert ring for \(message.uid): center=(\(location.latitude), \(location.longitude)), radius=\(Int(distance))m, RSSI=\(rssi)dBm")
                 } else {
                     self.alertRings.append(AlertRing(
                         droneId: message.uid,
@@ -3029,11 +3020,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                         radius: distance,
                         rssi: rssi
                     ))
-                    print("✅ Created NEW alert ring for \(message.uid): center=(\(location.latitude), \(location.longitude)), radius=\(Int(distance))m, RSSI=\(rssi)dBm")
                 }
-                
-                // Force UI refresh to show the ring immediately
-                self.objectWillChange.send()
             }
         } else {
             Task { @MainActor in

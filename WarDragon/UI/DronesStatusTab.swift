@@ -699,6 +699,11 @@ private struct CompactMapView: View {
     @State private var showHomes = true
     @State private var showDrones = true
     @State private var mapStyle: MapStyle = .standard
+
+    private var droneCoordHash: String {
+        drones.map { "\($0.uid)|\($0.lat)|\($0.lon)" }.joined(separator: ",")
+            + "#" + cotViewModel.alertRings.map { "\($0.droneId)|\($0.centerCoordinate.latitude)|\($0.centerCoordinate.longitude)|\($0.radius)" }.joined(separator: ",")
+    }
     
     var body: some View {
         Map(position: $mapCameraPosition, interactionModes: .all) {
@@ -798,7 +803,7 @@ private struct CompactMapView: View {
         .onAppear {
             updateMapRegion()
         }
-        .onChange(of: drones) { _, _ in
+        .onChange(of: droneCoordHash) { _, _ in
             updateMapRegion()
         }
     }
