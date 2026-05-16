@@ -974,9 +974,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     
                     print("Updated drone info in parsedMessages: \(droneId) - Name: '\(customName)', Trust: \(trustStatus.rawValue)")
                     
-                    // Force UI refresh
                     self.parsedMessages[index] = updatedMessage
-                    self.objectWillChange.send()
                 }
             }
         }
@@ -3235,12 +3233,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             if (lat == 0 && lon == 0) && existingMessage.rssi != nil && existingMessage.rssi != 0 {
                 self.updateAlertRing(for: existingMessage)
             }
-            
-            // Only trigger UI refresh if something meaningful changed
-            if hasSignificantChange {
-                self.objectWillChange.send()
-            }
-            
+
+
         } else {
             // Already on @MainActor - no need for nested Task
             self.parsedMessages.append(messageToProcess)
@@ -4107,8 +4101,6 @@ extension CoTViewModel {
         }
         
         print("Updated OpenSky aircraft: \(openSkyAircraft.count) aircraft (tracking \(limitedAircraft.count))")
-        
-        objectWillChange.send()
 
         if openSkyUpdateCount % 5 == 0 {
             if Settings.shared.notificationsEnabled {
@@ -4156,10 +4148,7 @@ extension CoTViewModel {
         // Keep aircraft separate from drone messages
         
         print("Updated aircraft tracks: \(aircraft.count) aircraft")
-        
-        // Force UI update
-        objectWillChange.send()
-        
+
         // Check for nearby aircraft if enabled
         if Settings.shared.notificationsEnabled {
             checkNearbyAircraft(aircraft)
