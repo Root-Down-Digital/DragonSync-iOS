@@ -116,6 +116,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             let centerCoordinate: CLLocationCoordinate2D
             let radius: Double
             let rssi: Int
+
+            var mapKey: String { "\(droneId)|\(centerCoordinate.latitude)|\(centerCoordinate.longitude)|\(Int(radius))" }
         }
     
     struct SignalSource: Hashable {
@@ -618,6 +620,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             }
             return CLLocationCoordinate2D(latitude: latDouble, longitude: lonDouble)
         }
+
+        var droneMapKey: String { "\(uid)|\(lat)|\(lon)" }
+        var homeMapKey: String { "\(uid)|H|\(homeLat)|\(homeLon)" }
+        var pilotMapKey: String { "\(uid)|P|\(pilotLat)|\(pilotLon)" }
         
         func toDictionary() -> [String: Any] {
             var dict: [String: Any] = [
@@ -2961,71 +2967,64 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
+    @MainActor
     public func updateAlertRing(for message: CoTMessage) {
         let latValue = Double(message.lat) ?? 0
         let lonValue = Double(message.lon) ?? 0
-        
-        if (latValue == 0 && lonValue == 0) && message.rssi != nil && message.rssi != 0 {
-            Task { @MainActor in
-                var monitorLocation: CLLocationCoordinate2D?
-                
-                if let monitorStatus = self.statusViewModel.statusMessages.last {
-                    let statusLat = monitorStatus.gpsData.latitude
-                    let statusLon = monitorStatus.gpsData.longitude
-                    
-                    if statusLat != 0.0 || statusLon != 0.0 {
-                        monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
-                    }
-                }
-                
-                if monitorLocation == nil,
-                   let userLocation = LocationManager.shared.userLocation {
-                    monitorLocation = userLocation.coordinate
-                }
-                
-                guard let location = monitorLocation, let rssi = message.rssi else {
-                    print("❌ Cannot create alert ring for \(message.uid): no monitor location (statusLat=\(self.statusViewModel.statusMessages.last?.gpsData.latitude ?? 0), statusLon=\(self.statusViewModel.statusMessages.last?.gpsData.longitude ?? 0)) or no RSSI")
-                    return
-                }
-                
-                let rssiValue = Double(rssi)
-                let distance: Double
-                
-                if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
-                    distance = self.calculateFPVDistance(fpvRSSI)
-                } else if rssiValue > 1000 {
-                    distance = self.calculateFPVDistance(rssiValue)
-                } else {
-                    distance = DroneSignatureGenerator().calculateDistance(rssiValue)
-                }
-                
-                if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
-                    let existing = self.alertRings[index]
-                    let latDelta = abs(existing.centerCoordinate.latitude - location.latitude)
-                    let lonDelta = abs(existing.centerCoordinate.longitude - location.longitude)
-                    let radiusDelta = abs(existing.radius - distance)
-                    if existing.rssi == rssi && radiusDelta < 1.0 && latDelta < 1e-6 && lonDelta < 1e-6 {
-                        return
-                    }
-                    self.alertRings[index] = AlertRing(
-                        droneId: message.uid,
-                        centerCoordinate: location,
-                        radius: distance,
-                        rssi: rssi
-                    )
-                } else {
-                    self.alertRings.append(AlertRing(
-                        droneId: message.uid,
-                        centerCoordinate: location,
-                        radius: distance,
-                        rssi: rssi
-                    ))
-                }
+
+        guard (latValue == 0 && lonValue == 0) && message.rssi != nil && message.rssi != 0 else {
+            self.alertRings.removeAll(where: { $0.droneId == message.uid })
+            return
+        }
+
+        var monitorLocation: CLLocationCoordinate2D?
+        if let monitorStatus = self.statusViewModel.statusMessages.last {
+            let statusLat = monitorStatus.gpsData.latitude
+            let statusLon = monitorStatus.gpsData.longitude
+            if statusLat != 0.0 || statusLon != 0.0 {
+                monitorLocation = CLLocationCoordinate2D(latitude: statusLat, longitude: statusLon)
             }
+        }
+        if monitorLocation == nil, let userLocation = LocationManager.shared.userLocation {
+            monitorLocation = userLocation.coordinate
+        }
+
+        guard let location = monitorLocation, let rssi = message.rssi else {
+            print("❌ Cannot create alert ring for \(message.uid): no monitor location or no RSSI")
+            return
+        }
+
+        let rssiValue = Double(rssi)
+        let distance: Double
+        if message.isFPVDetection, let fpvRSSI = message.fpvRSSI {
+            distance = self.calculateFPVDistance(fpvRSSI)
+        } else if rssiValue > 1000 {
+            distance = self.calculateFPVDistance(rssiValue)
         } else {
-            Task { @MainActor in
-                self.alertRings.removeAll(where: { $0.droneId == message.uid })
+            distance = DroneSignatureGenerator().calculateDistance(rssiValue)
+        }
+
+        if let index = self.alertRings.firstIndex(where: { $0.droneId == message.uid }) {
+            let existing = self.alertRings[index]
+            let latDelta = abs(existing.centerCoordinate.latitude - location.latitude)
+            let lonDelta = abs(existing.centerCoordinate.longitude - location.longitude)
+            let radiusDelta = abs(existing.radius - distance)
+            if existing.rssi == rssi && radiusDelta < 1.0 && latDelta < 1e-6 && lonDelta < 1e-6 {
+                return
             }
+            self.alertRings[index] = AlertRing(
+                droneId: message.uid,
+                centerCoordinate: location,
+                radius: distance,
+                rssi: rssi
+            )
+        } else {
+            self.alertRings.append(AlertRing(
+                droneId: message.uid,
+                centerCoordinate: location,
+                radius: distance,
+                rssi: rssi
+            ))
         }
     }
 

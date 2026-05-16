@@ -128,7 +128,7 @@ struct DronesStatusTab: View {
                         .padding(.top, 8)
                         .padding(.bottom, 8)
                         
-                        CompactMapView(cotViewModel: cotViewModel, drones: filteredAndSortedDrones)
+                        CompactMapView(cotViewModel: cotViewModel, statusViewModel: cotViewModel.statusViewModel, drones: filteredAndSortedDrones)
                             .frame(height: geometry.size.height * 0.3)
                             .cornerRadius(12)
                             .padding(.horizontal, 16)
@@ -692,6 +692,7 @@ private extension DronesStatusTab.FilterOptions {
 
 private struct CompactMapView: View {
     @ObservedObject var cotViewModel: CoTViewModel
+    @ObservedObject var statusViewModel: StatusViewModel
     let drones: [CoTViewModel.CoTMessage]
     @State private var mapCameraPosition: MapCameraPosition = .automatic
     @State private var showPaths = true
@@ -700,21 +701,50 @@ private struct CompactMapView: View {
     @State private var showDrones = true
     @State private var mapStyle: MapStyle = .standard
 
+    private var monitorLocation: CLLocationCoordinate2D? {
+        if let last = statusViewModel.statusMessages.last {
+            let lat = last.gpsData.latitude
+            let lon = last.gpsData.longitude
+            if lat != 0.0 || lon != 0.0 {
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+        }
+        if let user = LocationManager.shared.userLocation {
+            return user.coordinate
+        }
+        return nil
+    }
+
     private var droneCoordHash: String {
-        drones.map { "\($0.uid)|\($0.lat)|\($0.lon)" }.joined(separator: ",")
+        let mon = monitorLocation.map { "\($0.latitude),\($0.longitude)" } ?? "nil"
+        return drones.map { "\($0.uid)|\($0.lat)|\($0.lon)" }.joined(separator: ",")
             + "#" + cotViewModel.alertRings.map { "\($0.droneId)|\($0.centerCoordinate.latitude)|\($0.centerCoordinate.longitude)|\($0.radius)" }.joined(separator: ",")
+            + "@" + mon
     }
     
     var body: some View {
         Map(position: $mapCameraPosition, interactionModes: .all) {
-            // Alert rings for drones without GPS (proximity detections)
+            if let mon = monitorLocation {
+                Annotation("Monitor", coordinate: mon) {
+                    ZStack {
+                        Circle()
+                            .fill(.purple)
+                            .frame(width: 22, height: 22)
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .resizable()
+                            .frame(width: 13, height: 13)
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+
             ForEach(cotViewModel.alertRings.filter { ring in
                 // Only show rings for drones in our filtered list
                 drones.contains { drone in
                     drone.uid == ring.droneId || 
                     drone.uid.hasPrefix(ring.droneId.components(separatedBy: "-").dropLast().joined(separator: "-"))
                 }
-            }, id: \.droneId) { ring in
+            }, id: \.mapKey) { ring in
                 // Use minimum 100m radius if ring radius is 0 or too small
                 let displayRadius = ring.radius > 0 ? ring.radius : 100.0
                 
@@ -747,7 +777,7 @@ private struct CompactMapView: View {
             }
             
             if showDrones {
-                ForEach(drones, id: \.uid) { drone in
+                ForEach(drones, id: \.droneMapKey) { drone in
                     if let coord = drone.coordinate, coord.isValid {
                         Annotation(drone.uid, coordinate: coord) {
                             ZStack {
@@ -766,7 +796,7 @@ private struct CompactMapView: View {
             }
             
             if showHomes {
-                ForEach(drones, id: \.uid) { drone in
+                ForEach(drones, id: \.homeMapKey) { drone in
                     if let lat = Double(drone.homeLat), let lon = Double(drone.homeLon), lat != 0 || lon != 0 {
                         Annotation("Home", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                             ZStack {
@@ -783,7 +813,7 @@ private struct CompactMapView: View {
             }
             
             if showPilots {
-                ForEach(drones, id: \.uid) { drone in
+                ForEach(drones, id: \.pilotMapKey) { drone in
                     if let lat = Double(drone.pilotLat), let lon = Double(drone.pilotLon), lat != 0 || lon != 0 {
                         Annotation("Pilot", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                             ZStack {
@@ -810,25 +840,31 @@ private struct CompactMapView: View {
     
     private func updateMapRegion() {
         var allCoords: [CLLocationCoordinate2D] = []
-        
-        // Add drone coordinates that have valid GPS
+
         allCoords += drones.compactMap { drone -> CLLocationCoordinate2D? in
             guard let coord = drone.coordinate else { return nil }
             if coord.latitude == 0 && coord.longitude == 0 { return nil }
             return coord
         }
-        
-        // Add alert ring center coordinates for drones without GPS
+
         let relevantRings = cotViewModel.alertRings.filter { ring in
             drones.contains { drone in
-                drone.uid == ring.droneId || 
+                drone.uid == ring.droneId ||
                 drone.uid.hasPrefix(ring.droneId.components(separatedBy: "-").dropLast().joined(separator: "-"))
             }
         }
         allCoords += relevantRings.map { $0.centerCoordinate }
-        
-        guard !allCoords.isEmpty else {
-            mapCameraPosition = .automatic
+
+        if allCoords.isEmpty {
+            if let mon = monitorLocation {
+                let region = MKCoordinateRegion(
+                    center: mon,
+                    span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                )
+                mapCameraPosition = .region(region)
+            } else {
+                mapCameraPosition = .automatic
+            }
             return
         }
         
