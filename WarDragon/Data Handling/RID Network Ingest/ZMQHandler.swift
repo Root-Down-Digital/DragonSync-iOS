@@ -215,12 +215,15 @@ class ZMQHandler: ObservableObject {
             isConnected = true
             isSubscriptionActive = true
             print("ZMQ: Connected successfully")
+            BackgroundDiagnostics.shared.log(.socket, "zmq connected",
+                                             "tcp://\(host):\(zmqTelemetryPort),\(zmqStatusPort)")
             
             // Start connection monitoring
             startConnectionMonitoring()
             
         } catch {
             print("ZMQ Setup Error: \(error)")
+            BackgroundDiagnostics.shared.log(.socket, "zmq connect failed", String(describing: error))
             disconnect()
         }
     }
@@ -353,6 +356,7 @@ class ZMQHandler: ObservableObject {
                                     self.isSubscriptionActive = true
                                     
                                     if socket === self.telemetrySocket {
+                                        BackgroundDiagnostics.shared.recordPacket(.zmqTelemetry)
                                         // Try to convert any telemetry message to XML
                                         print("ZMQ: Received telemetry data (\(jsonString.count) bytes)")
                                         let xmlMessages = self.convertTelemetryToXMLArray(jsonString)
@@ -368,6 +372,7 @@ class ZMQHandler: ObservableObject {
                                             print("ZMQ: First 200 chars: \(jsonString.prefix(200))")
                                         }
                                     } else if socket === self.statusSocket {
+                                        BackgroundDiagnostics.shared.recordPacket(.zmqStatus)
                                         // Deduplicate status messages
                                         if self.shouldDispatchStatusMessage(jsonString) {
                                             print("ZMQ: Status JSON received, dispatching to CoTViewModel")
@@ -392,6 +397,7 @@ class ZMQHandler: ObservableObject {
                            error.description != "Operation would block" &&
                            self.shouldContinueRunning {
                             print("ZMQ Polling Error: \(error)")
+                            BackgroundDiagnostics.shared.log(.socket, "zmq poll error", error.description)
                             if self.shouldContinueRunning && self.isConnected {
                                 DispatchQueue.main.async {
                                     self.reconnect()
@@ -1514,6 +1520,9 @@ class ZMQHandler: ObservableObject {
     
     func disconnect() {
         print("ZMQ: Disconnecting...")
+        if isConnected {
+            BackgroundDiagnostics.shared.log(.socket, "zmq disconnect", "host=\(lastHost) bgMode=\(isInBackgroundMode)")
+        }
         shouldContinueRunning = false
         isReconnecting = false  // Reset reconnection flag
 
@@ -1678,7 +1687,12 @@ extension ZMQHandler {
                 if let payload = try telemetrySocket.recv(bufferLength: 32768),
                    !payload.isEmpty,
                    let text = String(data: payload, encoding: .utf8) {
-                    lastTelemetryHandler(text)
+                    BackgroundDiagnostics.shared.recordPacket(.zmqTelemetry)
+                    let xmlMessages = convertTelemetryToXMLArray(text)
+                    let handler = lastTelemetryHandler
+                    DispatchQueue.main.async {
+                        for xmlMessage in xmlMessages { handler(xmlMessage) }
+                    }
                     drained = true
                 }
             } catch let error as SwiftyZeroMQ.ZeroMQError {
@@ -1694,7 +1708,9 @@ extension ZMQHandler {
                 if let payload = try statusSocket.recv(bufferLength: 32768),
                    !payload.isEmpty,
                    let text = String(data: payload, encoding: .utf8) {
-                    lastStatusHandler(text)
+                    BackgroundDiagnostics.shared.recordPacket(.zmqStatus)
+                    let handler = lastStatusHandler
+                    DispatchQueue.main.async { handler(text) }
                     drained = true
                 }
             } catch let error as SwiftyZeroMQ.ZeroMQError {

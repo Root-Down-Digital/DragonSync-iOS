@@ -284,6 +284,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         UserDefaults.standard.synchronize()
 
         UNUserNotificationCenter.current().delegate = self
+        BackgroundDiagnostics.shared.startHeartbeat()
         setupAppLifecycleObservers()
         registerBGTasks()
         scheduleAllBGTasks()
@@ -330,7 +331,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     
     @objc private func handleMemoryWarning() {
         print("⚠️ Memory warning received - performing aggressive cleanup")
-        
+        BackgroundDiagnostics.shared.log(.memory, "system memory warning",
+                                         String(format: "resident=%.1fMB", getMemoryUsage()))
+
         Task { @MainActor in
             // Get memory info before cleanup
             let memoryBefore = getMemoryUsage()
@@ -338,8 +341,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             
             DroneStorageManager.shared.forceSave()
             SwiftDataStorageManager.shared.forceSave()
-            URLCache.shared.removeAllCachedResponses()
-            ZMQHandler.shared.clearCaches()
+            BackgroundManager.shared.checkMemoryUsage()
             
             // If in background and memory is critical, temporarily pause processing
             if UIApplication.shared.applicationState == .background {
@@ -372,7 +374,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     @objc private func appMovingToBackground() {
         print("App moving to background")
-        
+        BackgroundDiagnostics.shared.log(.lifecycle, "entered background", "")
+
         Task { @MainActor in
             let memoryBefore = getMemoryUsage()
             print("   Memory before background prep: \(memoryBefore)MB")
@@ -419,23 +422,28 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                 print("Background monitoring enabled with task rotation")
             } else {
                 print("App entering background - NOT monitoring (user not listening or bg disabled)")
+                BackgroundDiagnostics.shared.log(.lifecycle, "background monitoring off",
+                                                 "isListening=\(isListening) enableBg=\(enableBg)")
                 UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
                 UserDefaults.standard.synchronize()
             }
+            BackgroundDiagnostics.shared.flush()
         }
     }
 
     @objc private func appMovingToForeground() {
         print("App moving to foreground")
-        
+        BackgroundDiagnostics.shared.reportForegroundGap()
+        BackgroundDiagnostics.shared.log(.lifecycle, "returned to foreground", "")
+
         Task { @MainActor in
             ZMQHandler.shared.setBackgroundMode(false)
             
             UserDefaults.standard.set(false, forKey: "BackgroundMonitoringActive")
             UserDefaults.standard.synchronize()
             
-            BackgroundManager.shared.stopBackgroundProcessing()
-            
+            BackgroundManager.shared.stopBackgroundProcessing(stopKeepAlive: !Settings.shared.isListening)
+
             print("Returned to foreground mode")
         }
     }
@@ -467,15 +475,21 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func handleBGTask(_ task: BGProcessingTask) {
+        BackgroundDiagnostics.shared.log(.bgtask, "BGProcessingTask fired", task.identifier)
+        scheduleBGTask(id: task.identifier, delay: 15*60)
+
         task.expirationHandler = {
-            BackgroundManager.shared.stopBackgroundProcessing()
+            BackgroundDiagnostics.shared.log(.bgtask, "BGProcessingTask expired", task.identifier)
+            BackgroundDiagnostics.shared.flush()
+            BackgroundManager.shared.stopBackgroundProcessing(stopKeepAlive: false)
+            task.setTaskCompleted(success: false)
         }
         BackgroundManager.shared.startBackgroundProcessing(useBackgroundTask: false)
-        task.setTaskCompleted(success: true)
-        scheduleBGTask(id: task.identifier, delay: 15*60)
     }
     
     func applicationWillTerminate(_ application: UIApplication) {
+        BackgroundDiagnostics.shared.log(.lifecycle, "app terminating", "")
+        BackgroundDiagnostics.shared.flush()
         Task { @MainActor in
             Settings.shared.isListening = false
         }

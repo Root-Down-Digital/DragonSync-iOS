@@ -21,8 +21,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     @Published private(set) var isReconnecting = false
     private var lastProcessTime = Date.distantPast
     private var isInBackground = false
-    private var backgroundMessageBuffer: [Data] = []
-    private let backgroundBufferLock = NSLock()
     private let signatureGenerator = DroneSignatureGenerator()
     public let statusViewModel: StatusViewModel
     private var spectrumViewModel: SpectrumData.SpectrumViewModel?
@@ -32,6 +30,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     private var cotListener: NWListener?
     private var statusListener: NWListener?
     private var multicastGroup: NWConnectionGroup?
+    private var multicastRecoveryScheduled = false
+    private var multicastRecoveryAttempts = 0
+    private var lastDetectionPublish: [String: Date] = [:]
+    private let coordlessRepublishInterval: TimeInterval = 30
     
     // ADS-B update counters (moved from extension)
     private var openSkyUpdateCount: Int = 0
@@ -734,6 +736,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self.cachedIsListening = Settings.shared.isListening
             self.isListeningCot = false
             
+            BackgroundManager.shared.configure(with: self)
+
             self.checkPermissions()
             self.setupMQTTClient()
             self.setupTAKClient()
@@ -763,6 +767,12 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             self,
             selector: #selector(handleAppWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -889,18 +899,14 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         print("App entering foreground - resuming")
         isInBackground = false
         
-        // Stop any background tasks
-        BackgroundManager.shared.endAllBackgroundTasks()
-
         Task { @MainActor in
+            BackgroundManager.shared.endAllBackgroundTasks(stopKeepAlive: !Settings.shared.isListening)
+
             // Restart timers
             self.startInactivityCleanupTimer()
             
             // Restore alert rings
             self.restoreAlertRingsFromStorage()
-            
-            // Process any buffered messages
-            self.processBackgroundBuffer()
             
             // Check if we need to reconnect
             if Settings.shared.isListening {
@@ -920,6 +926,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
+    @objc private func handleAppDidBecomeActive() {
+        isInBackground = false
+        Task { @MainActor in
+            self.restoreAlertRingsFromStorage()
+        }
+    }
+
     @objc private func handleAppWillTerminate() {
         print("App terminating - cleaning up connections")
         
@@ -1248,8 +1261,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.startZMQListening()
             }
             
-            // ✅ ONLY start background processing if we're already in background
-            // Otherwise, wait for the app to actually enter background
+            if Settings.shared.enableBackgroundDetection {
+                SilentAudioKeepAlive.shared.start()
+            }
+
             if self.isInBackground && UIApplication.shared.applicationState == .background {
                 print("Starting background processing (app is in background)")
                 self.backgroundManager.startBackgroundProcessing()
@@ -1265,6 +1280,29 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
+    @MainActor
+    func ensureMulticastHealthy() {
+        guard cachedConnectionMode == .multicast, Settings.shared.isListening else { return }
+        guard multicastGroup == nil else { return }
+        BackgroundDiagnostics.shared.log(.socket, "multicast group missing", "rebuilding")
+        startMulticastListening()
+    }
+
+    @MainActor
+    private func scheduleMulticastRecovery() {
+        guard !multicastRecoveryScheduled else { return }
+        multicastRecoveryScheduled = true
+        let delay = min(30.0, pow(2.0, Double(multicastRecoveryAttempts)))
+        multicastRecoveryAttempts += 1
+        BackgroundDiagnostics.shared.log(.socket, "multicast recovery scheduled", "in \(Int(delay))s attempt=\(multicastRecoveryAttempts)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.multicastRecoveryScheduled = false
+            guard Settings.shared.isListening, self.multicastGroup == nil else { return }
+            self.startMulticastListening()
+        }
+    }
+
     private func startMulticastListening() {
         let host = NWEndpoint.Host(cachedMulticastHost)
         let port = NWEndpoint.Port(integerLiteral: cachedMulticastPort)
@@ -1283,15 +1321,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
             group.setReceiveHandler(maximumMessageSize: 65_535, rejectOversizedMessages: true) { [weak self] _, data, _ in
                 guard let self = self, let data = data, !data.isEmpty else { return }
 
-                if self.isInBackground && UIApplication.shared.applicationState == .background {
-                    self.backgroundBufferLock.lock()
-                    self.backgroundMessageBuffer.append(data)
-                    if self.backgroundMessageBuffer.count > 100 {
-                        self.backgroundMessageBuffer.removeFirst()
-                    }
-                    self.backgroundBufferLock.unlock()
-                    return
-                }
+                BackgroundDiagnostics.shared.recordPacket(.multicast)
 
                 self.lastProcessTime = Date()
                 self.processIncomingMessage(data)
@@ -1302,11 +1332,22 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 switch state {
                 case .ready:
                     print("Successfully joined multicast group \(self.cachedMulticastHost):\(self.cachedMulticastPort)")
-                    DispatchQueue.main.async { self.isListeningCot = true }
+                    BackgroundDiagnostics.shared.log(.socket, "multicast ready",
+                                                     "\(self.cachedMulticastHost):\(self.cachedMulticastPort)")
+                    DispatchQueue.main.async {
+                        self.isListeningCot = true
+                        self.multicastRecoveryAttempts = 0
+                    }
                 case .failed(let error):
                     print("Multicast group failed: \(error)")
+                    BackgroundDiagnostics.shared.log(.socket, "multicast failed", String(describing: error))
                     DispatchQueue.main.async {
+                        self.multicastGroup?.cancel()
+                        self.multicastGroup = nil
                         self.isListeningCot = false
+                        if Settings.shared.isListening {
+                            self.scheduleMulticastRecovery()
+                        }
                         let content = UNMutableNotificationContent()
                         content.title = "Connection Error"
                         content.body = "Multicast connection failed. Tap to reconnect."
@@ -1322,8 +1363,10 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                     }
                 case .waiting(let error):
                     print("Multicast group waiting: \(error)")
+                    BackgroundDiagnostics.shared.log(.socket, "multicast waiting", String(describing: error))
                 case .cancelled:
                     print("Multicast group cancelled")
+                    BackgroundDiagnostics.shared.log(.socket, "multicast cancelled", "group torn down")
                     DispatchQueue.main.async { self.isListeningCot = false }
                 default:
                     break
@@ -1342,8 +1385,8 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
     }
     
     private func startZMQListening() {
-        zmqHandler = ZMQHandler()
-        
+        zmqHandler = ZMQHandler.shared
+
         zmqHandler?.connect(
             host: cachedZmqHost,
             zmqTelemetryPort: cachedZmqTelemetryPort,
@@ -2247,20 +2290,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 return
             }
             
-            if self.isInBackground && UIApplication.shared.applicationState == .background {
-                self.backgroundBufferLock.lock()
-                self.backgroundMessageBuffer.append(data)
-                if self.backgroundMessageBuffer.count > 100 {
-                    self.backgroundMessageBuffer.removeFirst()
-                }
-                self.backgroundBufferLock.unlock()
-                
-                if !isComplete && (isZMQ ? self.zmqHandler?.isConnected == true : self.isListeningCot) {
-                    self.receiveMessages(from: connection, isZMQ: isZMQ)
-                }
-                return
-            }
-            
             self.lastProcessTime = Date()
             self.processIncomingMessage(data)
 
@@ -2270,30 +2299,6 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func processBackgroundBuffer() {
-        backgroundBufferLock.lock()
-        let bufferedMessages = backgroundMessageBuffer
-        backgroundMessageBuffer.removeAll()
-        backgroundBufferLock.unlock()
-
-        print("Processing \(bufferedMessages.count) buffered background messages")
-
-        // Drain on a detached task so the main thread isn't blocked on resume.
-        // Each message hops back to main for UI mutation inside
-        // processIncomingMessage -> Task { @MainActor in ... }.
-        // Use Task.yield to give the UI scheduler breathing room between items
-        // instead of Thread.sleep (which previously froze main for up to ~1s
-        // when the buffer was full).
-        let messages = bufferedMessages
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            for data in messages {
-                await MainActor.run { self.processIncomingMessage(data) }
-                await Task.yield()
-            }
-        }
-    }
-    
     private func updateStatusMessage(_ message: StatusViewModel.StatusMessage) {
         DispatchQueue.main.async {
             self.statusViewModel.updateExistingStatusMessage(message)
@@ -3223,7 +3228,7 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 oldMessage.pilotLat != existingMessage.pilotLat ||
                 oldMessage.pilotLon != existingMessage.pilotLon
             )
-            
+
             // Already on @MainActor - no need for nested Task
             self.parsedMessages[existingIndex] = existingMessage
             
@@ -3234,6 +3239,13 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.updateAlertRing(for: existingMessage)
             }
 
+            let hasCoords = !(lat == 0 && lon == 0)
+            let lastPublish = self.lastDetectionPublish[existingMessage.uid] ?? .distantPast
+            let coordlessDue = Date().timeIntervalSince(lastPublish) >= self.coordlessRepublishInterval
+
+            if hasSignificantChange && (hasCoords || coordlessDue) {
+                self.publishDetection(existingMessage)
+            }
 
         } else {
             // Already on @MainActor - no need for nested Task
@@ -3252,12 +3264,18 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
                 self.sendNotification(for: messageToProcess)
             }
             
-            self.publishDroneToMQTT(messageToProcess)
-            if let cotXML = self.generateCoTXML(from: messageToProcess) {
-                self.publishCoTToTAK(cotXML)
-            }
-            self.publishToLattice(messageToProcess)
+            self.publishDetection(messageToProcess)
         }
+    }
+
+    @MainActor
+    private func publishDetection(_ message: CoTMessage) {
+        lastDetectionPublish[message.uid] = Date()
+        publishDroneToMQTT(message)
+        if let cotXML = generateCoTXML(from: message) {
+            publishCoTToTAK(cotXML)
+        }
+        publishToLattice(message)
     }
     
     private func handleCAAMessage(_ message: CoTMessage) {
@@ -3330,7 +3348,11 @@ class CoTViewModel: ObservableObject, @unchecked Sendable {
         }
         
         print("Stopping all listeners")
-        
+        BackgroundDiagnostics.shared.log(.socket, "stopListening",
+                                         "mode=\(cachedConnectionMode) inBackground=\(isInBackground)")
+
+        SilentAudioKeepAlive.shared.stop()
+        multicastRecoveryAttempts = 0
         isListeningCot = false
         isReconnecting = false
         isStarting = false

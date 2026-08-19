@@ -229,6 +229,21 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                NavigationLink {
+                    BackgroundDiagnosticsView()
+                } label: {
+                    HStack {
+                        Image(systemName: "stethoscope")
+                            .foregroundColor(.teal)
+                        VStack(alignment: .leading) {
+                            Text("Background Diagnostics")
+                            Text("Why detection stopped, and when")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
             
             Section("Warning Thresholds") {

@@ -33,14 +33,19 @@ final class SilentAudioKeepAlive {
             
             if !self.engine.isRunning {
                 os_log("Audio engine stopped unexpectedly, restarting", log: self.log, type: .error)
+                BackgroundDiagnostics.shared.log(.audio, "engine stopped unexpectedly",
+                                                 "watchdog restart; app was unprotected from suspension")
                 self.reconfigureAndRestart()
             }
         }
     }
-    
+
+    var isRunning: Bool { engine.isRunning }
+
     func stop() {
         guard started else { return }
         started = false
+        BackgroundDiagnostics.shared.log(.audio, "keepalive stopped", "explicit stop() - suspension now allowed")
         
         engine.stop()
         
@@ -65,8 +70,11 @@ final class SilentAudioKeepAlive {
             try session.setPreferredIOBufferDuration(0.5)
             try session.setActive(true)
             os_log("Audio session configured successfully", log: log, type: .info)
+            BackgroundDiagnostics.shared.log(.audio, "session active",
+                                             "category=playback mixWithOthers sr=\(session.sampleRate)")
         } catch {
             os_log("Session activate failed: %{public}@", log: log, type: .error, String(describing: error))
+            BackgroundDiagnostics.shared.log(.audio, "session activate failed", String(describing: error))
         }
     }
 
@@ -113,9 +121,11 @@ final class SilentAudioKeepAlive {
         do {
             try engine.start()
             os_log("Keep-alive engine running", log: log, type: .info)
+            BackgroundDiagnostics.shared.log(.audio, "engine running", "suspension blocked")
         } catch {
             os_log("Engine start failed: %{public}@", log: log, type: .error, String(describing: error))
-            
+            BackgroundDiagnostics.shared.log(.audio, "engine start failed", String(describing: error))
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                 self?.reconfigureAndRestart()
             }
@@ -174,21 +184,28 @@ final class SilentAudioKeepAlive {
         switch type {
         case .began:
             os_log("Audio interruption began", log: log, type: .info)
+            BackgroundDiagnostics.shared.log(.audio, "interrupted",
+                                             "another app took the session; keepalive suspended until it ends")
         case .ended:
-            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume) {
-                    os_log("Audio interruption ended, resuming", log: log, type: .info)
-                    startEngine()
-                }
+            let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue ?? 0)
+            if options.contains(.shouldResume) {
+                os_log("Audio interruption ended, resuming", log: log, type: .info)
+                BackgroundDiagnostics.shared.log(.audio, "interruption ended", "resuming engine")
+                startEngine()
+            } else {
+                BackgroundDiagnostics.shared.log(.audio, "interruption ended without shouldResume",
+                                                 "reactivating session to restore keepalive")
+                reconfigureAndRestart()
             }
         @unknown default:
             break
         }
     }
-    
+
     private func handleMediaServicesReset() {
         os_log("Media services reset, reconfiguring audio", log: log, type: .info)
+        BackgroundDiagnostics.shared.log(.audio, "media services reset", "full audio reconfigure")
         configureSession()
         configureEngine()
         startEngine()

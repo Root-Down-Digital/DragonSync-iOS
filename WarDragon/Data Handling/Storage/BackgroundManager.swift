@@ -30,6 +30,8 @@ final class BackgroundManager: @unchecked Sendable {
     private let maxTaskDuration: TimeInterval = 150
     private var memoryCheckCounter = 0
     private let memoryCheckInterval = 50  // Check memory every 50 iterations (~5 seconds)
+    private var supervisionCounter = 0
+    private let supervisionInterval = 50
     
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -57,11 +59,14 @@ final class BackgroundManager: @unchecked Sendable {
 
             guard isListening && enableBg else {
                 print("BackgroundManager: NOT starting - user not listening or background detection disabled")
+                BackgroundDiagnostics.shared.log(.bgtask, "bg processing refused",
+                                                 "isListening=\(isListening) enableBg=\(enableBg)")
                 return
             }
 
             if useBackgroundTask && appState == .active {
                 print("BackgroundManager: NOT starting - app is foreground (would create spurious bgTask + 2s refresh timer)")
+                BackgroundDiagnostics.shared.log(.bgtask, "bg processing refused", "app is foreground")
                 return
             }
 
@@ -69,9 +74,22 @@ final class BackgroundManager: @unchecked Sendable {
         }
     }
     
-    private func _internalStartBackgroundProcessing(useBackgroundTask: Bool) async {
-        running = true
+    private func claimRunning() -> Bool {
+        runningQueue.sync {
+            if _running { return false }
+            _running = true
+            return true
+        }
+    }
 
+    private func _internalStartBackgroundProcessing(useBackgroundTask: Bool) async {
+        guard claimRunning() else {
+            BackgroundDiagnostics.shared.log(.bgtask, "bg processing already running", "duplicate start suppressed")
+            return
+        }
+
+        BackgroundDiagnostics.shared.log(.bgtask, "bg processing started",
+                                         "useBackgroundTask=\(useBackgroundTask)")
         SilentAudioKeepAlive.shared.start()
 
         if useBackgroundTask {
@@ -97,51 +115,55 @@ final class BackgroundManager: @unchecked Sendable {
 
             switch connectionMode {
             case .multicast:
-                // No-op. CoTViewModel owns the NWConnectionGroup. Spawning a
-                // second group here previously posted notifications to a
-                // non-existent observer (dead path) and just held memory.
-                break
+                await MainActor.run { self.cotViewModel?.ensureMulticastHealthy() }
             case .zmq:
                 ZMQHandler.shared.connectIfNeeded()
             }
 
             while await self.isRunningAndBackgroundOK(useBackgroundTask: useBackgroundTask) {
-                // Check memory periodically
-                self.memoryCheckCounter += 1
-                if self.memoryCheckCounter >= self.memoryCheckInterval {
-                    self.memoryCheckCounter = 0
-                    
-                    let isInBackground = await MainActor.run {
-                        UIApplication.shared.applicationState == .background
-                    }
-                    
-                    if isInBackground {
-                        autoreleasepool {
-                            self.checkMemoryUsage()
-                        }
-                    }
-                }
-                
                 let currentMode = await MainActor.run {
                     Settings.shared.connectionMode
                 }
                 
-                autoreleasepool {
-                    switch currentMode {
-                    case .multicast:
-                        break
-                    case .zmq:
+                switch currentMode {
+                case .multicast:
+                    self.supervisionCounter += 1
+                    if self.supervisionCounter >= self.supervisionInterval {
+                        self.supervisionCounter = 0
+                        await MainActor.run { self.cotViewModel?.ensureMulticastHealthy() }
+                    }
+                case .zmq:
+                    autoreleasepool {
                         if ZMQHandler.shared.isConnected {
                             ZMQHandler.shared.drainOnce()
+                        } else {
+                            ZMQHandler.shared.connectIfNeeded()
                         }
                     }
                 }
-                
+
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             }
 
-            self._internalStopBackgroundProcessing()
+            await self.logDrainLoopExit(useBackgroundTask: useBackgroundTask)
+
+            self._internalStopBackgroundProcessing(stopKeepAlive: false)
         }
+    }
+
+    private func logDrainLoopExit(useBackgroundTask: Bool) async {
+        let run = running
+        let remaining = await MainActor.run { UIApplication.shared.backgroundTimeRemaining }
+        let reason: String
+        if !run {
+            reason = "running flag cleared"
+        } else if useBackgroundTask {
+            reason = "backgroundTimeRemaining exhausted"
+        } else {
+            reason = "unknown"
+        }
+        BackgroundDiagnostics.shared.log(.bgtask, "drain loop exited",
+                                         "reason=\(reason) running=\(run) remaining=\(BackgroundDiagnostics.format(remaining))")
     }
     
     // Multicast group construction removed. CoTViewModel owns the
@@ -152,14 +174,17 @@ final class BackgroundManager: @unchecked Sendable {
         self._internalStopBackgroundProcessing()
     }
 
-    func stopBackgroundProcessing() {
-        _internalStopBackgroundProcessing()
+    func stopBackgroundProcessing(stopKeepAlive: Bool = true) {
+        _internalStopBackgroundProcessing(stopKeepAlive: stopKeepAlive)
     }
-    
-    private func _internalStopBackgroundProcessing() {
+
+    private func _internalStopBackgroundProcessing(stopKeepAlive: Bool = true) {
         let wasRunning = running
         running = false
         guard wasRunning else { return }
+
+        BackgroundDiagnostics.shared.log(.bgtask, "bg processing stopped",
+                                         "stopKeepAlive=\(stopKeepAlive)")
 
         // Do NOT disconnect the shared ZMQHandler here — it is owned by
         // CoTViewModel. We only stop OUR drain loop. ZMQHandler stays
@@ -173,7 +198,10 @@ final class BackgroundManager: @unchecked Sendable {
             self?.bgRefreshTimer = nil
             self?.endDrainTask()
         }
-        SilentAudioKeepAlive.shared.stop()
+        if stopKeepAlive {
+            SilentAudioKeepAlive.shared.stop()
+        }
+        BackgroundDiagnostics.shared.flush()
     }
 
     private func isRunningAndBackgroundOK(useBackgroundTask: Bool) async -> Bool {
@@ -198,6 +226,9 @@ final class BackgroundManager: @unchecked Sendable {
         let currentTime = Date()
         let timeRemaining = UIApplication.shared.backgroundTimeRemaining
         
+        let unlimited = timeRemaining == .greatestFiniteMagnitude || timeRemaining > Double(Int.max)
+        guard !unlimited else { return }
+
         if let startTime = taskStartTime,
            currentTime.timeIntervalSince(startTime) >= 20 || timeRemaining < 30 {
             let age = Int(currentTime.timeIntervalSince(startTime))
@@ -208,23 +239,37 @@ final class BackgroundManager: @unchecked Sendable {
                 remainingString = "\(Int(timeRemaining))s"
             }
             print("Refreshing background task (age: \(age)s, remaining: \(remainingString))")
-            endDrainTask()
-            beginDrainTask()
+            BackgroundDiagnostics.shared.log(.bgtask, "bg task rotated",
+                                             "age=\(age)s remaining=\(remainingString)")
+            rotateDrainTask()
+        }
+    }
+
+    @MainActor
+    private func rotateDrainTask() {
+        let previous = bgTaskID
+        bgTaskID = .invalid
+        beginDrainTask()
+        if previous != .invalid {
+            UIApplication.shared.endBackgroundTask(previous)
         }
     }
 
     @MainActor
     private func beginDrainTask() {
         endDrainTask()
-        
+
         taskStartTime = Date()
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "Drain") {
             print("⚠️ Background task about to expire - refreshing...")
+            BackgroundDiagnostics.shared.log(.bgtask, "bg task expiring", "iOS reclaimed the assertion")
+            BackgroundDiagnostics.shared.flush()
             NotificationCenter.default.post(name: NSNotification.Name("BackgroundTaskExpiring"), object: nil)
         }
-        
+
         guard bgTaskID != .invalid else {
             print("❌ Failed to begin background task - iOS may have denied it")
+            BackgroundDiagnostics.shared.log(.bgtask, "bg task denied", "beginBackgroundTask returned .invalid")
             return
         }
         
@@ -251,9 +296,9 @@ final class BackgroundManager: @unchecked Sendable {
     }
     
     /// Force end all background tasks (for app termination)
-    func endAllBackgroundTasks() {
+    func endAllBackgroundTasks(stopKeepAlive: Bool = true) {
         print("BackgroundManager: Ending all background tasks")
-        _internalStopBackgroundProcessing()
+        _internalStopBackgroundProcessing(stopKeepAlive: stopKeepAlive)
         print(" BackgroundManager: All tasks ended")
     }
     
@@ -262,38 +307,18 @@ final class BackgroundManager: @unchecked Sendable {
         group = nil
     }
     
-    private func checkMemoryUsage() {
-        var taskInfo = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &taskInfo) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
-        
-        if kerr == KERN_SUCCESS {
-            let memoryMB = Double(taskInfo.resident_size) / 1024.0 / 1024.0
+    func checkMemoryUsage() {
+        let headroomMB = Double(os_proc_available_memory()) / 1024.0 / 1024.0
+        BackgroundDiagnostics.shared.log(.memory, "releasing caches",
+                                         String(format: "headroom=%.1fMB", headroomMB))
 
-            // iOS jetsam threshold in background is ~50MB on many devices.
-            // React EARLY, not after we've already crossed the kill line.
-            if memoryMB > 40 {
-                print("⚠️ Memory: \(String(format: "%.1f", memoryMB))MB - early-release to stay below jetsam")
+        ZMQHandler.shared.clearCaches()
+        URLCache.shared.removeAllCachedResponses()
 
-                ZMQHandler.shared.clearCaches()
-                URLCache.shared.removeAllCachedResponses()
-
-                Task { @MainActor in
-                    SwiftDataStorageManager.shared.releaseBackgroundMemory()
-                    DroneStorageManager.shared.forceSave()
-                    // Cap unbounded UI buffers that grow under BG ingest.
-                    self.cotViewModel?.trimDetectionBuffersForBackground()
-                }
-
-                if memoryMB > 60 {
-                    print("❌ CRITICAL MEMORY (\(String(format: "%.1f", memoryMB))MB) - Pausing to avoid termination")
-                    _internalStopBackgroundProcessing()
-                }
-            }
+        Task { @MainActor in
+            SwiftDataStorageManager.shared.releaseBackgroundMemory()
+            DroneStorageManager.shared.forceSave()
+            self.cotViewModel?.trimDetectionBuffersForBackground()
         }
     }
 }
